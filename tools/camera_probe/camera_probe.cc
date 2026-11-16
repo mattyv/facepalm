@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -70,9 +71,11 @@ class Probe : public CameraReports {
   Probe(ProbeOptions options, dispatch_queue_t control)
       : seconds_(options.seconds),
         control_(control),
-        capture_([this](const Frame& /*frame*/) { ++frames_; },
-                 [this] { camera_.OnDeviceLost(); },
-                 [this] { camera_.OnDeviceBack(); }),
+        capture_(
+            [this](const Frame& /*frame*/) { ++frames_; },
+            [this] { camera_.OnSessionFailed(); },
+            [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
+            [this](const std::string& id) { camera_.OnDeviceConnected(id); }),
         camera_(capture_, *this,
                 OnQueue(dispatch_queue_create("facepalm.camera.session",
                                               DISPATCH_QUEUE_SERIAL)),

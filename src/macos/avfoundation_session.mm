@@ -8,6 +8,8 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <utility>
 
 // Hands each sample buffer to a C++ callback, as MediaPipe's
@@ -48,6 +50,15 @@
 @end
 
 namespace facepalm {
+namespace {
+
+// The unique ID of the camera a device notification is about.
+std::string UniqueId(NSNotification* note) {
+  AVCaptureDevice* device = note.object;
+  return device.uniqueID == nil ? std::string() : std::string(device.uniqueID.UTF8String);
+}
+
+}  // namespace
 
 struct AvFoundationSession::Impl {
   AVCaptureSession* session = [[AVCaptureSession alloc] init];
@@ -59,28 +70,30 @@ struct AvFoundationSession::Impl {
 };
 
 AvFoundationSession::AvFoundationSession(std::function<void(const Frame&)> on_frame,
-                                         std::function<void()> on_device_lost,
-                                         std::function<void()> on_device_back)
+                                         std::function<void()> on_session_failed,
+                                         std::function<void(const std::string&)> on_disconnected,
+                                         std::function<void(const std::string&)> on_connected)
     : impl_(std::make_unique<Impl>()) {
   impl_->delegate = [[FacepalmFrameDelegate alloc] initWithHandler:std::move(on_frame)];
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
-  auto lost = ^(NSNotification*) {
-    on_device_lost();
-  };
   impl_->observers = @[
     [center addObserverForName:AVCaptureSessionRuntimeErrorNotification
                         object:impl_->session
                          queue:nil
-                    usingBlock:lost],
+                    usingBlock:^(NSNotification*) {
+                      on_session_failed();
+                    }],
     [center addObserverForName:AVCaptureDeviceWasDisconnectedNotification
                         object:nil
                          queue:nil
-                    usingBlock:lost],
+                    usingBlock:^(NSNotification* note) {
+                      on_disconnected(UniqueId(note));
+                    }],
     [center addObserverForName:AVCaptureDeviceWasConnectedNotification
                         object:nil
                          queue:nil
-                    usingBlock:^(NSNotification*) {
-                      on_device_back();
+                    usingBlock:^(NSNotification* note) {
+                      on_connected(UniqueId(note));
                     }],
   ];
 }
@@ -114,14 +127,14 @@ void AvFoundationSession::RequestPermission(std::function<void(bool granted)> do
 }
 
 // Builds the session afresh for the default camera, at 640x480 in 32BGRA.
-bool AvFoundationSession::Configure() {
+std::optional<std::string> AvFoundationSession::Configure() {
   AVCaptureDevice* device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
   if (device == nil) {
-    return false;
+    return std::nullopt;
   }
   AVCaptureDeviceInput* input = [AVCaptureDeviceInput deviceInputWithDevice:device error:nil];
   if (input == nil) {
-    return false;
+    return std::nullopt;
   }
   AVCaptureSession* session = impl_->session;
   [session beginConfiguration];
@@ -143,7 +156,10 @@ bool AvFoundationSession::Configure() {
   }
   [session commitConfiguration];
   impl_->device = added ? device : nil;
-  return added;
+  if (!added) {
+    return std::nullopt;
+  }
+  return std::string(device.uniqueID.UTF8String);
 }
 
 // The slowest and fastest rates across the active format's ranges, rounded

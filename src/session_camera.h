@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
+#include <string>
 
 #include "src/camera_controller.h"
 
@@ -24,9 +26,9 @@ class CaptureSession {
   virtual Permission CurrentPermission() = 0;
   // Asks the user, and calls `done` with the answer, on any thread.
   virtual void RequestPermission(std::function<void(bool granted)> done) = 0;
-  // Sets the session up for the default camera. Returns false when there is
-  // no camera it can use.
-  virtual bool Configure() = 0;
+  // Sets the session up for the default camera, and returns its unique ID, or
+  // nothing when there is no camera it can use.
+  virtual std::optional<std::string> Configure() = 0;
   // The configured camera's frame rates.
   virtual FrameRates SupportedFrameRates() = 0;
   // Starts capturing at `frames_per_second`, which is within
@@ -51,9 +53,12 @@ class SessionCamera : public Camera {
   void Open() override;
   void Close() override;
 
-  // What the OS reports: the device failed or went away, or one came back.
-  void OnDeviceLost();
-  void OnDeviceBack();
+  // What the OS reports, on any thread: the session failed, or a camera,
+  // named by its unique ID, went away or came back. Only the camera in use
+  // counts.
+  void OnSessionFailed();
+  void OnDeviceDisconnected(std::string id);
+  void OnDeviceConnected(std::string id);
 
  private:
   void Start();
@@ -64,6 +69,8 @@ class SessionCamera : public Camera {
   Post session_;
   Post control_;
   int frames_per_second_;
+  // The camera in use, touched only on the session queue.
+  std::string device_id_;
 };
 
 }  // namespace facepalm

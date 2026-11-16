@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <functional>
+#include <optional>
+#include <string>
 #include <utility>
 
 namespace facepalm {
@@ -49,22 +51,42 @@ void SessionCamera::Close() {
   });
 }
 
-// specs/CameraLifecycle.tla, DeviceLost: the session has failed or lost its
-// device, so it is stopped, and the controller treats the camera as closed.
-void SessionCamera::OnDeviceLost() {
-  session_([this] { capture_.Stop(); });
-  Report(&CameraReports::OnDeviceLost);
+// specs/CameraLifecycle.tla, DeviceLost: the session failed, so it is
+// stopped, and the controller treats the camera as closed.
+void SessionCamera::OnSessionFailed() {
+  session_([this] {
+    capture_.Stop();
+    Report(&CameraReports::OnDeviceLost);
+  });
 }
 
-// specs/CameraLifecycle.tla, DeviceBack.
-void SessionCamera::OnDeviceBack() { Report(&CameraReports::OnDeviceBack); }
+// specs/CameraLifecycle.tla, DeviceLost, for the camera in use only.
+void SessionCamera::OnDeviceDisconnected(std::string id) {
+  session_([this, id = std::move(id)] {
+    if (id == device_id_) {
+      capture_.Stop();
+      Report(&CameraReports::OnDeviceLost);
+    }
+  });
+}
+
+// specs/CameraLifecycle.tla, DeviceBack, for the camera in use only.
+void SessionCamera::OnDeviceConnected(std::string id) {
+  session_([this, id = std::move(id)] {
+    if (id == device_id_) {
+      Report(&CameraReports::OnDeviceBack);
+    }
+  });
+}
 
 // specs/CameraLifecycle.tla, Opened when the session runs, OpenFailed when
 // there is no camera to use or it does not start. Asks for the supported rate
 // nearest the one wanted.
 void SessionCamera::Start() {
   bool running = false;
-  if (capture_.Configure()) {
+  const std::optional<std::string> device = capture_.Configure();
+  if (device.has_value()) {
+    device_id_ = *device;
     // A camera that reports no rates is asked for the wanted one as it is.
     const CaptureSession::FrameRates rates = capture_.SupportedFrameRates();
     const int rate = rates.max == 0
