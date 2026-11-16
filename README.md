@@ -86,7 +86,7 @@ build-mediapipe/mediapipe/bazel-bin/facepalm_fixtures/face_landmarker_fixtures \
 
 If Xcode cannot read the macOS SDK, set `DEVELOPER_DIR` to
 `/Library/Developer/CommandLineTools` first; the script passes it to Bazel.
-The Fixtures workflow runs both scripts on Linux and macOS whenever
+The Fixtures workflow runs both scripts on macOS whenever
 `tools/fixtures` changes.
 
 ## Licence

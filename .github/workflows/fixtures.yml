@@ -1,9 +1,9 @@
 name: Fixtures
 
 # Builds MediaPipe's face landmarker from source and checks it reproduces
-# MediaPipe's own expected results, on both platforms facepalm ships for. A
-# cold build takes ten minutes or more, so it runs only when the fixture tool
-# changes, or by hand.
+# MediaPipe's own expected results. macOS only for now: the user will add
+# Linux later (#3). A cold build takes ten minutes or more, so it runs only
+# when the fixture tool changes, or by hand.
 on:
   pull_request:
     paths: [tools/fixtures/**, .github/workflows/fixtures.yml]
@@ -14,16 +14,11 @@ on:
 
 jobs:
   mediapipe:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-26]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
-        if: runner.os == 'macOS'
         run: brew install bazelisk jq
       - name: Build MediaPipe and the fixture tool
         run: bash tools/fixtures/build.sh
