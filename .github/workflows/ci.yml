@@ -50,7 +50,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bats clang jq libgtest-dev llvm ninja-build
+            bats clang jq libgmock-dev libgtest-dev llvm ninja-build
       - name: Tests and coverage
         run: bash scripts/coverage.sh
       - name: Script tests

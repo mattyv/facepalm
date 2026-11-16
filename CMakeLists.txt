@@ -30,13 +30,14 @@ function(facepalm_unit name)
   add_library(${name} src/${name}.cc)
   target_include_directories(${name} PUBLIC ${PROJECT_SOURCE_DIR})
   add_executable(${name}_test test/${name}_test.cc)
-  target_link_libraries(${name}_test PRIVATE ${name} GTest::gtest_main)
+  target_link_libraries(${name}_test PRIVATE ${name} GTest::gmock GTest::gtest_main)
   gtest_discover_tests(${name}_test
     DISCOVERY_MODE PRE_TEST
     PROPERTIES ENVIRONMENT
       "LLVM_PROFILE_FILE=${CMAKE_BINARY_DIR}/profiles/${name}-%p.profraw")
 endfunction()
 
+facepalm_unit(camera_controller)
 facepalm_unit(head_pose)
 
 # Checks formatting against .clang-format without changing any file.

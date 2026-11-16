@@ -36,15 +36,15 @@ mutation sets one to `FALSE` in a copy of the config.
 
 | Property | What it says | Test |
 |---|---|---|
-| `OpenOnlyWithConsent` | The camera is opening or open only while consent holds. | Nothing yet: no capture code exists. |
-| `OpenOnlyWhenSubscribed` | The camera is opening or open only while a client is subscribed. | Nothing yet. |
-| `NoEventWithoutConsent` | No reaction is delivered after consent is revoked. | Nothing yet. |
-| `NoEventToStranger` | A reaction reaches only a subscribed client. | Nothing yet. |
-| `DeadHelperHoldsNoCamera` | A dead helper holds no camera. | Nothing yet. |
-| `CanOpen` | Something must happen: a wanted, closed camera can start opening. | Nothing yet. |
-| `RevokingCloses` | Revoking consent leads to the camera being closed. | Nothing yet. |
-| `LastLeaveCloses` | No subscribers leads to the camera being closed. | Nothing yet. |
-| `WantedOpens` | Consent, a subscriber, the device and the helper, all held, lead to the camera being open. | Nothing yet. |
+| `OpenOnlyWithConsent` | The camera is opening or open only while consent holds. | `OpenOnlyWithConsentTest` in `test/camera_controller_test.cc` |
+| `OpenOnlyWhenSubscribed` | The camera is opening or open only while a client is subscribed. | `OpenOnlyWhenSubscribedTest` |
+| `NoEventWithoutConsent` | No reaction is delivered after consent is revoked. | `NoEventWithoutConsentTest` |
+| `NoEventToStranger` | A reaction reaches only a subscribed client. | `NoEventToStrangerTest` |
+| `DeadHelperHoldsNoCamera` | A dead helper holds no camera. | `DeadHelperHoldsNoCameraTest`: a restarted helper is a new controller, which starts closed |
+| `CanOpen` | Something must happen: a wanted, closed camera can start opening. | `WantedOpensTest` |
+| `RevokingCloses` | Revoking consent leads to the camera being closed. | `RevokingClosesTest` |
+| `LastLeaveCloses` | No subscribers leads to the camera being closed. | `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` |
+| `WantedOpens` | Consent, a subscriber, the device and the helper, all held, lead to the camera being open. | `WantedOpensTest` |
 
 Each mutation, and what TLC found:
 
@@ -61,3 +61,18 @@ Each mutation, and what TLC found:
 | `Closed` writes a state outside the type | `TypeOK` |
 | No fairness on `Closed` | `RevokingCloses`; checked alone, `LastLeaveCloses` |
 | No fairness on `Open`, or on `Opened` | `WantedOpens` |
+
+`src/camera_controller.cc` implements the spec, and each of its methods names
+the action it implements. The same mutations, made to that code, fail the
+tests that stand for the properties they break:
+
+| Mutation to `CameraController` | Fails |
+|---|---|
+| Opens without consent | `OpenOnlyWithConsentTest`, `WantedOpensTest`, `RevokingClosesTest` |
+| Revoking does not start closing | `OpenOnlyWithConsentTest`, `RevokingClosesTest`, `WantedOpensTest` |
+| Revoking does not void tickets in flight | `NoEventWithoutConsentTest` |
+| The last client leaving does not start closing | `OpenOnlyWhenSubscribedTest` |
+| A client that leaves stays subscribed | `NoEventToStrangerTest`, `OpenOnlyWhenSubscribedTest` |
+| A new controller opens when consent holds | `DeadHelperHoldsNoCameraTest`, and four others |
+| The device coming back does not reopen | `WantedOpensTest` |
+| Closing does not reopen when wanted | `WantedOpensTest` |
