@@ -1,8 +1,17 @@
 diff --git a/third_party/BUILD b/third_party/BUILD
-index 2ab0a7d..11cae5e 100644
+index 2ab0a7d..0f1b2d0 100644
 --- a/third_party/BUILD
 +++ b/third_party/BUILD
-@@ -222,8 +222,9 @@ cmake(
+@@ -202,7 +202,7 @@ OPENCV_MODULES = [
+ # still only builds the shared libraries, so we have to choose one or the
+ # other. We build shared libraries by default, but this variable can be used
+ # to switch to static libraries.
+-OPENCV_SHARED_LIBS = True
++OPENCV_SHARED_LIBS = False
+ 
+ OPENCV_SO_VERSION = "3.4"
+ 
+@@ -222,8 +222,12 @@ cmake(
          "WITH_ITT": "OFF",
          "WITH_JASPER": "OFF",
          "WITH_JPEG": "ON",
@@ -11,6 +20,32 @@ index 2ab0a7d..11cae5e 100644
 +        "WITH_PNG": "OFF",
 +        "WITH_TIFF": "OFF",
 +        "WITH_FFMPEG": "OFF",
++        # facepalm: carotene, OpenCV's ARM routines, is a static library of
++        # its own that a static OpenCV does not list, so it goes unlinked.
++        "WITH_CAROTENE": "OFF",
          "WITH_OPENCL": "OFF",
          "WITH_WEBP": "OFF",
          # Optimization flags
+@@ -254,7 +258,11 @@ cmake(
+         "ENABLE_CCACHE": "OFF",
+     },
+     lib_source = "@opencv//:all",
+-    linkopts = [] if OPENCV_SHARED_LIBS else [
++    linkopts = [] if OPENCV_SHARED_LIBS else select({
++        # facepalm: a static link pulls in only the objects MediaPipe uses,
++        # which on macOS need nothing beyond zlib from the system.
++        "@bazel_tools//src/conditions:darwin": ["-lz"],
++        "//conditions:default": [
+         # When using static libraries, the binary that eventually depends on the
+         # libraries also needs to link in their dependencies, which therefore
+         # have to be listed here.
+@@ -281,7 +289,8 @@ cmake(
+         "-lm",
+         "-lpthread",
+         "-lrt",
+-    ],
++        ],
++    }),
+     out_shared_libs = select({
+         "@bazel_tools//src/conditions:darwin": ["libopencv_%s.%s.dylib" % (module, OPENCV_SO_VERSION) for module in OPENCV_MODULES],
+         # Only the shared objects listed here will be linked in the directory

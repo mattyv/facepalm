@@ -38,7 +38,7 @@ teardown() {
   rm -rf "${WORK}"
 }
 
-@test "clones MediaPipe at the release, patches it, and builds the tool" {
+@test "clones MediaPipe at the release, patches it, and builds the tool and the shim" {
   run bash "${WORK}/repo/tools/fixtures/build.sh"
   [[ "${status}" -eq 0 ]]
   log="$(cat "${LOG}")"
@@ -46,9 +46,11 @@ teardown() {
   [[ "${log}" == *'apply '*'/tools/fixtures/opencv.diff'* ]]
   [[ "${log}" == *'face_landmarker_v2_with_blendshapes.task?generation='* ]]
   [[ "${log}" == *'portrait.jpg?generation='* ]]
-  [[ "${log}" == *'build //facepalm_fixtures:face_landmarker_fixtures'* ]]
+  [[ "${log}" == *'build '*'//facepalm_fixtures:face_landmarker_fixtures'* ]]
+  [[ "${log}" == *'//facepalm_shim:libfacepalm_mediapipe.dylib'* ]]
   [[ "${log}" != *DEVELOPER_DIR* ]]
   [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_fixtures" ]]
+  [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_shim" ]]
 }
 
 @test "leaves an existing checkout as it is" {
