@@ -10,3 +10,6 @@ build --define OPENCV=source
 # breaks the macOS 26 and later SDKs' declaration of it. Defining fdopen as
 # itself skips zlib's definition and changes nothing else.
 build --copt=-Dfdopen=fdopen --host_copt=-Dfdopen=fdopen
+# TensorFlow's rules pick requirements by the host's Python version, and have
+# them only up to 3.12; pin TensorFlow's default so any host Python works.
+build --repo_env=HERMETIC_PYTHON_VERSION=3.11
