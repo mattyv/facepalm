@@ -31,9 +31,10 @@ jobs:
           cmake --build build-tidy
       - name: Shell
         run: |
-          shellcheck scripts/*.sh scripts/test/*.bats
-          shfmt -d scripts/*.sh
-          bats scripts/test
+          shellcheck scripts/*.sh scripts/test/*.bats \
+            specs/*.sh specs/test/*.bats
+          shfmt -d scripts/*.sh specs/*.sh
+          bats scripts/test specs/test
       - name: Markdown
         run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"
       - name: Tests and coverage
@@ -53,4 +54,20 @@ jobs:
       - name: Tests and coverage
         run: bash scripts/coverage.sh
       - name: Script tests
-        run: bats scripts/test
+        run: bats scripts/test specs/test
+
+  # Checks every TLA+ config, with TLC pinned as ai-pair's CI pins it.
+  specs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Download TLC
+        run: |
+          bash scripts/download_tlc.sh build-tla/tla2tools.jar \
+            7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f
+      - name: Check every spec
+        run: bash specs/check.sh
