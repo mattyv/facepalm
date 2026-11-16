@@ -14,9 +14,14 @@ Nothing works end to end yet. The design is on
     for MediaPipe's facial transformation matrix.
 -   `src/camera_controller`: decides when the camera may be on, following
     `specs/CameraLifecycle.tla`, with the camera behind an interface.
--   `src/macos/avfoundation_camera`: the macOS camera, through AVFoundation,
-    following MediaPipe's `MPPCameraInputSource`. It needs a real camera, so
-    `camera_probe` is its smoke test; it has no unit tests or coverage floor.
+-   `src/session_camera`: a camera over one OS's capture API: permission,
+    starting, stopping and a lost device, mapped onto the spec's actions, at
+    the supported frame rate nearest the one wanted. Unit-tested with the API
+    mocked.
+-   `src/macos/avfoundation_session`: that capture API on macOS, through
+    AVFoundation, following MediaPipe's `MPPCameraInputSource`. It is the
+    AVFoundation calls alone, and needs a real camera, so `camera_probe` is
+    its smoke test; it has no unit tests or coverage floor.
 -   `specs/CameraLifecycle.tla`: when the camera may be on, checked with TLC
     before any capture code. See `specs/README.md`.
 
@@ -46,8 +51,9 @@ bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ## Measuring the camera on macOS
 
 `camera_probe` opens the camera through the controller and reports the
-frames it received and the CPU time it used. The first run asks for camera
-permission for the app it runs in.
+frames it received and the CPU time it used. The built-in camera captures at
+15 to 30 frames a second at 640×480; a slower rate asks for 15. The first
+run asks for camera permission for the app it runs in.
 
 ```shell
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.

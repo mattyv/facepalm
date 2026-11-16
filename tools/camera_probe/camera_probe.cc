@@ -13,11 +13,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <string_view>
 #include <system_error>
 
 #include "src/camera_controller.h"
-#include "src/macos/avfoundation_camera.h"
+#include "src/macos/avfoundation_session.h"
+#include "src/session_camera.h"
 
 namespace facepalm {
 namespace {
@@ -25,12 +27,24 @@ namespace {
 constexpr int kDefaultSeconds = 10;
 constexpr double kMicrosecondsPerSecond = 1e6;
 constexpr std::int64_t kNanosecondsPerSecond = 1'000'000'000;
+constexpr int kDefaultFramesPerSecond = 15;
 constexpr double kPercent = 100;
 
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
-  int frames_per_second = AvFoundationCamera::kDefaultFramesPerSecond;
+  int frames_per_second = kDefaultFramesPerSecond;
 };
+
+// Posts tasks to a dispatch queue.
+Post OnQueue(dispatch_queue_t queue) {
+  return [queue](const std::function<void()>& task) {
+    // The block must own a copy: it runs after this call returns.
+    const std::function<void()> owned = task;
+    dispatch_async(queue, ^{
+      owned();
+    });
+  };
+}
 
 // The process's user and system CPU time so far, in seconds.
 double CpuSeconds() {
@@ -56,9 +70,13 @@ class Probe : public CameraReports {
   Probe(ProbeOptions options, dispatch_queue_t control)
       : seconds_(options.seconds),
         control_(control),
-        camera_(control, *this,
-                {.frames_per_second = options.frames_per_second},
-                [this](const Frame& /*frame*/) { ++frames_; }),
+        capture_([this](const Frame& /*frame*/) { ++frames_; },
+                 [this] { camera_.OnDeviceLost(); },
+                 [this] { camera_.OnDeviceBack(); }),
+        camera_(capture_, *this,
+                OnQueue(dispatch_queue_create("facepalm.camera.session",
+                                              DISPATCH_QUEUE_SERIAL)),
+                OnQueue(control), options.frames_per_second),
         controller_(camera_, clients_, /*consent=*/true) {}
 
   void Start() { controller_.Subscribe("camera_probe"); }
@@ -111,7 +129,8 @@ class Probe : public CameraReports {
   int frames_at_close_ = 0;
   double cpu_at_open_ = 0;
   double cpu_at_close_ = 0;
-  AvFoundationCamera camera_;
+  AvFoundationSession capture_;
+  SessionCamera camera_;
   CameraController controller_;
 };
 
@@ -141,9 +160,8 @@ int main(int argc, char** argv) {
   const facepalm::ProbeOptions options{
       .seconds = PositiveArgument(argc > 1 ? argv[1] : nullptr,
                                   facepalm::kDefaultSeconds),
-      .frames_per_second = PositiveArgument(
-          argc > 2 ? argv[2] : nullptr,
-          facepalm::AvFoundationCamera::kDefaultFramesPerSecond),
+      .frames_per_second = PositiveArgument(argc > 2 ? argv[2] : nullptr,
+                                            facepalm::kDefaultFramesPerSecond),
   };
   if (options.seconds == 0 || options.frames_per_second == 0) {
     std::fprintf(stderr, "usage: camera_probe [seconds] [frames per second]\n");

@@ -12,5 +12,12 @@
       "branches": 100,
       "functions": 100
     }
+  },
+  "src/session_camera.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
   }
 }
