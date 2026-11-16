@@ -10,8 +10,10 @@ Nothing works end to end yet. The design is on
 
 ## What exists
 
--   `src/head_pose`: yaw, pitch and roll in degrees from a rotation matrix,
-    for MediaPipe's facial transformation matrix.
+-   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
+    transformation matrix, which is stored column by column and carries a
+    uniform scale. Its test checks against MediaPipe's own expected matrix
+    for its portrait test image.
 -   `src/camera_controller`: decides when the camera may be on, following
     `specs/CameraLifecycle.tla`, with the camera behind an interface.
 -   `src/session_camera`: a camera over one OS's capture API: permission,

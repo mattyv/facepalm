@@ -83,5 +83,79 @@ TEST(HeadRotationFromTest, RoundingPastStraightUpStillGivesNinetyDegrees) {
   EXPECT_NEAR(angles.pitch_degrees, 90, kTolerance);
 }
 
+// Packs `rotation` times `scale`, with a translation, column by column.
+PoseMatrix Pose(const Rotation& rotation, float scale) {
+  PoseMatrix pose{};
+  for (int column = 0; column < 3; ++column) {
+    for (int row = 0; row < 3; ++row) {
+      pose.at((column * 4) + row) =
+          scale * static_cast<float>(rotation.rows.at(row).at(column));
+    }
+  }
+  pose[12] = -1.5F;
+  pose[13] = 20.0F;
+  pose[14] = -60.0F;
+  pose[15] = 1.0F;
+  return pose;
+}
+
+// A float matrix carries about seven significant digits.
+constexpr double kFloatTolerance = 1e-4;
+
+void ExpectAnglesNear(const HeadRotation& actual,
+                      const HeadRotation& expected) {
+  EXPECT_NEAR(actual.yaw_degrees, expected.yaw_degrees, kFloatTolerance);
+  EXPECT_NEAR(actual.pitch_degrees, expected.pitch_degrees, kFloatTolerance);
+  EXPECT_NEAR(actual.roll_degrees, expected.roll_degrees, kFloatTolerance);
+}
+
+TEST(RotationFromTest, ReadsTheMatrixColumnByColumn) {
+  const HeadRotation angles{
+      .yaw_degrees = 25, .pitch_degrees = -15, .roll_degrees = 8};
+  ExpectAnglesNear(HeadRotationFrom(RotationFrom(Pose(Compose(angles), 1))),
+                   angles);
+}
+
+TEST(RotationFromTest, DividesOutTheScale) {
+  const HeadRotation angles{
+      .yaw_degrees = -30, .pitch_degrees = 20, .roll_degrees = -10};
+  const Rotation rotation = RotationFrom(Pose(Compose(angles), 1.25F));
+  ExpectAnglesNear(HeadRotationFrom(rotation), angles);
+  EXPECT_NEAR(rotation.rows[0][0], Compose(angles).rows[0][0], kFloatTolerance);
+}
+
+// MediaPipe's expected facial transformation matrix for its portrait.jpg test
+// image, from mediapipe/tasks/testdata/vision/
+// portrait_expected_face_geometry.pbtxt at google-ai-edge/mediapipe commit
+// 0b97e00a910a3ae0017db2733f55cb054ee41d8a (Apache-2.0). Its first column's
+// length is 1.00037: the scale MediaPipe's Procrustes solver estimated.
+constexpr PoseMatrix kMediaPipePortrait{
+    0.9995292F,   0.01715696F, -0.03715533F, 0,  //
+    -0.01294756F, 0.9937692F,  0.11070588F,  0,  //
+    0.038823195F, -0.1101321F, 0.99315894F,  0,  //
+    -0.3691378F,  22.75809F,   -65.765925F,  1};
+
+// Expects the rows of `rotation` to be unit length and at right angles.
+void ExpectOrthonormal(const Rotation& rotation) {
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      double dot = 0;
+      for (int k = 0; k < 3; ++k) {
+        dot += rotation.rows.at(i).at(k) * rotation.rows.at(j).at(k);
+      }
+      EXPECT_NEAR(dot, i == j ? 1 : 0, 1e-3) << "rows " << i << ", " << j;
+    }
+  }
+}
+
+TEST(RotationFromTest, MediaPipesPortraitIsAlmostFacingTheCamera) {
+  const Rotation rotation = RotationFrom(kMediaPipePortrait);
+  ExpectOrthonormal(rotation);
+  const HeadRotation angles = HeadRotationFrom(rotation);
+  EXPECT_NEAR(angles.yaw_degrees, 2.24, 0.01);
+  EXPECT_NEAR(angles.pitch_degrees, 6.32, 0.01);
+  EXPECT_NEAR(angles.roll_degrees, 0.99, 0.01);
+}
+
 }  // namespace
 }  // namespace facepalm
