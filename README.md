@@ -12,6 +12,8 @@ Nothing works end to end yet. The design is on
 
 -   `src/head_pose`: yaw, pitch and roll in degrees from a rotation matrix,
     for MediaPipe's facial transformation matrix.
+-   `specs/CameraLifecycle.tla`: when the camera may be on, checked with TLC
+    before any capture code. See `specs/README.md`.
 
 ## Build and test
 
@@ -29,10 +31,11 @@ Checks that CI runs:
 
 ```shell
 bash scripts/coverage.sh          # Each source's own tests, against its floors.
-bats scripts/test                 # Tests for the scripts.
+bats scripts/test specs/test      # Tests for the scripts.
 cmake --build build --target format-check
 cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
   && cmake --build build-tidy     # clang-tidy on every source.
+bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
 
 ## Licence
