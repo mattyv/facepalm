@@ -40,10 +40,28 @@ endfunction()
 facepalm_unit(camera_controller)
 facepalm_unit(head_pose)
 
+# The macOS camera, through AVFoundation, and camera_probe, which drives it.
+# They need a real camera, so camera_probe is their smoke test (#11).
+if(APPLE)
+  enable_language(OBJCXX)
+  add_library(avfoundation_camera src/macos/avfoundation_camera.mm)
+  # dispatch_queue_t must be the C type the C++ header declares, not an
+  # Objective-C object, or the two sides mangle the constructor differently.
+  target_compile_options(avfoundation_camera PRIVATE -fobjc-arc)
+  target_compile_definitions(avfoundation_camera PRIVATE OS_OBJECT_USE_OBJC=0)
+  target_include_directories(avfoundation_camera PUBLIC ${PROJECT_SOURCE_DIR})
+  target_link_libraries(avfoundation_camera PUBLIC camera_controller
+    "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
+    "-framework Foundation")
+  add_executable(camera_probe tools/camera_probe/camera_probe.cc)
+  target_link_libraries(camera_probe PRIVATE avfoundation_camera)
+endif()
+
 # Checks formatting against .clang-format without changing any file.
 file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
-  ${PROJECT_SOURCE_DIR}/test/*.cc)
+  ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
+  ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc)
 find_program(CLANG_FORMAT NAMES clang-format)
 if(CLANG_FORMAT)
   add_custom_target(format-check

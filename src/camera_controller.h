@@ -15,8 +15,19 @@ using ClientId = std::string;
 // ponytail: JSON text until the pipeline defines its own type.
 using Reaction = std::string;
 
+// What a camera reports, each a specs/CameraLifecycle.tla action.
+class CameraReports {
+ public:
+  virtual ~CameraReports() = default;
+  virtual void OnOpened() = 0;
+  virtual void OnOpenFailed() = 0;
+  virtual void OnClosed() = 0;
+  virtual void OnDeviceLost() = 0;
+  virtual void OnDeviceBack() = 0;
+};
+
 // The camera device, one implementation per OS. Both calls return at once;
-// the device reports back through CameraController's On methods.
+// the device reports back through CameraReports.
 class Camera {
  public:
   virtual ~Camera() = default;
@@ -37,7 +48,7 @@ class Clients {
 //
 // A restarted helper builds a new controller, which starts with the camera
 // closed and no clients (the spec's Restart with GuardRestartRechecks).
-class CameraController {
+class CameraController : public CameraReports {
  public:
   enum class State : std::uint8_t { kClosed, kOpening, kOpen, kClosing };
 
@@ -49,11 +60,11 @@ class CameraController {
   void Leave(const ClientId& client);
 
   // The camera's reports.
-  void OnOpened();
-  void OnOpenFailed();
-  void OnClosed();
-  void OnDeviceLost();
-  void OnDeviceBack();
+  void OnOpened() override;
+  void OnOpenFailed() override;
+  void OnClosed() override;
+  void OnDeviceLost() override;
+  void OnDeviceBack() override;
 
   // Returns a ticket for a frame the camera captured, or nothing when the
   // camera is not open and the frame must be dropped.
