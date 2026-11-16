@@ -39,11 +39,28 @@ endfunction()
 
 facepalm_unit(camera_controller)
 facepalm_unit(head_pose)
+facepalm_unit(session_camera)
+
+# The macOS capture API, through AVFoundation, and camera_probe, which drives
+# it. They need a real camera, so camera_probe is their smoke test (#11);
+# SessionCamera, the logic around them, is unit-tested.
+if(APPLE)
+  enable_language(OBJCXX)
+  add_library(avfoundation_session src/macos/avfoundation_session.mm)
+  target_compile_options(avfoundation_session PRIVATE -fobjc-arc)
+  target_include_directories(avfoundation_session PUBLIC ${PROJECT_SOURCE_DIR})
+  target_link_libraries(avfoundation_session PUBLIC session_camera
+    "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
+    "-framework Foundation")
+  add_executable(camera_probe tools/camera_probe/camera_probe.cc)
+  target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller)
+endif()
 
 # Checks formatting against .clang-format without changing any file.
 file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
-  ${PROJECT_SOURCE_DIR}/test/*.cc)
+  ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
+  ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc)
 find_program(CLANG_FORMAT NAMES clang-format)
 if(CLANG_FORMAT)
   add_custom_target(format-check
