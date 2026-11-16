@@ -24,3 +24,5 @@ jobs:
         run: bash tools/fixtures/build.sh
       - name: Check against MediaPipe's expected results
         run: bash tools/fixtures/check_portrait.sh
+      - name: Check the shim's exports and links
+        run: bash tools/fixtures/check_shim.sh
