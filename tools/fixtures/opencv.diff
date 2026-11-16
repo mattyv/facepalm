@@ -1,0 +1,16 @@
+diff --git a/third_party/BUILD b/third_party/BUILD
+index 2ab0a7d..11cae5e 100644
+--- a/third_party/BUILD
++++ b/third_party/BUILD
+@@ -222,8 +222,9 @@ cmake(
+         "WITH_ITT": "OFF",
+         "WITH_JASPER": "OFF",
+         "WITH_JPEG": "ON",
+-        "WITH_PNG": "ON",
+-        "WITH_TIFF": "ON",
++        "WITH_PNG": "OFF",
++        "WITH_TIFF": "OFF",
++        "WITH_FFMPEG": "OFF",
+         "WITH_OPENCL": "OFF",
+         "WITH_WEBP": "OFF",
+         # Optimization flags

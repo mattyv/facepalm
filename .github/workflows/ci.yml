@@ -32,9 +32,10 @@ jobs:
       - name: Shell
         run: |
           shellcheck scripts/*.sh scripts/test/*.bats \
-            specs/*.sh specs/test/*.bats
-          shfmt -d scripts/*.sh specs/*.sh
-          bats scripts/test specs/test
+            specs/*.sh specs/test/*.bats \
+            tools/fixtures/*.sh tools/fixtures/test/*.bats
+          shfmt -d scripts/*.sh specs/*.sh tools/fixtures/*.sh
+          bats scripts/test specs/test tools/fixtures/test
       - name: Markdown
         run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"
       - name: Tests and coverage
@@ -54,7 +55,7 @@ jobs:
       - name: Tests and coverage
         run: bash scripts/coverage.sh
       - name: Script tests
-        run: bats scripts/test specs/test
+        run: bats scripts/test specs/test tools/fixtures/test
 
   # Checks every TLA+ config, with TLC pinned as ai-pair's CI pins it.
   specs:

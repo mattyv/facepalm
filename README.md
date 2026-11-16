@@ -68,6 +68,27 @@ For energy, run `powermetrics` alongside it in another terminal, and read
 sudo powermetrics --samplers tasks --show-process-energy -i 1000 -n 30
 ```
 
+## Golden fixtures from MediaPipe
+
+`tools/fixtures` builds MediaPipe's own C++ face landmarker, pinned to release
+v0.10.35, and a small tool that writes its landmarks, blendshapes and
+transformation matrix for each image as JSON. These are the reference that
+facepalm's own face pipeline is tested against. Building it needs Bazel
+(`brew install bazelisk`) and takes ten minutes or more the first time;
+everything it fetches and builds goes in `build-mediapipe/`.
+
+```shell
+bash tools/fixtures/build.sh
+bash tools/fixtures/check_portrait.sh  # Matches MediaPipe's expected results.
+build-mediapipe/mediapipe/bazel-bin/facepalm_fixtures/face_landmarker_fixtures \
+  build-mediapipe/data/face_landmarker_v2_with_blendshapes.task image.jpg
+```
+
+If Xcode cannot read the macOS SDK, set `DEVELOPER_DIR` to
+`/Library/Developer/CommandLineTools` first; the script passes it to Bazel.
+The Fixtures workflow runs both scripts on Linux and macOS whenever
+`tools/fixtures` changes.
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
