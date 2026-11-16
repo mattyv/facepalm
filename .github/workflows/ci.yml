@@ -20,9 +20,9 @@ jobs:
         run: brew install ninja googletest llvm bats-core shellcheck shfmt jq
       - name: Format
         run: |
+          export PATH="$(brew --prefix llvm)/bin:$PATH"
           cmake -S . -B build -G Ninja
-          PATH="$(brew --prefix llvm)/bin:$PATH" \
-            cmake --build build --target format-check
+          cmake --build build --target format-check
       - name: clang-tidy
         run: |
           export PATH="$(brew --prefix llvm)/bin:$PATH"

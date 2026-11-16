@@ -48,4 +48,9 @@ if(CLANG_FORMAT)
   add_custom_target(format-check
     COMMAND ${CLANG_FORMAT} --dry-run --Werror ${FACEPALM_CXX_FILES}
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
+else()
+  # Fails rather than vanishing, so a run without clang-format cannot pass.
+  add_custom_target(format-check
+    COMMAND ${CMAKE_COMMAND} -E echo "clang-format not found at configure time"
+    COMMAND ${CMAKE_COMMAND} -E false)
 endif()
