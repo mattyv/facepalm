@@ -10,6 +10,9 @@ Nothing works end to end yet. The design is on
 
 ## What exists
 
+-   `src/mediapipe_shim`: MediaPipe's face landmarker as one self-contained
+    library with a plain C interface, built by `tools/fixtures/build.sh`.
+    `tools/fixtures/test_shim.sh` tests it against the real model.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
     transformation matrix, which is stored column by column and carries a
     uniform scale. Its test checks against MediaPipe's own expected matrix

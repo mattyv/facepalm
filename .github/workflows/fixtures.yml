@@ -26,3 +26,5 @@ jobs:
         run: bash tools/fixtures/check_portrait.sh
       - name: Check the shim's exports and links
         run: bash tools/fixtures/check_shim.sh
+      - name: Test the shim against the real model, with full coverage
+        run: bash tools/fixtures/test_shim.sh
