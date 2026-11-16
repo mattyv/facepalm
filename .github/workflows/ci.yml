@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Style checks run on macOS only, with Homebrew's LLVM: clang-format and
+  # clang-tidy versions differ between releases, and these match the ones
+  # developers run locally.
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Install tools
+        run: brew install ninja googletest llvm bats-core shellcheck shfmt jq
+      - name: Format
+        run: |
+          export PATH="$(brew --prefix llvm)/bin:$PATH"
+          cmake -S . -B build -G Ninja
+          cmake --build build --target format-check
+      - name: clang-tidy
+        run: |
+          export PATH="$(brew --prefix llvm)/bin:$PATH"
+          cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++
+          cmake --build build-tidy
+      - name: Shell
+        run: |
+          shellcheck scripts/*.sh scripts/test/*.bats
+          shfmt -d scripts/*.sh
+          bats scripts/test
+      - name: Markdown
+        run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"
+      - name: Tests and coverage
+        run: bash scripts/coverage.sh
+
+  linux:
+    runs-on: ubuntu-latest
+    env:
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bats clang jq libgtest-dev llvm ninja-build
+      - name: Tests and coverage
+        run: bash scripts/coverage.sh
+      - name: Script tests
+        run: bats scripts/test
