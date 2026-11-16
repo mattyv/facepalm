@@ -12,6 +12,8 @@ Nothing works end to end yet. The design is on
 
 -   `src/head_pose`: yaw, pitch and roll in degrees from a rotation matrix,
     for MediaPipe's facial transformation matrix.
+-   `src/camera_controller`: decides when the camera may be on, following
+    `specs/CameraLifecycle.tla`, with the camera behind an interface.
 -   `specs/CameraLifecycle.tla`: when the camera may be on, checked with TLC
     before any capture code. See `specs/README.md`.
 
