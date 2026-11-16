@@ -1,5 +1,8 @@
 # Tests use literal values freely, as the expected numbers of each case.
+# A GoogleTest fixture shares its mocks with its TEST_F bodies, which are
+# subclasses, through protected members.
 InheritParentConfig: true
 Checks: >
   -readability-magic-numbers,
-  -cppcoreguidelines-avoid-magic-numbers
+  -cppcoreguidelines-avoid-magic-numbers,
+  -misc-non-private-member-variables-in-classes

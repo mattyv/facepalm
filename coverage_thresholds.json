@@ -5,5 +5,12 @@
       "branches": 100,
       "functions": 100
     }
+  },
+  "src/camera_controller.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
   }
 }
