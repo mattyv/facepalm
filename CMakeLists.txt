@@ -44,6 +44,9 @@ facepalm_unit(frame_pipeline)
 # ToRgba is pure computation, so the pipeline's tests run it for real.
 target_link_libraries(frame_pipeline PUBLIC frame)
 facepalm_unit(head_pose)
+facepalm_unit(reaction)
+# head_pose is pure computation, so the reaction's tests run it for real.
+target_link_libraries(reaction PUBLIC head_pose)
 facepalm_unit(session_camera)
 
 # The macOS capture API, through AVFoundation, and camera_probe, which drives
@@ -58,7 +61,8 @@ if(APPLE)
     "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
     "-framework Foundation")
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
-  target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller)
+  target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
+    frame_pipeline reaction)
 endif()
 
 # face_model_check runs the real face model through MediaPipeFaceModel. It
