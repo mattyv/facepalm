@@ -238,14 +238,23 @@ TEST_F(NoDetectWithoutModelTest, AnalysesNothingOnceClosed) {
 
 TEST_F(NoDetectWithoutModelTest, ClosingWaitsForAnAnalyseAlreadyQueued) {
   MockAnalyzer* analyzer = Opened();
+  // Recorded rather than ordered by expectations, so a destroy that comes
+  // too early fails here instead of leaving a dangling mock.
+  std::vector<std::string> events;
+  EXPECT_CALL(*analyzer, Analyze(_, _, _, _, _, _))
+      .WillOnce([&events](std::span<const std::uint8_t>, int, int, std::int64_t,
+                          std::vector<Reaction>&, std::string&) {
+        events.emplace_back("analyse");
+        return true;
+      });
+  EXPECT_CALL(*analyzer, Destroyed()).WillOnce([&events] {
+    events.emplace_back("destroy");
+  });
   Captured();
   pipeline_.OnCameraClosed();
-  {
-    InSequence order;
-    EXPECT_CALL(*analyzer, Analyze(_, _, _, _, _, _)).WillOnce(Return(true));
-    EXPECT_CALL(*analyzer, Destroyed());
-  }
   inference_.Drain();
+
+  EXPECT_THAT(events, ElementsAre("analyse", "destroy"));
 }
 
 using NeverWrittenWhileReadTest = FramePipelineTest;
@@ -392,15 +401,15 @@ using ModelGoneAfterCloseTest = FramePipelineTest;
 
 TEST_F(ModelGoneAfterCloseTest, ClosingDestroysTheAnalysers) {
   MockAnalyzer* analyzer = Opened();
-  pipeline_.OnCameraClosed();
-
   // By the end of the drain, not at the pipeline's own destruction, which
   // would satisfy a bare expectation even when closing destroys nothing.
   bool destroyed = false;
   EXPECT_CALL(*analyzer, Destroyed()).WillOnce([&destroyed] {
     destroyed = true;
   });
+  pipeline_.OnCameraClosed();
   inference_.Drain();
+
   EXPECT_TRUE(destroyed);
 }
 
