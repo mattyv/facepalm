@@ -24,6 +24,16 @@ Nothing works end to end yet. The design is on
     frame at a time, across the capture, controller and inference queues,
     following `specs/FramePipeline.tla`. Each frame's pixels are wiped once
     it is done with.
+-   `src/frame_analyzer`, `src/head_pose_analyzer`, `src/gesture_analyzer`:
+    what the pipeline runs on each frame. `HeadPoseAnalyzer` reacts with the
+    head's angles; `GestureAnalyzer` runs Nodding Pigeon and reacts once to
+    each nod or shake.
+-   `src/nodding_pigeon`, `src/face_detector`: Nodding Pigeon's head gesture
+    model (MIT, weights v0.1.0) ported to C++, and the short-range face
+    detector it reads. On its own test videos the port reads nodding, turning
+    and stationary as expected; the fake turn, four still photos, reads
+    nodding (#34).
+-   `src/config`: the settings file, below.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
     to a tenth of a degree, as JSON text.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
@@ -73,6 +83,26 @@ cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
 bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
 
+## Settings
+
+facepalm reads `~/.config/facepalm/facepalm.conf`, or
+`$XDG_CONFIG_HOME/facepalm/facepalm.conf` when that is set. Every setting has
+a default, so the file holds only what you change; with no file, all are
+defaults. A misspelt name, a bad value or a repeated setting stops facepalm
+with the line named.
+
+```text
+# The camera's frame rate: 15 by default, 30 for quicker gestures.
+camera.frames_per_second = 15
+# The head's yaw, pitch and roll on every frame.
+head_pose.enabled = true
+# Nods and shakes, with Nodding Pigeon's thresholds: how sure it must be
+# that the head moves, and that the movement is a nod or a shake.
+gestures.enabled = true
+gestures.motion_threshold = 0.5
+gestures.gesture_threshold = 0.9
+```
+
 ## Measuring the camera on macOS
 
 `camera_probe` opens the camera through the controller, converts each frame
@@ -85,11 +115,14 @@ for 15. The first run asks for camera permission for the app it runs in.
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.
 ```
 
-Every frame goes through the frame pipeline. Built with
+Every frame goes through the frame pipeline, with the settings above; a
+frame rate given on the command line wins. Built with
 `FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face landmarker's
 `.task` bundle as a third argument, it also runs the face model on every
 frame, prints each frame's reaction as a line such as
-`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, and reports how long each
+`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, and, with
+`face_detection_short_range.tflite` beside the bundle, each nod or shake as
+`reaction {"gesture":"nod"}`. It reports how long each
 detect took, how many frames had a face, the thread count and peak memory.
 Given a directory as a fourth argument, it saves every frame there as a PNG,
 with each frame's capture time in `timestamps.txt`, for

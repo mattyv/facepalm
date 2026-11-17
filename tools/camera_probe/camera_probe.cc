@@ -15,6 +15,9 @@
 // time in milliseconds: a recording for tools/fixtures to replay (#21). The
 // frames are images of the user, so keep them out of the repository.
 //
+// Its settings come from ~/.config/facepalm/facepalm.conf (src/config.h); a
+// frame rate given here wins over the file's.
+//
 // Usage: camera_probe [seconds] [frames per second] [model.task] [directory]
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -33,11 +36,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -45,6 +50,7 @@
 #include <vector>
 
 #include "src/camera_controller.h"
+#include "src/config.h"
 #include "src/face_detector.h"
 #include "src/face_model.h"
 #include "src/frame.h"
@@ -60,7 +66,6 @@ namespace {
 constexpr int kDefaultSeconds = 10;
 constexpr double kMicrosecondsPerSecond = 1e6;
 constexpr std::int64_t kNanosecondsPerSecond = 1'000'000'000;
-constexpr int kDefaultFramesPerSecond = 15;
 constexpr double kPercent = 100;
 
 constexpr double kPercentile95 = 0.95;
@@ -145,7 +150,8 @@ class Recorder {
 
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
-  int frames_per_second = kDefaultFramesPerSecond;
+  int frames_per_second = Config::kDefaultFramesPerSecond;
+  Config config;
   std::unique_ptr<FaceModel> model;        // Runs on every frame when set.
   std::unique_ptr<FaceDetector> detector;  // Nodding Pigeon's, when set.
   std::unique_ptr<Recorder> recorder;      // Saves every frame when set.
@@ -248,6 +254,7 @@ class Probe : public CameraReports {
         has_model_(options.model != nullptr),
         model_(std::move(options.model)),
         detector_(std::move(options.detector)),
+        config_(options.config),
         control_(control),
         capture_(
             [this](const Frame& frame) { OnFrame(frame); },
@@ -348,11 +355,15 @@ class Probe : public CameraReports {
       error = "the face model was already used; camera_probe opens once";
       return analyzers;
     }
-    analyzers.push_back(std::make_unique<HeadPoseAnalyzer>(
-        std::make_unique<TimedFaceModel>(std::move(model_), stats_)));
-    if (detector_ != nullptr) {
+    if (config_.head_pose_enabled) {
+      analyzers.push_back(std::make_unique<HeadPoseAnalyzer>(
+          std::make_unique<TimedFaceModel>(std::move(model_), stats_)));
+    }
+    if (config_.gestures_enabled && detector_ != nullptr) {
       analyzers.push_back(std::make_unique<GestureAnalyzer>(
-          std::move(detector_), GestureAnalyzer::Thresholds{}));
+          std::move(detector_),
+          GestureAnalyzer::Thresholds{.motion = config_.motion_threshold,
+                                      .gesture = config_.gesture_threshold}));
     }
     return analyzers;
   }
@@ -386,6 +397,7 @@ class Probe : public CameraReports {
   bool has_model_;
   std::unique_ptr<FaceModel> model_;        // Until the pipeline takes it.
   std::unique_ptr<FaceDetector> detector_;  // Until the pipeline takes it.
+  Config config_;
   ModelStats stats_;
   int threads_at_close_ = 0;
   dispatch_queue_t control_;
@@ -450,6 +462,33 @@ std::unique_ptr<facepalm::FaceModel> LoadModel(const char* path) {
 #endif
 }
 
+// Reads ~/.config/facepalm/facepalm.conf, or $XDG_CONFIG_HOME's
+// facepalm/facepalm.conf when that is set. A missing file gives the
+// defaults; a bad one ends the tool, naming the line.
+facepalm::Config LoadConfig() {
+  const char* xdg = std::getenv("XDG_CONFIG_HOME");
+  const char* home = std::getenv("HOME");
+  const std::string folder =
+      xdg != nullptr && *xdg != '\0'
+          ? std::string(xdg)
+          : std::string(home == nullptr ? "" : home) + "/.config";
+  const std::string path = folder + "/facepalm/facepalm.conf";
+  const std::ifstream file(path);
+  if (!file) {
+    return {};
+  }
+  std::stringstream text;
+  text << file.rdbuf();
+  std::string error;
+  const std::optional<facepalm::Config> config =
+      facepalm::ParseConfig(text.str(), error);
+  if (!config) {
+    std::fprintf(stderr, "camera_probe: %s: %s\n", path.c_str(), error.c_str());
+    std::exit(2);
+  }
+  return *config;
+}
+
 // Loads Nodding Pigeon's face detector, face_detection_short_range.tflite,
 // from the folder that holds the face model at `model_path`, or returns null
 // with a note that gestures are off when it is not there or there is no
@@ -484,8 +523,9 @@ std::unique_ptr<facepalm::FaceDetector> LoadDetector(const char* model_path) {
 int main(int argc, char** argv) {
   const int seconds =
       PositiveArgument(argc > 1 ? argv[1] : nullptr, facepalm::kDefaultSeconds);
-  const int frames_per_second = PositiveArgument(
-      argc > 2 ? argv[2] : nullptr, facepalm::kDefaultFramesPerSecond);
+  const facepalm::Config config = LoadConfig();
+  const int frames_per_second =
+      PositiveArgument(argc > 2 ? argv[2] : nullptr, config.frames_per_second);
   if (seconds == 0 || frames_per_second == 0) {
     std::fprintf(
         stderr,
@@ -496,6 +536,7 @@ int main(int argc, char** argv) {
   facepalm::ProbeOptions options{
       .seconds = seconds,
       .frames_per_second = frames_per_second,
+      .config = config,
       .model = LoadModel(argc > 3 ? argv[3] : nullptr),
       .detector = LoadDetector(argc > 3 ? argv[3] : nullptr),
       .recorder =

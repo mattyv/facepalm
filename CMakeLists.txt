@@ -38,6 +38,7 @@ function(facepalm_unit name)
 endfunction()
 
 facepalm_unit(camera_controller)
+facepalm_unit(config)
 facepalm_unit(face_detector)
 facepalm_unit(face_model)
 facepalm_unit(frame)
@@ -70,7 +71,8 @@ if(APPLE)
     "-framework Foundation")
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
-    frame_pipeline gesture_analyzer head_pose_analyzer "-framework CoreGraphics"
+    config frame_pipeline gesture_analyzer head_pose_analyzer
+    "-framework CoreGraphics"
     "-framework ImageIO")
 endif()
 
