@@ -24,12 +24,14 @@ jobs:
   mediapipe:
     runs-on: macos-26
     timeout-minutes: 90
-    env:
-      BAZEL_DISK_CACHE: ${{ github.workspace }}/../bazel-disk-cache
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         run: brew install bazelisk jq
+      # Outside the checkout, by an absolute path: actions/cache rejects
+      # one with "..", and the job's env cannot read the runner context.
+      - name: Choose Bazel's disk cache
+        run: echo "BAZEL_DISK_CACHE=${RUNNER_TEMP}/bazel-disk-cache" >>"${GITHUB_ENV}"
       # A run saves a new entry under its own commit; the next run restores
       # the newest one, from its own branch or from main.
       - uses: actions/cache@v6
