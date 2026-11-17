@@ -41,10 +41,12 @@ int fp_face_model_create(const char* model_path, FpFaceModel** out, char* error,
                          size_t error_size);
 
 /* Finds the face in one frame of packed RGBA, width * height * 4 bytes. The
- * pixels are read in place, and must stay valid until the next detect or
- * destroy. timestamp_ms must increase from call to call. Returns 1 and fills
- * out when it finds a face, 0 when it finds none, and -1 with why in error
- * when it fails. Calls on one model must not overlap. */
+ * pixels are read in place, during the call only: MediaPipe holds no
+ * reference to them once it returns, so the caller may then reuse the buffer
+ * (checked on #20 by making each frame's buffer unreadable as detect
+ * returned, over 50 frames). timestamp_ms must increase from call to call.
+ * Returns 1 and fills out when it finds a face, 0 when it finds none, and -1
+ * with why in error when it fails. Calls on one model must not overlap. */
 int fp_face_model_detect(FpFaceModel* model, const uint8_t* rgba, int width,
                          int height, int64_t timestamp_ms, FpFace* out,
                          char* error, size_t error_size);

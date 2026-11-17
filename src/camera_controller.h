@@ -48,7 +48,20 @@ class Clients {
 //
 // A restarted helper builds a new controller, which starts with the camera
 // closed and no clients (the spec's Restart with GuardRestartRechecks).
-class CameraController : public CameraReports {
+// Gives captured frames tickets, and takes their reactions back. The frame
+// pipeline's view of the controller, so its tests mock it.
+class FrameTickets {
+ public:
+  virtual ~FrameTickets() = default;
+  // Returns a ticket for a frame the camera captured, or nothing when the
+  // camera is not open and the frame must be dropped.
+  virtual std::optional<std::uint64_t> OnFrameCaptured() = 0;
+  // Delivers a frame's reaction to every subscribed client, unless consent
+  // was revoked after the frame was captured.
+  virtual void OnReaction(std::uint64_t ticket, const Reaction& reaction) = 0;
+};
+
+class CameraController : public CameraReports, public FrameTickets {
  public:
   enum class State : std::uint8_t { kClosed, kOpening, kOpen, kClosing };
 
@@ -66,13 +79,8 @@ class CameraController : public CameraReports {
   void OnDeviceLost() override;
   void OnDeviceBack() override;
 
-  // Returns a ticket for a frame the camera captured, or nothing when the
-  // camera is not open and the frame must be dropped.
-  std::optional<std::uint64_t> OnFrameCaptured();
-
-  // Delivers a frame's reaction to every subscribed client, unless consent
-  // was revoked after the frame was captured.
-  void OnReaction(std::uint64_t ticket, const Reaction& reaction);
+  std::optional<std::uint64_t> OnFrameCaptured() override;
+  void OnReaction(std::uint64_t ticket, const Reaction& reaction) override;
 
   [[nodiscard]] State CurrentState() const { return state_; }
 
