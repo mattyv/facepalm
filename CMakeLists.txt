@@ -38,6 +38,7 @@ function(facepalm_unit name)
 endfunction()
 
 facepalm_unit(camera_controller)
+facepalm_unit(face_model)
 facepalm_unit(frame)
 facepalm_unit(head_pose)
 facepalm_unit(session_camera)
@@ -57,11 +58,32 @@ if(APPLE)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller)
 endif()
 
+# face_model_check runs the real face model through MediaPipeFaceModel. It
+# needs libfacepalm_mediapipe.dylib, which tools/fixtures/build.sh builds with
+# Bazel, so it is built only when FACEPALM_MEDIAPIPE_DYLIB names that file; the
+# Fixtures workflow does, and holds it to MediaPipe's expected results.
+set(FACEPALM_MEDIAPIPE_DYLIB "" CACHE FILEPATH
+  "libfacepalm_mediapipe.dylib, to build face_model_check against")
+if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
+  add_library(facepalm_mediapipe SHARED IMPORTED)
+  set_target_properties(facepalm_mediapipe PROPERTIES
+    IMPORTED_LOCATION ${FACEPALM_MEDIAPIPE_DYLIB}
+    IMPORTED_SONAME "@rpath/libfacepalm_mediapipe.dylib")
+  add_executable(face_model_check tools/face_model_check/face_model_check.cc)
+  target_link_libraries(face_model_check PRIVATE face_model facepalm_mediapipe
+    "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
+  get_filename_component(FACEPALM_MEDIAPIPE_DIR ${FACEPALM_MEDIAPIPE_DYLIB}
+    DIRECTORY)
+  set_target_properties(face_model_check PROPERTIES
+    BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
+endif()
+
 # Checks formatting against .clang-format without changing any file.
 file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
   ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc
+  ${PROJECT_SOURCE_DIR}/tools/face_model_check/*.cc
   ${PROJECT_SOURCE_DIR}/tools/fixtures/*.cc)
 find_program(CLANG_FORMAT NAMES clang-format)
 if(CLANG_FORMAT)

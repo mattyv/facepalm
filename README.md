@@ -15,6 +15,10 @@ Nothing works end to end yet. The design is on
 -   `src/mediapipe_shim`: MediaPipe's face landmarker as one self-contained
     library with a plain C interface, built by `tools/fixtures/build.sh`.
     `tools/fixtures/test_shim.sh` tests it against the real model.
+-   `src/face_model`: `FaceModel`, how the frame pipeline will ask for the
+    face in a frame, and `MediaPipeFaceModel`, which asks the shim. Its unit
+    tests stand in for the shim's C functions at link time, so they need no
+    MediaPipe; `tools/face_model_check` runs it on the real model.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
     transformation matrix, which is stored column by column and carries a
     uniform scale. Its test checks against MediaPipe's own expected matrix
@@ -93,11 +97,25 @@ build-mediapipe/mediapipe/bazel-bin/facepalm_fixtures/face_landmarker_fixtures \
   build-mediapipe/data/face_landmarker_v2_with_blendshapes.task image.jpg
 ```
 
+`face_model_check` is facepalm's own `MediaPipeFaceModel` over the shim that
+build made. `check_face_model.sh` requires its results to match the fixture
+tool's exactly, on a lossless PNG of the portrait so both read the same
+pixels:
+
+```shell
+shim="${PWD}/build-mediapipe/mediapipe/bazel-bin/facepalm_shim"
+cmake -S . -B build -G Ninja \
+  -DFACEPALM_MEDIAPIPE_DYLIB="${shim}/libfacepalm_mediapipe.dylib"
+cmake --build build --target face_model_check
+bash tools/fixtures/check_face_model.sh build/face_model_check
+```
+
 If Xcode cannot read the macOS SDK, set `DEVELOPER_DIR` to
 `/Library/Developer/CommandLineTools` first; the script passes it to Bazel.
-The Fixtures workflow runs both scripts on macOS whenever
-`tools/fixtures` or `src/mediapipe_shim` changes, and keeps Bazel's compiled
-outputs between runs, so a warm run builds only what changed.
+The Fixtures workflow runs these checks on macOS whenever `tools/fixtures`,
+`src/mediapipe_shim`, `src/face_model` or `tools/face_model_check` changes,
+and keeps Bazel's compiled outputs between runs, so a warm run builds only
+what changed.
 
 ## Licence
 

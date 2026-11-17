@@ -26,5 +26,12 @@
       "branches": 100,
       "functions": 100
     }
+  },
+  "src/face_model.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
   }
 }
