@@ -86,7 +86,8 @@ tools. The design and its decisions are on
     not run on it.
 -   **In a bats test, end a `[[ ]]` or `(( ))` assertion with `|| false`:**
     under bash 3.2, which macOS ships, a false one before a test's last line
-    does not fail the test (#22).
+    does not fail the test (#22). `scripts/check_bats.sh` fails on one that
+    does not, in CI's Shell step.
 
 ## Style
 

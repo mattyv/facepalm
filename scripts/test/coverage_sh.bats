@@ -45,35 +45,35 @@ summary() {
 @test "passes when every measure meets its floor" {
   summary 10 100 4 100 2 100
   run bash "${WORK}/repo/scripts/coverage.sh"
-  [[ "${status}" -eq 0 ]]
+  [[ "${status}" -eq 0 ]] || false
 }
 
 @test "fails, naming the file and measure, when one is below its floor" {
   summary 10 90 4 100 2 100
   run bash "${WORK}/repo/scripts/coverage.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'src/head_pose.cc: lines 90% is below 100%'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'src/head_pose.cc: lines 90% is below 100%'* ]] || false
 }
 
 @test "counts a measure with nothing to count as full" {
   summary 10 100 0 0 2 100
   run bash "${WORK}/repo/scripts/coverage.sh"
-  [[ "${status}" -eq 0 ]]
+  [[ "${status}" -eq 0 ]] || false
 }
 
 @test "holds a unit with no floors listed to 100" {
   floors ''
   summary 10 100 4 75 2 100
   run bash "${WORK}/repo/scripts/coverage.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'branches 75% is below 100%'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'branches 75% is below 100%'* ]] || false
 }
 
 @test "fails when a unit's profiles cannot be merged" {
   printf '#!/bin/bash\nexit 1\n' >"${WORK}/bin/llvm-profdata"
   summary 10 100 4 100 2 100
   run bash "${WORK}/repo/scripts/coverage.sh"
-  [[ "${status}" -ne 0 ]]
+  [[ "${status}" -ne 0 ]] || false
 }
 
 @test "fails when a file has floors but no test executable" {
@@ -82,6 +82,7 @@ summary() {
   chmod +x "${WORK}/repo/build-coverage/other_test"
   summary 10 100 4 100 2 100
   run bash "${WORK}/repo/scripts/coverage.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'src/head_pose.cc: has floors but no test executable'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'src/head_pose.cc: has floors but no test executable'* ]] \
+    || false
 }

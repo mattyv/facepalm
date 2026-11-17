@@ -25,35 +25,35 @@ teardown() {
 
 @test "passes when TLC finds no error" {
   run bash "${WORK}/specs/check.sh"
-  [[ "${status}" -eq 0 ]]
-  [[ "${output}" == *'Camera.cfg'*'pass'* ]]
+  [[ "${status}" -eq 0 ]] || false
+  [[ "${output}" == *'Camera.cfg'*'pass'* ]] || false
 }
 
 @test "fails, with TLC's output, when TLC finds a violation" {
   FAKE_OUT='Error: Invariant OpenOnlyWithConsent is violated.' FAKE_CODE=12
   run bash "${WORK}/specs/check.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'FAILED'* ]]
-  [[ "${output}" == *'OpenOnlyWithConsent is violated'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'FAILED'* ]] || false
+  [[ "${output}" == *'OpenOnlyWithConsent is violated'* ]] || false
 }
 
 @test "fails when TLC exits non-zero even without reporting a violation" {
   FAKE_CODE=1
   run bash "${WORK}/specs/check.sh"
-  [[ "${status}" -eq 1 ]]
+  [[ "${status}" -eq 1 ]] || false
 }
 
 @test "fails when TLC exits 0 without saying no error was found" {
   FAKE_OUT='Parsing file Camera.tla'
   run bash "${WORK}/specs/check.sh"
-  [[ "${status}" -eq 1 ]]
+  [[ "${status}" -eq 1 ]] || false
 }
 
 @test "checks a named config against the spec before its underscore" {
   touch "${WORK}/specs/Camera_Restart.cfg"
   run bash "${WORK}/specs/check.sh"
-  [[ "${status}" -eq 0 ]]
+  [[ "${status}" -eq 0 ]] || false
   log="$(cat "${LOG}")"
-  [[ "${log}" == *'-config Camera_Restart.cfg Camera.tla'* ]]
-  [[ "${log}" == *'-config Camera.cfg Camera.tla'* ]]
+  [[ "${log}" == *'-config Camera_Restart.cfg Camera.tla'* ]] || false
+  [[ "${log}" == *'-config Camera.cfg Camera.tla'* ]] || false
 }

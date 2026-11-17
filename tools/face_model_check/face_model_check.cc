@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "src/face_model.h"
@@ -45,6 +46,9 @@ std::optional<Image> Decode(const char* path) {
       nullptr, reinterpret_cast<const UInt8*>(path),
       static_cast<CFIndex>(std::strlen(path)),
       /*isDirectory=*/static_cast<Boolean>(false));
+  if (url == nullptr) {
+    return std::nullopt;
+  }
   CGImageSourceRef source = CGImageSourceCreateWithURL(url, nullptr);
   CFRelease(url);
   if (source == nullptr) {
@@ -149,7 +153,11 @@ int main(int argc, char** argv) {
   int frames = 0;
   if (argc == 4) {
     const std::string_view text(argv[3]);
-    std::from_chars(text.data(), text.data() + text.size(), frames);
+    const auto [end, error] =
+        std::from_chars(text.data(), text.data() + text.size(), frames);
+    if (error != std::errc() || end != text.data() + text.size()) {
+      frames = 0;  // Not a whole number: refused below.
+    }
   }
   if ((argc != 3 && argc != 4) || (argc == 4 && frames <= 0)) {
     std::fprintf(stderr,
