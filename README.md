@@ -38,6 +38,9 @@ Nothing works end to end yet. The design is on
     its smoke test; it has no unit tests or coverage floor.
 -   `specs/CameraLifecycle.tla`: when the camera may be on, checked with TLC
     before any capture code. See `specs/README.md`.
+-   `specs/FramePipeline.tla`: how a captured frame reaches the face model,
+    and the model's lifecycle, checked with TLC before the pipeline's code
+    (#20).
 
 ## Build and test
 

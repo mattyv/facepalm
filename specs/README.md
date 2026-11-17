@@ -26,6 +26,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 148 |
+| `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 
 ## `CameraLifecycle`: when the camera may be on
 
@@ -76,3 +77,45 @@ tests that stand for the properties they break:
 | A new controller opens when consent holds | `DeadHelperHoldsNoCameraTest`, and four others |
 | The device coming back does not reopen | `WantedOpensTest` |
 | Closing does not reopen when wanted | `WantedOpensTest` |
+
+## `FramePipeline`: how a frame reaches the face model
+
+Refines `CameraLifecycle`'s `Capture`, `Emit` and `Drop` for #20's pipeline.
+Three serial queues share one frame slot. The capture queue copies a frame
+into the slot as RGBA, since the frame is gone when the callback returns.
+The control queue, `CameraController`, opens and closes the camera and gives
+the frame a ticket, or refuses one when the camera is not open. The
+inference queue runs its tasks in order: create the model when the camera
+opens, detect on a ticketed frame, and destroy the model when the camera
+closes. Frames may arrive at any time, even just after closing, and loading
+the model and detecting can each fail.
+
+| Property | What it says | Test |
+|---|---|---|
+| `NoDetectWithoutModel` | Detect runs only on a model that is ready: not before it loads, after it failed to, or once destroyed. | Nothing yet: #20 |
+| `NeverWrittenWhileRead` | The capture callback never writes the slot while detect reads it. | Nothing yet: #20 |
+| `AtMostOneInFlight` | At most one frame is between capture and being freed. | Nothing yet: #20 |
+| `CanDetect` | Something must happen: a ticketed frame next in line, with the model ready, can be detected. | Nothing yet: #20 |
+| `SlotFreed` | The slot is always freed: after a reaction, a refused ticket, a failed detect, or no model. | Nothing yet: #20 |
+| `ModelGoneAfterClose` | Closing the camera leads to the model being destroyed. | Nothing yet: #20 |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardOneSlot = FALSE`: a frame is copied in while another is in flight | `AtMostOneInFlight`; with it and `TypeOK` left out, `NeverWrittenWhileRead` |
+| `GuardFreeOnRefusal = FALSE`: a refused ticket leaves the slot taken | `SlotFreed` |
+| `GuardFreeOnError = FALSE`: a failed detect leaves the slot taken | `SlotFreed` |
+| `GuardSkipAbsent = FALSE`: detect runs when the model is absent | `NoDetectWithoutModel` |
+| `GuardOneQueue = FALSE`: closing destroys the model at once, on the control queue | `NoDetectWithoutModel` |
+| `GuardDestroyOnClose = FALSE`: closing never destroys the model | `ModelGoneAfterClose` |
+| `DetectStart` never enabled | `CanDetect` |
+| `CaptureEnd` writes a slot state outside the type | `TypeOK` |
+| No fairness on `Ticket` | `SlotFreed` |
+| No fairness on `CreateModel` | `SlotFreed`: a queued `create` stalls the `detect` behind it |
+| No fairness on `DetectStart` | `SlotFreed` and `ModelGoneAfterClose` |
+| No fairness on `DestroyModel` | `ModelGoneAfterClose` and `SlotFreed` |
+| No fairness on `DetectEnd \/ DetectFails` | `SlotFreed` and `ModelGoneAfterClose` |
+
+The capture callback always returns, but no property needs that, so
+`CaptureEnd` has no fairness: without it TLC still passes.
