@@ -1,5 +1,7 @@
 # facepalm
 
+![A cartoon bald captain in a red tunic with his face in his palm](docs/icon.jpg)
+
 A local perception service for tools that work alongside a programmer. It reads
 the camera on the programmer's own machine and tells client tools, such as the
 [AI Pair](https://github.com/mattyv/ai-pair) extension, how the programmer is
