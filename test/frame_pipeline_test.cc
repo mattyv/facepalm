@@ -312,13 +312,13 @@ TEST_F(SlotFreedTest, WithNoModel) {
   inference_.Drain();
 }
 
-// Not a spec property: #20 asks that a refused frame's pixels be zeroed when
-// the slot is freed. The buffer is watched through the span an earlier detect
-// was given, which stays valid because the vector keeps its allocation for a
-// frame of the same size.
-using RefusedTicketTest = FramePipelineTest;
+// Not a spec property: a frame's pixels are wiped however it ends, so no
+// image of the user outlives its use. The buffer is watched through the span
+// a detect was given, which stays valid because the vector keeps its
+// allocation for a frame of the same size.
+using PixelsWipedTest = FramePipelineTest;
 
-TEST_F(RefusedTicketTest, ZeroesTheCopiedPixels) {
+TEST_F(PixelsWipedTest, AfterADetect) {
   MockFaceModel* model = Opened();
   std::span<const std::uint8_t> buffer;
   EXPECT_CALL(*model, Detect(_, _, _, _, _, _))
@@ -330,6 +330,23 @@ TEST_F(RefusedTicketTest, ZeroesTheCopiedPixels) {
   Captured();
   inference_.Drain();
 
+  EXPECT_THAT(buffer, ElementsAre(0, 0, 0, 0));
+  EXPECT_CALL(*model, Destroyed());
+}
+
+TEST_F(PixelsWipedTest, AfterARefusedTicket) {
+  MockFaceModel* model = Opened();
+  std::span<const std::uint8_t> buffer;
+  EXPECT_CALL(*model, Detect(_, _, _, _, _, _))
+      .WillOnce([&buffer](std::span<const std::uint8_t> rgba, int, int,
+                          std::int64_t, Face&, std::string&) {
+        buffer = rgba;
+        return FaceModel::Result::kNoFace;
+      });
+  Captured();
+  inference_.Drain();
+  // The buffer keeps its storage for a frame of the same size, so `buffer`
+  // still views it. The next frame's pixels are copied in, then refused.
   EXPECT_CALL(tickets_, OnFrameCaptured()).WillOnce(Return(std::nullopt));
   pipeline_.OnFrame(FrameOf(kOtherBgra));
   control_.Drain();

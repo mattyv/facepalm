@@ -44,14 +44,10 @@ void FramePipeline::OnFrame(const Frame& frame) {
   control_([this] { Ticket(); });
 }
 
-// specs/FramePipeline.tla: Ticket, with GuardFreeOnRefusal. A refused frame's
-// pixels are zeroed before the slot is freed, so a frame captured around the
-// camera stopping does not stay in memory. A ticketed frame's pixels stay in
-// the slot after its detect, until the next frame overwrites them.
+// specs/FramePipeline.tla: Ticket, with GuardFreeOnRefusal.
 void FramePipeline::Ticket() {
   const std::optional<std::uint64_t> ticket = tickets_.OnFrameCaptured();
   if (!ticket) {
-    std::ranges::fill(rgba_, 0);
     Free();
     return;
   }
@@ -96,7 +92,10 @@ void FramePipeline::Detect() {
   Free();
 }
 
+// Wipes the frame's pixels before freeing the slot, however the frame ends,
+// so no image of the user outlives its use.
 void FramePipeline::Free() {
+  std::ranges::fill(rgba_, 0);
   slot_.store(Slot::kFree, std::memory_order_release);
 }
 

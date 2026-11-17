@@ -134,4 +134,4 @@ tests that stand for the properties they break:
 | Closing destroys the model at once, on the caller's thread | `ModelGoneAfterCloseTest.ClosingDestroysTheModel`, `NoDetectWithoutModelTest.ClosingWaitsForADetectAlreadyQueued` |
 | Closing never destroys the model | `ModelGoneAfterCloseTest.ClosingDestroysTheModel`, `NoDetectWithoutModelTest.DetectsNothingOnceClosed` |
 | A ticketed frame's detect is never queued | `CanDetectTest`, and six others |
-| A refused ticket's pixels are not zeroed | `RefusedTicketTest.ZeroesTheCopiedPixels` (#20's zeroing, which the spec does not model) |
+| A frame's pixels are not wiped when its slot is freed | `PixelsWipedTest` (both; the spec does not model the wipe) |
