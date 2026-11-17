@@ -8,19 +8,29 @@
 // model, prints each frame's reaction as it arrives, and reports what the
 // model cost (#18, #21). That needs a build with FACEPALM_MEDIAPIPE_DYLIB.
 //
-// Usage: camera_probe [seconds] [frames per second] [model.task]
+// Given a directory as well, it saves every frame there as a numbered PNG,
+// frame_000001.png and on, with timestamps.txt listing each frame's capture
+// time in milliseconds: a recording for tools/fixtures to replay (#21). The
+// frames are images of the user, so keep them out of the repository.
+//
+// Usage: camera_probe [seconds] [frames per second] [model.task] [directory]
 
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
 #include <sys/resource.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -51,10 +61,89 @@ constexpr double kPercent = 100;
 
 constexpr double kPercentile95 = 0.95;
 
+// Saves frames as PNGs on a queue of its own, so the capture queue only
+// copies them.
+class Recorder {
+ public:
+  explicit Recorder(std::string directory)
+      : directory_(std::move(directory)),
+        queue_(
+            dispatch_queue_create("facepalm.record", DISPATCH_QUEUE_SERIAL)) {}
+
+  // Copies `frame` and queues it to be written. Capture queue only.
+  void Record(const Frame& frame) {
+    const auto pixels = std::make_shared<std::vector<std::uint8_t>>(
+        frame.bgra, frame.bgra + (frame.bytes_per_row *
+                                  static_cast<std::size_t>(frame.height)));
+    const int index = ++count_;
+    const Frame copy{.width = frame.width,
+                     .height = frame.height,
+                     .bytes_per_row = frame.bytes_per_row,
+                     .bgra = nullptr,
+                     .timestamp_ms = frame.timestamp_ms};
+    dispatch_async(queue_, ^{
+      Write(index, copy, *pixels);
+    });
+  }
+
+ private:
+  // Writes one frame's PNG and appends its capture time.
+  void Write(int index, const Frame& frame,
+             const std::vector<std::uint8_t>& bgra) {
+    constexpr std::size_t kBitsPerChannel = 8;
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+        const_cast<std::uint8_t*>(bgra.data()),
+        static_cast<std::size_t>(frame.width),
+        static_cast<std::size_t>(frame.height), kBitsPerChannel,
+        frame.bytes_per_row, space,
+        static_cast<std::uint32_t>(kCGImageAlphaNoneSkipFirst) |
+            static_cast<std::uint32_t>(kCGBitmapByteOrder32Little));
+    CGColorSpaceRelease(space);
+    if (context == nullptr) {
+      return;
+    }
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    std::array<char, kNameLength> name{};
+    std::snprintf(name.data(), name.size(), "%s/frame_%06d.png",
+                  directory_.c_str(), index);
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(
+        nullptr, reinterpret_cast<const UInt8*>(name.data()),
+        static_cast<CFIndex>(std::strlen(name.data())),
+        /*isDirectory=*/static_cast<Boolean>(false));
+    CGImageDestinationRef destination =
+        url == nullptr ? nullptr
+                       : CGImageDestinationCreateWithURL(
+                             url, CFSTR("public.png"), 1, nullptr);
+    if (destination != nullptr) {
+      CGImageDestinationAddImage(destination, image, nullptr);
+      CGImageDestinationFinalize(destination);
+      CFRelease(destination);
+    }
+    if (url != nullptr) {
+      CFRelease(url);
+    }
+    CGImageRelease(image);
+    FILE* times = std::fopen((directory_ + "/timestamps.txt").c_str(), "a");
+    if (times != nullptr) {
+      std::fprintf(times, "%d %lld\n", index,
+                   static_cast<long long>(frame.timestamp_ms));
+      std::fclose(times);
+    }
+  }
+
+  static constexpr std::size_t kNameLength = 4096;
+  std::string directory_;
+  dispatch_queue_t queue_;
+  int count_ = 0;  // Capture queue only.
+};
+
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
   int frames_per_second = kDefaultFramesPerSecond;
-  std::unique_ptr<FaceModel> model;  // Runs on every frame when set.
+  std::unique_ptr<FaceModel> model;    // Runs on every frame when set.
+  std::unique_ptr<Recorder> recorder;  // Saves every frame when set.
 };
 
 // The process's thread count now.
@@ -150,6 +239,7 @@ class Probe : public CameraReports {
  public:
   Probe(ProbeOptions options, dispatch_queue_t control)
       : seconds_(options.seconds),
+        recorder_(std::move(options.recorder)),
         has_model_(options.model != nullptr),
         model_(std::move(options.model)),
         control_(control),
@@ -241,6 +331,9 @@ class Probe : public CameraReports {
     }
     last_timestamp_ms_ = frame.timestamp_ms;
     ++frames_;
+    if (recorder_ != nullptr) {
+      recorder_->Record(frame);
+    }
     pipeline_.OnFrame(frame);
   }
 
@@ -278,6 +371,7 @@ class Probe : public CameraReports {
   }
 
   int seconds_;
+  std::unique_ptr<Recorder> recorder_;
   bool has_model_;
   std::unique_ptr<FaceModel> model_;  // Until the pipeline takes it.
   ModelStats stats_;
@@ -357,13 +451,16 @@ int main(int argc, char** argv) {
   if (seconds == 0 || frames_per_second == 0) {
     std::fprintf(
         stderr,
-        "usage: camera_probe [seconds] [frames per second] [model.task]\n");
+        "usage: camera_probe [seconds] [frames per second] [model.task] "
+        "[directory]\n");
     return 2;
   }
   facepalm::ProbeOptions options{
       .seconds = seconds,
       .frames_per_second = frames_per_second,
       .model = LoadModel(argc > 3 ? argv[3] : nullptr),
+      .recorder =
+          argc > 4 ? std::make_unique<facepalm::Recorder>(argv[4]) : nullptr,
   };
   dispatch_queue_t control =
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);

@@ -19,6 +19,12 @@ Nothing works end to end yet. The design is on
     face in a frame, and `MediaPipeFaceModel`, which asks the shim. Its unit
     tests stand in for the shim's C functions at link time, so they need no
     MediaPipe; `tools/face_model_check` runs it on the real model.
+-   `src/frame_pipeline`: takes each captured frame to the face model, one
+    frame at a time, across the capture, controller and inference queues,
+    following `specs/FramePipeline.tla`. Each frame's pixels are wiped once
+    it is done with.
+-   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
+    to a tenth of a degree, as JSON text.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
     transformation matrix, which is stored column by column and carries a
     uniform scale. Its test checks against MediaPipe's own expected matrix
@@ -78,12 +84,18 @@ for 15. The first run asks for camera permission for the app it runs in.
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.
 ```
 
-Built with `FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face
-landmarker's `.task` bundle as a third argument, it also runs the face model
-on every frame and reports how long each took, how many had a face, the
-thread count and peak memory. `face_model_check <model> <image> <frames>`
-times the model on one image run as that many frames, for a face held still
-in front of the camera.
+Every frame goes through the frame pipeline. Built with
+`FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face landmarker's
+`.task` bundle as a third argument, it also runs the face model on every
+frame, prints each frame's reaction as a line such as
+`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, and reports how long each
+detect took, how many frames had a face, the thread count and peak memory.
+Given a directory as a fourth argument, it saves every frame there as a PNG,
+with each frame's capture time in `timestamps.txt`, for
+`face_landmarker_fixtures` to replay. Those frames are images of whoever sat
+at the camera: keep them out of the repository.
+`face_model_check <model> <image> <frames>` times the model on one image run
+as that many frames, for a face held still in front of the camera.
 
 For energy, run `powermetrics` alongside it in another terminal, and read
 `camera_probe`'s line:

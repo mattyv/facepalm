@@ -62,7 +62,7 @@ if(APPLE)
     "-framework Foundation")
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
-    frame_pipeline reaction)
+    frame_pipeline reaction "-framework CoreGraphics" "-framework ImageIO")
 endif()
 
 # face_model_check runs the real face model through MediaPipeFaceModel. It
