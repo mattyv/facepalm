@@ -265,46 +265,57 @@ int PositiveArgument(const char* text, int fallback) {
   return whole && value > 0 ? value : 0;
 }
 
+// Loads the face model at `path`, reporting its create time and the threads
+// after it, or returns null when there is no path. Exits when it cannot load
+// one, or when this build has no face model.
+facepalm::FaceModel* LoadModel(const char* path) {
+  if (path == nullptr) {
+    return nullptr;
+  }
+#ifdef FACEPALM_WITH_FACE_MODEL
+  std::string error;
+  const auto start = std::chrono::steady_clock::now();
+  // ponytail: leaked on purpose, like the probe.
+  facepalm::FaceModel* model =
+      facepalm::MediaPipeFaceModel::Create(path, error).release();
+  const std::chrono::duration<double, std::milli> took =
+      std::chrono::steady_clock::now() - start;
+  if (model == nullptr) {
+    std::fprintf(stderr, "camera_probe: %s\n", error.c_str());
+    std::exit(1);
+  }
+  std::printf("model_create_ms %.1f\nthreads_after_create %d\n", took.count(),
+              facepalm::Threads());
+  return model;
+#else
+  std::fprintf(stderr,
+               "camera_probe: built without the face model; configure with "
+               "FACEPALM_MEDIAPIPE_DYLIB\n");
+  std::exit(2);
+#endif
+}
+
 }  // namespace
 
 // The standard fixes main's signature, and an allocation failure may end the
 // tool.
 // NOLINTNEXTLINE(misc-const-correctness,bugprone-exception-escape)
 int main(int argc, char** argv) {
-  facepalm::ProbeOptions options{
-      .seconds = PositiveArgument(argc > 1 ? argv[1] : nullptr,
-                                  facepalm::kDefaultSeconds),
-      .frames_per_second = PositiveArgument(argc > 2 ? argv[2] : nullptr,
-                                            facepalm::kDefaultFramesPerSecond),
-  };
-  if (options.seconds == 0 || options.frames_per_second == 0) {
+  const int seconds =
+      PositiveArgument(argc > 1 ? argv[1] : nullptr, facepalm::kDefaultSeconds);
+  const int frames_per_second = PositiveArgument(
+      argc > 2 ? argv[2] : nullptr, facepalm::kDefaultFramesPerSecond);
+  if (seconds == 0 || frames_per_second == 0) {
     std::fprintf(
         stderr,
         "usage: camera_probe [seconds] [frames per second] [model.task]\n");
     return 2;
   }
-  if (argc > 3) {
-#ifdef FACEPALM_WITH_FACE_MODEL
-    std::string error;
-    const auto start = std::chrono::steady_clock::now();
-    // ponytail: leaked on purpose, like the probe.
-    options.model =
-        facepalm::MediaPipeFaceModel::Create(argv[3], error).release();
-    const std::chrono::duration<double, std::milli> took =
-        std::chrono::steady_clock::now() - start;
-    if (options.model == nullptr) {
-      std::fprintf(stderr, "camera_probe: %s\n", error.c_str());
-      return 1;
-    }
-    std::printf("model_create_ms %.1f\nthreads_after_create %d\n", took.count(),
-                facepalm::Threads());
-#else
-    std::fprintf(stderr,
-                 "camera_probe: built without the face model; configure "
-                 "with FACEPALM_MEDIAPIPE_DYLIB\n");
-    return 2;
-#endif
-  }
+  const facepalm::ProbeOptions options{
+      .seconds = seconds,
+      .frames_per_second = frames_per_second,
+      .model = LoadModel(argc > 3 ? argv[3] : nullptr),
+  };
   dispatch_queue_t control =
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);
   // ponytail: leaked on purpose; the process exits from a report.
