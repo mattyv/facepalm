@@ -2,7 +2,8 @@ name: Fixtures
 
 # Builds MediaPipe's face landmarker, and facepalm's shim over it, from source.
 # Checks they reproduce MediaPipe's own expected results, and tests the shim
-# against the real model. macOS only for now: the user will add Linux later
+# against the real model, and holds facepalm's own adapter over the shim to
+# MediaPipe's results. macOS only for now: the user will add Linux later
 # (#3). A cold build takes half an hour on a runner, so it runs only when
 # something it builds changes, or by hand. Bazel's compiled outputs are kept
 # between runs, so a warm build compiles only what changed (#15).
@@ -10,12 +11,16 @@ on:
   pull_request:
     paths:
       - src/mediapipe_shim/**
+      - src/face_model.*
+      - tools/face_model_check/**
       - tools/fixtures/**
       - .github/workflows/fixtures.yml
   push:
     branches: [main]
     paths:
       - src/mediapipe_shim/**
+      - src/face_model.*
+      - tools/face_model_check/**
       - tools/fixtures/**
       - .github/workflows/fixtures.yml
   workflow_dispatch:
@@ -27,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
-        run: brew install bazelisk jq
+        run: brew install bazelisk jq googletest ninja
       # Outside the checkout, by an absolute path: actions/cache rejects
       # one with "..", and the job's env cannot read the runner context.
       - name: Choose Bazel's disk cache
@@ -47,3 +52,10 @@ jobs:
         run: bash tools/fixtures/check_shim.sh
       - name: Test the shim against the real model, with full coverage
         run: bash tools/fixtures/test_shim.sh
+      - name: Hold the face model adapter to MediaPipe's own results
+        run: |
+          shim="${PWD}/build-mediapipe/mediapipe/bazel-bin/facepalm_shim"
+          cmake -S . -B build -G Ninja \
+            -DFACEPALM_MEDIAPIPE_DYLIB="${shim}/libfacepalm_mediapipe.dylib"
+          cmake --build build --target face_model_check
+          bash tools/fixtures/check_face_model.sh build/face_model_check

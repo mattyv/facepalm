@@ -15,6 +15,8 @@
 extern "C" {
 #endif
 
+/* Plain C on purpose, for the ABI, so C++ style checks do not apply. */
+/* NOLINTBEGIN */
 enum {
   FP_LANDMARKS = 478,  /* MediaPipe's face mesh, with irises. */
   FP_BLENDSHAPES = 52, /* In MediaPipe's order, starting with _neutral. */
@@ -49,6 +51,7 @@ int fp_face_model_detect(FpFaceModel* model, const uint8_t* rgba, int width,
 
 /* Closes the model. Not while a detect on it is running. */
 void fp_face_model_destroy(FpFaceModel* model);
+/* NOLINTEND */
 
 #ifdef __cplusplus
 }
