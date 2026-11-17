@@ -3,35 +3,51 @@
 // camera's smoke test, and the CPU half of #11's measurement; energy comes
 // from powermetrics, run alongside with sudo.
 //
-// Given a face landmarker .task bundle, it also runs the face model on every
-// frame, as the pipeline will, and reports what that costs (#18). That needs
-// a build with FACEPALM_MEDIAPIPE_DYLIB set.
+// Every frame goes through FramePipeline, on queues as the service will run
+// them. Given a face landmarker .task bundle, the pipeline also runs the face
+// model, prints each frame's reaction as it arrives, and reports what the
+// model cost (#18, #21). That needs a build with FACEPALM_MEDIAPIPE_DYLIB.
 //
-// Usage: camera_probe [seconds] [frames per second] [model.task]
+// Given a directory as well, it saves every frame there as a numbered PNG,
+// frame_000001.png and on, with timestamps.txt listing each frame's capture
+// time in milliseconds: a recording for tools/fixtures to replay (#21). The
+// frames are images of the user, so keep them out of the repository.
+//
+// Usage: camera_probe [seconds] [frames per second] [model.task] [directory]
 
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
 #include <dispatch/dispatch.h>
 #include <mach/mach.h>
 #include <sys/resource.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #include "src/camera_controller.h"
 #include "src/face_model.h"
 #include "src/frame.h"
+#include "src/frame_pipeline.h"
 #include "src/macos/avfoundation_session.h"
+#include "src/reaction.h"
 #include "src/session_camera.h"
 
 namespace facepalm {
@@ -45,10 +61,89 @@ constexpr double kPercent = 100;
 
 constexpr double kPercentile95 = 0.95;
 
+// Saves frames as PNGs on a queue of its own, so the capture queue only
+// copies them.
+class Recorder {
+ public:
+  explicit Recorder(std::string directory)
+      : directory_(std::move(directory)),
+        queue_(
+            dispatch_queue_create("facepalm.record", DISPATCH_QUEUE_SERIAL)) {}
+
+  // Copies `frame` and queues it to be written. Capture queue only.
+  void Record(const Frame& frame) {
+    const auto pixels = std::make_shared<std::vector<std::uint8_t>>(
+        frame.bgra, frame.bgra + (frame.bytes_per_row *
+                                  static_cast<std::size_t>(frame.height)));
+    const int index = ++count_;
+    const Frame copy{.width = frame.width,
+                     .height = frame.height,
+                     .bytes_per_row = frame.bytes_per_row,
+                     .bgra = nullptr,
+                     .timestamp_ms = frame.timestamp_ms};
+    dispatch_async(queue_, ^{
+      Write(index, copy, *pixels);
+    });
+  }
+
+ private:
+  // Writes one frame's PNG and appends its capture time.
+  void Write(int index, const Frame& frame,
+             const std::vector<std::uint8_t>& bgra) {
+    constexpr std::size_t kBitsPerChannel = 8;
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+        const_cast<std::uint8_t*>(bgra.data()),
+        static_cast<std::size_t>(frame.width),
+        static_cast<std::size_t>(frame.height), kBitsPerChannel,
+        frame.bytes_per_row, space,
+        static_cast<std::uint32_t>(kCGImageAlphaNoneSkipFirst) |
+            static_cast<std::uint32_t>(kCGBitmapByteOrder32Little));
+    CGColorSpaceRelease(space);
+    if (context == nullptr) {
+      return;
+    }
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    std::array<char, kNameLength> name{};
+    std::snprintf(name.data(), name.size(), "%s/frame_%06d.png",
+                  directory_.c_str(), index);
+    CFURLRef url = CFURLCreateFromFileSystemRepresentation(
+        nullptr, reinterpret_cast<const UInt8*>(name.data()),
+        static_cast<CFIndex>(std::strlen(name.data())),
+        /*isDirectory=*/static_cast<Boolean>(false));
+    CGImageDestinationRef destination =
+        url == nullptr ? nullptr
+                       : CGImageDestinationCreateWithURL(
+                             url, CFSTR("public.png"), 1, nullptr);
+    if (destination != nullptr) {
+      CGImageDestinationAddImage(destination, image, nullptr);
+      CGImageDestinationFinalize(destination);
+      CFRelease(destination);
+    }
+    if (url != nullptr) {
+      CFRelease(url);
+    }
+    CGImageRelease(image);
+    FILE* times = std::fopen((directory_ + "/timestamps.txt").c_str(), "a");
+    if (times != nullptr) {
+      std::fprintf(times, "%d %lld\n", index,
+                   static_cast<long long>(frame.timestamp_ms));
+      std::fclose(times);
+    }
+  }
+
+  static constexpr std::size_t kNameLength = 4096;
+  std::string directory_;
+  dispatch_queue_t queue_;
+  int count_ = 0;  // Capture queue only.
+};
+
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
   int frames_per_second = kDefaultFramesPerSecond;
-  FaceModel* model = nullptr;  // Runs on every frame when set.
+  std::unique_ptr<FaceModel> model;    // Runs on every frame when set.
+  std::unique_ptr<Recorder> recorder;  // Saves every frame when set.
 };
 
 // The process's thread count now.
@@ -97,10 +192,45 @@ double CpuSeconds() {
   return seconds(usage.ru_utime) + seconds(usage.ru_stime);
 }
 
-class NoClients : public Clients {
+// Prints each reaction the controller delivers, as one line.
+class PrintedClients : public Clients {
  public:
-  void Deliver(const ClientId& /*client*/,
-               const Reaction& /*reaction*/) override {}
+  void Deliver(const ClientId& /*client*/, const Reaction& reaction) override {
+    std::printf("reaction %s\n", reaction.c_str());
+  }
+};
+
+// What the face model did, written on the inference queue and read when the
+// camera closes.
+struct ModelStats {
+  std::mutex mutex;
+  std::vector<double> detect_ms;  // Under mutex.
+  int faces = 0;                  // Under mutex.
+};
+
+// A face model that times each detect into `stats`.
+class TimedFaceModel : public FaceModel {
+ public:
+  TimedFaceModel(std::unique_ptr<FaceModel> model, ModelStats& stats)
+      : model_(std::move(model)), stats_(stats) {}
+
+  [[nodiscard]] Result Detect(std::span<const std::uint8_t> rgba, int width,
+                              int height, std::int64_t timestamp_ms, Face& face,
+                              std::string& error) override {
+    const auto start = std::chrono::steady_clock::now();
+    const Result result =
+        model_->Detect(rgba, width, height, timestamp_ms, face, error);
+    const std::chrono::duration<double, std::milli> took =
+        std::chrono::steady_clock::now() - start;
+    const std::scoped_lock lock(stats_.mutex);
+    stats_.detect_ms.push_back(took.count());
+    stats_.faces += result == Result::kFace ? 1 : 0;
+    return result;
+  }
+
+ private:
+  std::unique_ptr<FaceModel> model_;
+  ModelStats& stats_;
 };
 
 // Forwards the camera's reports to the controller, and measures between the
@@ -109,7 +239,9 @@ class Probe : public CameraReports {
  public:
   Probe(ProbeOptions options, dispatch_queue_t control)
       : seconds_(options.seconds),
-        model_(options.model),
+        recorder_(std::move(options.recorder)),
+        has_model_(options.model != nullptr),
+        model_(std::move(options.model)),
         control_(control),
         capture_(
             [this](const Frame& frame) { OnFrame(frame); },
@@ -120,12 +252,30 @@ class Probe : public CameraReports {
                 OnQueue(dispatch_queue_create("facepalm.camera.session",
                                               DISPATCH_QUEUE_SERIAL)),
                 OnQueue(control), options.frames_per_second),
-        controller_(camera_, clients_, /*consent=*/true) {}
+        controller_(camera_, clients_, /*consent=*/true),
+        pipeline_(
+            controller_, OnQueue(control),
+            OnQueue(dispatch_queue_create("facepalm.inference",
+                                          DISPATCH_QUEUE_SERIAL)),
+            FramePipeline::Callbacks{
+                .make_model =
+                    [this](std::string& error) { return TakeModel(error); },
+                .react = [](const Face& face) -> std::optional<Reaction> {
+                  return ReactionFrom(face);
+                },
+                .on_error =
+                    [](const std::string& error) {
+                      std::fprintf(stderr, "camera_probe: %s\n", error.c_str());
+                    },
+            }) {}
 
   void Start() { controller_.Subscribe("camera_probe"); }
 
   void OnOpened() override {
     controller_.OnOpened();
+    if (has_model_) {
+      pipeline_.OnCameraOpen();
+    }
     frames_ = 0;
     cpu_at_open_ = CpuSeconds();
     dispatch_after(
@@ -145,8 +295,11 @@ class Probe : public CameraReports {
     std::exit(1);
   }
 
+  // The process exits from here with the queues still running, and the probe
+  // is never destroyed, so no queued task outlives what it points to (#21).
   void OnClosed() override {
     controller_.OnClosed();
+    pipeline_.OnCameraClosed();
     const double cpu = cpu_at_close_ - cpu_at_open_;
     std::printf(
         "seconds %d\nframes %d\nframes_per_second %.1f\ncpu_seconds %.3f\n"
@@ -154,7 +307,7 @@ class Probe : public CameraReports {
         seconds_, frames_at_close_,
         static_cast<double>(frames_at_close_) / seconds_, cpu,
         kPercent * cpu / seconds_, out_of_order_.load());
-    if (model_ != nullptr) {
+    if (has_model_) {
       ReportModel();
     }
     std::exit(0);
@@ -162,6 +315,7 @@ class Probe : public CameraReports {
 
   void OnDeviceLost() override {
     controller_.OnDeviceLost();
+    pipeline_.OnCameraClosed();
     std::fprintf(stderr, "camera_probe: the camera was lost\n");
     std::exit(1);
   }
@@ -169,43 +323,34 @@ class Probe : public CameraReports {
   void OnDeviceBack() override { controller_.OnDeviceBack(); }
 
  private:
-  // Runs on the capture queue. Converts each frame as the face model will,
-  // so the CPU figure includes it, and checks that capture times increase.
+  // Runs on the capture queue. Checks that capture times increase, then
+  // hands the frame to the pipeline, which copies it out as RGBA.
   void OnFrame(const Frame& frame) {
-    ToRgba(frame, rgba_);
     if (frames_ > 0 && frame.timestamp_ms <= last_timestamp_ms_) {
       ++out_of_order_;
     }
     last_timestamp_ms_ = frame.timestamp_ms;
     ++frames_;
-    if (model_ != nullptr) {
-      Detect(frame);
+    if (recorder_ != nullptr) {
+      recorder_->Record(frame);
     }
+    pipeline_.OnFrame(frame);
   }
 
-  // Runs on the capture queue: the face model on one frame, timed. The
-  // capture session drops frames that arrive while it runs.
-  void Detect(const Frame& frame) {
-    std::string error;
-    const auto start = std::chrono::steady_clock::now();
-    const FaceModel::Result result = model_->Detect(
-        rgba_, frame.width, frame.height, frame.timestamp_ms, face_, error);
-    const std::chrono::duration<double, std::milli> took =
-        std::chrono::steady_clock::now() - start;
-    const std::scoped_lock lock(stats_mutex_);
-    detect_ms_.push_back(took.count());
-    if (result == FaceModel::Result::kFace) {
-      ++faces_;
-    } else if (result == FaceModel::Result::kFailed) {
-      std::fprintf(stderr, "camera_probe: detect failed: %s\n", error.c_str());
+  // The pipeline's model factory: the model loaded at start, timed, once.
+  std::unique_ptr<FaceModel> TakeModel(std::string& error) {
+    if (model_ == nullptr) {
+      error = "the face model was already used; camera_probe opens once";
+      return nullptr;
     }
+    return std::make_unique<TimedFaceModel>(std::move(model_), stats_);
   }
 
   // Prints how many frames the model saw, how many had a face, and how long
   // detect took.
   void ReportModel() {
-    const std::scoped_lock lock(stats_mutex_);
-    std::vector<double> sorted = detect_ms_;
+    const std::scoped_lock lock(stats_.mutex);
+    std::vector<double> sorted = stats_.detect_ms;
     std::ranges::sort(sorted);
     double total = 0;
     for (const double ms : sorted) {
@@ -220,23 +365,21 @@ class Probe : public CameraReports {
     std::printf(
         "detects %zu\nfaces %d\ndetect_ms_mean %.2f\ndetect_ms_p95 %.2f\n"
         "detect_ms_max %.2f\nthreads %d\npeak_resident_mb %.1f\n",
-        sorted.size(), faces_,
+        sorted.size(), stats_.faces,
         sorted.empty() ? 0.0 : total / static_cast<double>(sorted.size()),
         at(kPercentile95), at(1), threads_at_close_, PeakMegabytes());
   }
 
   int seconds_;
-  FaceModel* model_;
-  std::mutex stats_mutex_;
-  std::vector<double> detect_ms_;  // Under stats_mutex_.
-  int faces_ = 0;                  // Under stats_mutex_.
-  Face face_{};                    // Capture queue only.
+  std::unique_ptr<Recorder> recorder_;
+  bool has_model_;
+  std::unique_ptr<FaceModel> model_;  // Until the pipeline takes it.
+  ModelStats stats_;
   int threads_at_close_ = 0;
   dispatch_queue_t control_;
-  NoClients clients_;
+  PrintedClients clients_;
   std::atomic<int> frames_ = 0;
   int frames_at_close_ = 0;
-  std::vector<std::uint8_t> rgba_;      // Capture queue only.
   std::int64_t last_timestamp_ms_ = 0;  // Capture queue only.
   std::atomic<int> out_of_order_ = 0;
   double cpu_at_open_ = 0;
@@ -244,6 +387,7 @@ class Probe : public CameraReports {
   AvFoundationSession capture_;
   SessionCamera camera_;
   CameraController controller_;
+  FramePipeline pipeline_;
 };
 
 }  // namespace
@@ -268,16 +412,15 @@ int PositiveArgument(const char* text, int fallback) {
 // Loads the face model at `path`, reporting its create time and the threads
 // after it, or returns null when there is no path. Exits when it cannot load
 // one, or when this build has no face model.
-facepalm::FaceModel* LoadModel(const char* path) {
+std::unique_ptr<facepalm::FaceModel> LoadModel(const char* path) {
   if (path == nullptr) {
     return nullptr;
   }
 #ifdef FACEPALM_WITH_FACE_MODEL
   std::string error;
   const auto start = std::chrono::steady_clock::now();
-  // ponytail: leaked on purpose, like the probe.
-  facepalm::FaceModel* model =
-      facepalm::MediaPipeFaceModel::Create(path, error).release();
+  std::unique_ptr<facepalm::FaceModel> model =
+      facepalm::MediaPipeFaceModel::Create(path, error);
   const std::chrono::duration<double, std::milli> took =
       std::chrono::steady_clock::now() - start;
   if (model == nullptr) {
@@ -308,18 +451,21 @@ int main(int argc, char** argv) {
   if (seconds == 0 || frames_per_second == 0) {
     std::fprintf(
         stderr,
-        "usage: camera_probe [seconds] [frames per second] [model.task]\n");
+        "usage: camera_probe [seconds] [frames per second] [model.task] "
+        "[directory]\n");
     return 2;
   }
-  const facepalm::ProbeOptions options{
+  facepalm::ProbeOptions options{
       .seconds = seconds,
       .frames_per_second = frames_per_second,
       .model = LoadModel(argc > 3 ? argv[3] : nullptr),
+      .recorder =
+          argc > 4 ? std::make_unique<facepalm::Recorder>(argv[4]) : nullptr,
   };
   dispatch_queue_t control =
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);
   // ponytail: leaked on purpose; the process exits from a report.
-  auto* probe = new facepalm::Probe(options, control);
+  auto* probe = new facepalm::Probe(std::move(options), control);
   dispatch_async(control, ^{
     probe->Start();
   });
