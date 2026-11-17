@@ -47,5 +47,19 @@
       "branches": 100,
       "functions": 100
     }
+  },
+  "src/nodding_pigeon.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/face_detector.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
   }
 }

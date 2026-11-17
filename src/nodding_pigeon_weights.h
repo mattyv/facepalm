@@ -30,11 +30,15 @@
 #define FACEPALM_SRC_NODDING_PIGEON_WEIGHTS_H_
 
 #include <array>
+#include <cstddef>
 
 namespace facepalm::nodding_pigeon {
 
+// Trained weights, so a value near a mathematical constant is chance.
+// NOLINTBEGIN(modernize-use-std-numbers)
+
 // conv1d/kernel:0, [10][14][2].
-inline constexpr std::array<float, 10 * 14 * 2> kConv1Kernel = {
+inline constexpr std::array<float, std::size_t{10} * 14 * 2> kConv1Kernel = {
     -3.62942767F,   -0.119588256F,   -2.43265319F,   0.0177551862F,
     -4.65387201F,   0.113273963F,    -4.61372757F,   0.186970457F,
     -0.372624576F,  -0.151032254F,   1.14436018F,    0.0569281206F,
@@ -109,7 +113,7 @@ inline constexpr std::array<float, 10 * 14 * 2> kConv1Kernel = {
 inline constexpr std::array<float, 2> kConv1Bias = {0.159039751F,
                                                     -0.00597523712F};
 // conv1d_1/kernel:0, [5][2][1].
-inline constexpr std::array<float, 5 * 2> kConv2Kernel = {
+inline constexpr std::array<float, std::size_t{5} * 2> kConv2Kernel = {
     0.535833597F,  -0.352539599F, 0.696090817F, 0.352237672F,  0.162388727F,
     0.0384055376F, -0.933707893F, 0.469018996F, -0.586366653F, -0.143277884F};
 // conv1d_1/bias:0, [1].
@@ -122,7 +126,7 @@ inline constexpr std::array<float, 11> kMotionKernel = {
 // has_motion/bias:0, [1].
 inline constexpr std::array<float, 1> kMotionBias = {-4.70253277F};
 // class_probs/kernel:0, [11][2]: nodding, then turning.
-inline constexpr std::array<float, 11 * 2> kGestureKernel = {
+inline constexpr std::array<float, std::size_t{11} * 2> kGestureKernel = {
     -0.514125764F, -0.174603775F,  0.0849476829F, 0.285724998F,  -0.532671094F,
     -0.198955044F, 0.104121387F,   0.477296591F,  -0.18697226F,  0.305206031F,
     -0.563249946F, -0.0822807848F, -0.211651787F, 0.290223032F,  -0.171975851F,
@@ -131,6 +135,8 @@ inline constexpr std::array<float, 11 * 2> kGestureKernel = {
 // class_probs/bias:0, [2].
 inline constexpr std::array<float, 2> kGestureBias = {2.55018282F,
                                                       -2.55018282F};
+
+// NOLINTEND(modernize-use-std-numbers)
 
 }  // namespace facepalm::nodding_pigeon
 

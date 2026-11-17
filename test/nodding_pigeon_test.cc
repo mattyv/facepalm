@@ -21,8 +21,8 @@ constexpr float kTolerance = 1e-6F;
 RawFrame FrameAt(float shift) {
   RawFrame frame = {0.2F, 0.1F, 0.5F, 0.4F};
   for (int i = 0; i < 6; ++i) {
-    frame[4 + i] = 0.25F + (0.05F * i) + shift;
-    frame[10 + i] = 0.2F + (0.05F * i) + shift;
+    frame[4 + i] = 0.25F + (0.05F * static_cast<float>(i)) + shift;
+    frame[10 + i] = 0.2F + (0.05F * static_cast<float>(i)) + shift;
   }
   return frame;
 }
@@ -62,6 +62,53 @@ TEST(PredictTest, GivesProbabilities) {
   EXPECT_GE(prediction.gestures[1], 0);
 }
 
+// FrameAt(0) with the key points' x (axis 0) or y (axis 1) moved by a
+// triangle wave 0.05 high with period eight. FrameAt's own shifts leave
+// every convolution ReLU at zero, where only the biases speak; these waves
+// fire half of them, so the expected values below pin the kernels too.
+RawFrame WaveFrame(int i, int axis) {
+  constexpr std::array<float, 8> kWave = {0.0F, 0.5F,  1.0F,  0.5F,
+                                          0.0F, -0.5F, -1.0F, -0.5F};
+  RawFrame frame = FrameAt(0);
+  for (int j = 0; j < 6; ++j) {
+    frame[4 + (6 * axis) + j] += 0.05F * kWave[i % 8];
+  }
+  return frame;
+}
+
+// The expected values come from Nodding Pigeon's weights run through a NumPy
+// replica of model.py, written independently of nodding_pigeon.cc, on these
+// exact frames. They pin the Conv1D kernel layout, strides, the
+// preprocessing, and both heads: a wrong layout moves them far outside the
+// margin, which only allows for float32 against float64.
+constexpr float kModelMargin = 1e-5F;
+
+TEST(PredictTest, MatchesTheOriginalModelOnAHorizontalWave) {
+  std::array<RawFrame, kFrames> frames{};
+  for (int i = 0; i < kFrames; ++i) {
+    frames[i] = WaveFrame(i, 0);
+  }
+
+  const Prediction prediction = Predict(frames);
+
+  EXPECT_THAT(prediction.has_motion, FloatNear(1.0F, kModelMargin));
+  EXPECT_THAT(prediction.gestures[0], FloatNear(0.95536832F, kModelMargin));
+  EXPECT_THAT(prediction.gestures[1], FloatNear(0.04463168F, kModelMargin));
+}
+
+TEST(PredictTest, MatchesTheOriginalModelOnAVerticalWave) {
+  std::array<RawFrame, kFrames> frames{};
+  for (int i = 0; i < kFrames; ++i) {
+    frames[i] = WaveFrame(i, 1);
+  }
+
+  const Prediction prediction = Predict(frames);
+
+  EXPECT_THAT(prediction.has_motion, FloatNear(0.00998810F, kModelMargin));
+  EXPECT_THAT(prediction.gestures[0], FloatNear(0.99387355F, kModelMargin));
+  EXPECT_THAT(prediction.gestures[1], FloatNear(0.00612645F, kModelMargin));
+}
+
 TEST(ClassifyTest, IsStationaryUnderTheMotionThreshold) {
   EXPECT_THAT(Classify({.has_motion = 0.49F, .gestures = {1, 0}}, 0.5F, 0.9F),
               Eq(Gesture::kStationary));
@@ -93,17 +140,19 @@ TEST(WindowTest, KeepsTheLastSixtyOldestFirst) {
   Window window;
   std::optional<std::array<RawFrame, kFrames>> frames;
   for (int i = 0; i < kFrames + 1; ++i) {
-    frames = window.Add(FrameAt(0.01F * i));
+    frames = window.Add(FrameAt(0.01F * static_cast<float>(i)));
   }
   ASSERT_TRUE(frames.has_value());
-  EXPECT_THAT((*frames)[0][4], FloatNear(0.26F, kTolerance));
-  EXPECT_THAT((*frames)[kFrames - 1][4], FloatNear(0.85F, kTolerance));
+  // value_or: clang-tidy cannot see the assertion; zeroes would fail below.
+  const std::array<RawFrame, kFrames> kept = frames.value_or({});
+  EXPECT_THAT(kept[0][4], FloatNear(0.26F, kTolerance));
+  EXPECT_THAT(kept[kFrames - 1][4], FloatNear(0.85F, kTolerance));
 }
 
 TEST(WindowTest, DropsAFrameEqualToTheLastToTwoDecimalPlaces) {
   Window window;
   for (int i = 0; i < kFrames - 1; ++i) {
-    window.Add(FrameAt(0.01F * i));
+    window.Add(FrameAt(0.01F * static_cast<float>(i)));
   }
   // 0.5804 rounds as 0.58 did, frame 58's shift, so it is not kept.
   EXPECT_THAT(window.Add(FrameAt(0.5804F)), Eq(std::nullopt));
@@ -116,21 +165,22 @@ TEST(WindowTest, PadsAShortRunWithItsLastFrame) {
   window.Add(FrameAt(0));
   window.Add(FrameAt(0.1F));
 
-  const auto padded = window.Padded();
-  ASSERT_TRUE(padded.has_value());
-  EXPECT_THAT((*padded)[0][4], FloatNear(0.25F, kTolerance));
-  EXPECT_THAT((*padded)[1][4], FloatNear(0.35F, kTolerance));
-  EXPECT_THAT((*padded)[kFrames - 1][4], FloatNear(0.35F, kTolerance));
+  ASSERT_TRUE(window.Padded().has_value());
+  // value_or: clang-tidy cannot see the assertion; zeroes would fail below.
+  const std::array<RawFrame, kFrames> padded = window.Padded().value_or({});
+  EXPECT_THAT(padded[0][4], FloatNear(0.25F, kTolerance));
+  EXPECT_THAT(padded[1][4], FloatNear(0.35F, kTolerance));
+  EXPECT_THAT(padded[kFrames - 1][4], FloatNear(0.35F, kTolerance));
 }
 
 TEST(RawFrameFromTest, PutsTheBoxThenEveryXThenEveryY) {
   FpDetection detection{};
   for (int i = 0; i < 4; ++i) {
-    detection.box[i] = 0.01F * i;
+    detection.box[i] = 0.01F * static_cast<float>(i);
   }
   for (int i = 0; i < FP_KEYPOINTS; ++i) {
-    detection.keypoints[i][0] = 0.1F + (0.01F * i);
-    detection.keypoints[i][1] = 0.2F + (0.01F * i);
+    detection.keypoints[i][0] = 0.1F + (0.01F * static_cast<float>(i));
+    detection.keypoints[i][1] = 0.2F + (0.01F * static_cast<float>(i));
   }
 
   const RawFrame frame = RawFrameFrom(detection);

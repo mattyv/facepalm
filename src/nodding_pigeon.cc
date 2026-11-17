@@ -121,6 +121,8 @@ Prediction Predict(const std::array<RawFrame, kFrames>& frames) {
                                  turning / (nodding + turning)}};
 }
 
+// The thresholds keep predict_video's parameter order.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 Gesture Classify(const Prediction& prediction, float motion_threshold,
                  float gesture_threshold) {
   if (prediction.has_motion < motion_threshold) {
