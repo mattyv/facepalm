@@ -60,7 +60,8 @@ endif()
 file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
-  ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc)
+  ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc
+  ${PROJECT_SOURCE_DIR}/tools/fixtures/*.cc)
 find_program(CLANG_FORMAT NAMES clang-format)
 if(CLANG_FORMAT)
   add_custom_target(format-check

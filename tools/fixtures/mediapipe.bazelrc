@@ -1,0 +1,15 @@
+# facepalm's settings for building MediaPipe's face landmarker, on top of
+# MediaPipe's own .bazelrc, which picks its macOS or Linux settings itself.
+build -c opt
+build --define MEDIAPIPE_DISABLE_GPU=1
+# OpenCV from source, inside Bazel's cache, with opencv.diff applied: the face
+# detector needs OpenCV's image converter, since Halide's lacks the zero border
+# mode it uses.
+build --define OPENCV=source
+# zlib 1.2.13, which MediaPipe pins, defines fdopen as NULL on macOS, and that
+# breaks the macOS 26 and later SDKs' declaration of it. Defining fdopen as
+# itself skips zlib's definition and changes nothing else.
+build --copt=-Dfdopen=fdopen --host_copt=-Dfdopen=fdopen
+# TensorFlow's rules pick requirements by the host's Python version, and have
+# them only up to 3.12; pin TensorFlow's default so any host Python works.
+build --repo_env=HERMETIC_PYTHON_VERSION=3.11

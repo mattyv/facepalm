@@ -70,7 +70,13 @@ tools. The design and its decisions are on
     that bring it back up.
 -   **Every test is idempotent and cleans up after itself.**
 -   **Every file type with a test tool has tests:** a shell script gets a bats
-    test in `scripts/test/`, against fakes on the PATH.
+    test in a `test/` directory beside it, against fakes on the PATH.
+-   **The fixture tool in `tools/fixtures` is the exception to the unit test
+    rules:** Bazel builds it inside MediaPipe's workspace, not CMake, so it
+    has no GoogleTest executable or coverage floor. Its test is
+    `check_portrait.sh`, which holds its output to MediaPipe's own expected
+    results; clang-format checks its style, and clang-tidy does not run on
+    it.
 
 ## Style
 

@@ -10,8 +10,10 @@ Nothing works end to end yet. The design is on
 
 ## What exists
 
--   `src/head_pose`: yaw, pitch and roll in degrees from a rotation matrix,
-    for MediaPipe's facial transformation matrix.
+-   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
+    transformation matrix, which is stored column by column and carries a
+    uniform scale. Its test checks against MediaPipe's own expected matrix
+    for its portrait test image.
 -   `src/camera_controller`: decides when the camera may be on, following
     `specs/CameraLifecycle.tla`, with the camera behind an interface.
 -   `src/session_camera`: a camera over one OS's capture API: permission,
@@ -65,6 +67,27 @@ For energy, run `powermetrics` alongside it in another terminal, and read
 ```shell
 sudo powermetrics --samplers tasks --show-process-energy -i 1000 -n 30
 ```
+
+## Golden fixtures from MediaPipe
+
+`tools/fixtures` builds MediaPipe's own C++ face landmarker, pinned to release
+v0.10.35, and a small tool that writes its landmarks, blendshapes and
+transformation matrix for each image as JSON. These are the reference that
+facepalm's own face pipeline is tested against. Building it needs Bazel
+(`brew install bazelisk`) and takes ten minutes or more the first time;
+everything it fetches and builds goes in `build-mediapipe/`.
+
+```shell
+bash tools/fixtures/build.sh
+bash tools/fixtures/check_portrait.sh  # Matches MediaPipe's expected results.
+build-mediapipe/mediapipe/bazel-bin/facepalm_fixtures/face_landmarker_fixtures \
+  build-mediapipe/data/face_landmarker_v2_with_blendshapes.task image.jpg
+```
+
+If Xcode cannot read the macOS SDK, set `DEVELOPER_DIR` to
+`/Library/Developer/CommandLineTools` first; the script passes it to Bazel.
+The Fixtures workflow runs both scripts on macOS whenever
+`tools/fixtures` changes.
 
 ## Licence
 

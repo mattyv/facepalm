@@ -32,4 +32,29 @@ HeadRotation HeadRotationFrom(const Rotation& rotation) {
           .roll_degrees = std::atan2(r[1][0], r[1][1]) * kDegreesPerRadian};
 }
 
+// Undoes MediaPipe's CombineTransformMatrix in
+// mediapipe/modules/face_geometry/libs/procrustes_solver.cc, which stores
+// scale * rotation in the upper-left 3x3, column by column. A rotation's
+// determinant is 1, so that block's determinant is the scale cubed.
+Rotation RotationFrom(const PoseMatrix& pose) {
+  Rotation rotation;
+  for (int row = 0; row < 3; ++row) {
+    for (int column = 0; column < 3; ++column) {
+      rotation.rows.at(row).at(column) = pose.at((column * 4) + row);
+    }
+  }
+  const auto& m = rotation.rows;
+  const double determinant =
+      (m[0][0] * ((m[1][1] * m[2][2]) - (m[1][2] * m[2][1]))) -
+      (m[0][1] * ((m[1][0] * m[2][2]) - (m[1][2] * m[2][0]))) +
+      (m[0][2] * ((m[1][0] * m[2][1]) - (m[1][1] * m[2][0])));
+  const double scale = std::cbrt(determinant);
+  for (auto& row : rotation.rows) {
+    for (double& value : row) {
+      value /= scale;
+    }
+  }
+  return rotation;
+}
+
 }  // namespace facepalm
