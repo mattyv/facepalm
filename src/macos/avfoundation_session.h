@@ -1,24 +1,15 @@
 #ifndef FACEPALM_SRC_MACOS_AVFOUNDATION_SESSION_H_
 #define FACEPALM_SRC_MACOS_AVFOUNDATION_SESSION_H_
 
-#include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 
+#include "src/frame.h"
 #include "src/session_camera.h"
 
 namespace facepalm {
-
-// One captured frame, valid only during the call that hands it over.
-struct Frame {
-  int width = 0;
-  int height = 0;
-  std::size_t bytes_per_row = 0;
-  const std::uint8_t* bgra = nullptr;  // 32BGRA, as MediaPipe's camera uses.
-};
 
 // The macOS capture API, through AVFoundation, and nothing else: the logic
 // around it is SessionCamera's, tested with this mocked. It follows

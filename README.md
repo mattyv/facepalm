@@ -17,6 +17,9 @@ Nothing works end to end yet. The design is on
     transformation matrix, which is stored column by column and carries a
     uniform scale. Its test checks against MediaPipe's own expected matrix
     for its portrait test image.
+-   `src/frame`: a captured frame with its capture time in milliseconds, and
+    the one-pass copy from the camera's padded BGRA rows to the packed RGBA
+    MediaPipe accepts.
 -   `src/camera_controller`: decides when the camera may be on, following
     `specs/CameraLifecycle.tla`, with the camera behind an interface.
 -   `src/session_camera`: a camera over one OS's capture API: permission,
