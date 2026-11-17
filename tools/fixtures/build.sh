@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# Builds face_landmarker_fixtures from MediaPipe's own C++ source, pinned to a
-# release, and fetches MediaPipe's test model and portrait image. Everything
-# lands in build-mediapipe/, which git ignores.
+# Builds face_landmarker_fixtures and libfacepalm_mediapipe.dylib, the shim
+# facepalm runs the face model through, from MediaPipe's own C++ source,
+# pinned to a release, and fetches MediaPipe's test model and portrait image.
+# Everything lands in build-mediapipe/, which git ignores.
 #
 # On a Mac whose Xcode cannot read its SDK, set DEVELOPER_DIR, for example to
 # /Library/Developer/CommandLineTools; it is passed through to Bazel.
@@ -21,7 +22,8 @@ readonly ASSETS="${ASSETS_HOST}/mediapipe-assets/tasks/testdata/vision"
 readonly BAZEL="${BAZEL:-bazelisk}"
 
 #######################################
-# Clones MediaPipe at the pinned commit, patches it, and links the tool in.
+# Clones MediaPipe at the pinned commit, patches it, and links the tool and
+# the shim in.
 #######################################
 checkout() {
   if [[ ! -d "${MEDIAPIPE}" ]]; then
@@ -36,6 +38,7 @@ checkout() {
     return 1
   fi
   ln -sfn "${HERE}" "${MEDIAPIPE}/facepalm_fixtures"
+  ln -sfn "${ROOT}/src/mediapipe_shim" "${MEDIAPIPE}/facepalm_shim"
 }
 
 #######################################
@@ -68,7 +71,8 @@ main() {
   cd "${MEDIAPIPE}"
   "${BAZEL}" --bazelrc="${HERE}/mediapipe.bazelrc" build \
     ${env_flags[@]+"${env_flags[@]}"} \
-    //facepalm_fixtures:face_landmarker_fixtures
+    //facepalm_fixtures:face_landmarker_fixtures \
+    //facepalm_shim:libfacepalm_mediapipe.dylib
 }
 
 main "$@"

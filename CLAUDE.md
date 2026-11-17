@@ -77,6 +77,16 @@ tools. The design and its decisions are on
     `check_portrait.sh`, which holds its output to MediaPipe's own expected
     results; clang-format checks its style, and clang-tidy does not run on
     it.
+-   **The MediaPipe shim in `src/mediapipe_shim` is held to 100 percent all
+    the same,** though Bazel builds it: `tools/fixtures/test_shim.sh` runs its
+    GoogleTest tests against the real face landmarker, with its source
+    instrumented, and fails below 100 percent of lines, branches, functions
+    or regions. A result shape a real model never returns is tested through
+    `facepalm_mediapipe_internal.h` with a made-up result. clang-tidy does
+    not run on it.
+-   **In a bats test, end a `[[ ]]` or `(( ))` assertion with `|| false`:**
+    under bash 3.2, which macOS ships, a false one before a test's last line
+    does not fail the test (#22).
 
 ## Style
 
