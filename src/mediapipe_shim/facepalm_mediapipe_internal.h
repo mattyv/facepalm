@@ -6,10 +6,11 @@
 #define FACEPALM_SRC_MEDIAPIPE_SHIM_FACEPALM_MEDIAPIPE_INTERNAL_H_
 
 #include <cstddef>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "facepalm_shim/facepalm_mediapipe.h"
-#include "mediapipe/tasks/cc/components/containers/detection_result.h"
+#include "mediapipe/framework/formats/detection.pb.h"
 #include "mediapipe/tasks/cc/vision/face_landmarker/face_landmarker_result.h"
 
 namespace facepalm_shim {
@@ -25,12 +26,11 @@ int CopyFace(
         result,
     FpFace& out, char* error, size_t error_size);
 
-// Copies the first face of `result`, found in a `width` x `height` image,
-// into `out`, normalised, and returns how many faces it holds; or returns -1
-// with why in `error` when that face has no six key points.
-int CopyDetection(
-    const mediapipe::tasks::components::containers::DetectionResult& result,
-    int width, int height, FpDetection& out, char* error, size_t error_size);
+// Copies the first of `detections` into `out` and returns how many there
+// are; or returns -1 with why in `error` when that one has no relative box or
+// not six key points.
+int CopyDetection(const std::vector<mediapipe::Detection>& detections,
+                  FpDetection& out, char* error, size_t error_size);
 
 }  // namespace facepalm_shim
 

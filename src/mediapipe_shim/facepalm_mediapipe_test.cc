@@ -14,16 +14,15 @@
 
 #include "absl/status/statusor.h"
 #include "facepalm_shim/facepalm_mediapipe_internal.h"
+#include "mediapipe/framework/formats/detection.pb.h"
 #include "mediapipe/framework/formats/image.h"
 #include "mediapipe/framework/formats/image_frame.h"
+#include "mediapipe/framework/formats/location_data.pb.h"
 #include "mediapipe/framework/formats/matrix.h"
 #include "mediapipe/framework/port/gtest.h"
 #include "mediapipe/tasks/cc/components/containers/category.h"
 #include "mediapipe/tasks/cc/components/containers/classification_result.h"
-#include "mediapipe/tasks/cc/components/containers/detection_result.h"
-#include "mediapipe/tasks/cc/components/containers/keypoint.h"
 #include "mediapipe/tasks/cc/components/containers/landmark.h"
-#include "mediapipe/tasks/cc/components/containers/rect.h"
 #include "mediapipe/tasks/cc/vision/face_landmarker/face_landmarker_result.h"
 #include "mediapipe/tasks/cc/vision/utils/image_utils.h"
 
@@ -361,40 +360,40 @@ TEST(FaceDetectorDestroyTest, AcceptsNoDetector) {
   fp_face_detector_destroy(nullptr);
 }
 
-using ::mediapipe::tasks::components::containers::Detection;
-using ::mediapipe::tasks::components::containers::DetectionResult;
-using ::mediapipe::tasks::components::containers::NormalizedKeypoint;
-
-// A made-up result of `faces` faces, the first with `keypoints` key points
-// at distinct places and a box at (10, 20) to (110, 70) pixels.
-DetectionResult Detections(int faces, int keypoints) {
-  DetectionResult result;
-  for (int f = 0; f < faces; ++f) {
-    Detection detection;
-    detection.bounding_box = {
-        .left = 10, .top = 20, .right = 110, .bottom = 70};
-    if (keypoints >= 0) {
-      std::vector<NormalizedKeypoint> points;
-      for (int i = 0; i < keypoints; ++i) {
-        points.push_back(NormalizedKeypoint{.x = i * 0.1F, .y = i * 0.2F});
-      }
-      detection.keypoints = points;
+// A made-up detection list of `faces` faces, the first with `keypoints`
+// relative key points at distinct places and, when `box` is set, a relative
+// box at (-0.1, 0.2), 0.5 wide and 0.4 tall.
+std::vector<mediapipe::Detection> Detections(int faces, int keypoints,
+                                             bool box = true) {
+  std::vector<mediapipe::Detection> detections(faces);
+  for (auto& detection : detections) {
+    mediapipe::LocationData* location = detection.mutable_location_data();
+    if (box) {
+      auto* relative = location->mutable_relative_bounding_box();
+      relative->set_xmin(-0.1F);
+      relative->set_ymin(0.2F);
+      relative->set_width(0.5F);
+      relative->set_height(0.4F);
     }
-    result.detections.push_back(detection);
+    for (int i = 0; i < keypoints; ++i) {
+      auto* point = location->add_relative_keypoints();
+      point->set_x(i * 0.1F);
+      point->set_y(i * 0.2F);
+    }
   }
-  return result;
+  return detections;
 }
 
-TEST(CopyDetectionTest, NormalisesTheBoxAndCopiesTheKeyPoints) {
+TEST(CopyDetectionTest, CopiesTheBoxClampedAtZeroAndTheKeyPoints) {
   FpDetection detection = {};
   char error[kErrorSize] = {};
-  ASSERT_EQ(facepalm_shim::CopyDetection(Detections(1, FP_KEYPOINTS), 200, 100,
-                                         detection, error, kErrorSize),
+  ASSERT_EQ(facepalm_shim::CopyDetection(Detections(1, FP_KEYPOINTS), detection,
+                                         error, kErrorSize),
             1);
-  EXPECT_FLOAT_EQ(detection.box[0], 0.05F);
+  EXPECT_FLOAT_EQ(detection.box[0], 0);
   EXPECT_FLOAT_EQ(detection.box[1], 0.2F);
   EXPECT_FLOAT_EQ(detection.box[2], 0.5F);
-  EXPECT_FLOAT_EQ(detection.box[3], 0.5F);
+  EXPECT_FLOAT_EQ(detection.box[3], 0.4F);
   EXPECT_FLOAT_EQ(detection.keypoints[5][0], 0.5F);
   EXPECT_FLOAT_EQ(detection.keypoints[5][1], 1.0F);
 }
@@ -402,16 +401,24 @@ TEST(CopyDetectionTest, NormalisesTheBoxAndCopiesTheKeyPoints) {
 TEST(CopyDetectionTest, CountsEveryFace) {
   FpDetection detection = {};
   char error[kErrorSize] = {};
-  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(2, FP_KEYPOINTS), 200, 100,
-                                         detection, error, kErrorSize),
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(2, FP_KEYPOINTS), detection,
+                                         error, kErrorSize),
             2);
 }
 
-TEST(CopyDetectionTest, FailsWithoutKeyPoints) {
+TEST(CopyDetectionTest, FindsNoFaceInNoDetections) {
   FpDetection detection = {};
   char error[kErrorSize] = {};
-  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(1, -1), 200, 100, detection,
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(0, FP_KEYPOINTS), detection,
                                          error, kErrorSize),
+            0);
+}
+
+TEST(CopyDetectionTest, FailsWithoutARelativeBox) {
+  FpDetection detection = {};
+  char error[kErrorSize] = {};
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(1, FP_KEYPOINTS, false),
+                                         detection, error, kErrorSize),
             -1);
   EXPECT_NE(std::string(error).find("key points"), std::string::npos) << error;
 }
@@ -419,8 +426,8 @@ TEST(CopyDetectionTest, FailsWithoutKeyPoints) {
 TEST(CopyDetectionTest, FailsOnTheWrongNumberOfKeyPoints) {
   FpDetection detection = {};
   char error[kErrorSize] = {};
-  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(1, 5), 200, 100, detection,
-                                         error, kErrorSize),
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(1, 5), detection, error,
+                                         kErrorSize),
             -1);
 }
 

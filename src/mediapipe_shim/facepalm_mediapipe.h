@@ -58,8 +58,9 @@ void fp_face_model_destroy(FpFaceModel* model);
 
 typedef struct FpFaceDetector FpFaceDetector;
 
-/* One face as MediaPipe's short-range face detector (BlazeFace) finds it,
- * normalised to the image: the box's left, top, width and height, and six key
+/* One face as MediaPipe's legacy short-range face detection graph (BlazeFace)
+ * finds it, as mediapipe.solutions.face_detection gives it, normalised to the
+ * image: the box's left, top, width and height, and six key
  * points in the model's order: right eye, left eye, nose tip, mouth centre,
  * right ear tragion, left ear tragion (the subject's right and left).
  * Nodding Pigeon's inputs (#34). */
@@ -68,9 +69,9 @@ typedef struct {
   float keypoints[FP_KEYPOINTS][2];
 } FpDetection;
 
-/* Loads the short-range face detector's .tflite, in MediaPipe's IMAGE running
- * mode, with a minimum detection confidence of 0.5, as Nodding Pigeon runs
- * it. Returns 0 and sets *out, or -1 and writes why to error. */
+/* Loads the short-range face detector's .tflite into that graph, with a
+ * minimum detection confidence of 0.5, as Nodding Pigeon runs it. Returns 0 and
+ * sets *out, or -1 and writes why to error. */
 int fp_face_detector_create(const char* model_path, FpFaceDetector** out,
                             char* error, size_t error_size);
 
