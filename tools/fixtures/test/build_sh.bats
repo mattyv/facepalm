@@ -31,14 +31,14 @@ echo "bazelisk $*" >>"${LOG}"
 EOF
   chmod +x "${WORK}"/bin/*
   PATH="${WORK}/bin:${PATH}"
-  unset DEVELOPER_DIR
+  unset DEVELOPER_DIR BAZEL_DISK_CACHE
 }
 
 teardown() {
   rm -rf "${WORK}"
 }
 
-@test "clones MediaPipe at the release, patches it, and builds the tool and the shim" {
+@test "clones MediaPipe at the release, patches it, and builds both targets" {
   run bash "${WORK}/repo/tools/fixtures/build.sh"
   [[ "${status}" -eq 0 ]]
   log="$(cat "${LOG}")"
@@ -48,6 +48,7 @@ teardown() {
   [[ "${log}" == *'portrait.jpg?generation='* ]]
   [[ "${log}" == *'build '*'//facepalm_fixtures:face_landmarker_fixtures'* ]]
   [[ "${log}" == *'//facepalm_shim:libfacepalm_mediapipe.dylib'* ]]
+  [[ "${log}" != *disk_cache* ]] || false
   [[ "${log}" != *DEVELOPER_DIR* ]]
   [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_fixtures" ]]
   [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_shim" ]]
@@ -86,4 +87,12 @@ teardown() {
   for flag in repo_env action_env host_action_env; do
     [[ "${log}" == *"--${flag}=DEVELOPER_DIR=/Library/Developer/"* ]]
   done
+}
+
+@test "gives Bazel a disk cache when BAZEL_DISK_CACHE names one" {
+  BAZEL_DISK_CACHE=/tmp/bazel-disk \
+    run bash "${WORK}/repo/tools/fixtures/build.sh"
+  [[ "${status}" -eq 0 ]] || false
+  log="$(cat "${LOG}")"
+  [[ "${log}" == *'--disk_cache=/tmp/bazel-disk'* ]] || false
 }

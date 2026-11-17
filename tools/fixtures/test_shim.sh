@@ -3,8 +3,8 @@
 # Runs the shim's tests against the real face landmarker, with the shim's own
 # source instrumented, and fails unless they pass and cover all of it, as
 # scripts/coverage.sh holds facepalm's CMake sources. Needs
-# tools/fixtures/build.sh to have run. Passes DEVELOPER_DIR to Bazel, as
-# build.sh does.
+# tools/fixtures/build.sh to have run. Passes DEVELOPER_DIR and
+# BAZEL_DISK_CACHE to Bazel, as build.sh does.
 
 set -euo pipefail
 
@@ -41,6 +41,9 @@ main() {
     for flag in repo_env action_env host_action_env; do
       flags+=("--${flag}=DEVELOPER_DIR=${DEVELOPER_DIR}")
     done
+  fi
+  if [[ -n "${BAZEL_DISK_CACHE:-}" ]]; then
+    flags+=("--disk_cache=${BAZEL_DISK_CACHE}")
   fi
   cd "${WORK}/mediapipe"
   "${BAZEL}" --bazelrc="${ROOT}/tools/fixtures/mediapipe.bazelrc" build \
