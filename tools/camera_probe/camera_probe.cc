@@ -6,7 +6,9 @@
 // Every frame goes through FramePipeline, on queues as the service will run
 // them. Given a face landmarker .task bundle, the pipeline also runs the face
 // model, prints each frame's reaction as it arrives, and reports what the
-// model cost (#18, #21). That needs a build with FACEPALM_MEDIAPIPE_DYLIB.
+// model cost (#18, #21). When face_detection_short_range.tflite sits beside
+// the bundle, it also runs Nodding Pigeon and prints nods and shakes (#34).
+// That needs a build with FACEPALM_MEDIAPIPE_DYLIB.
 //
 // Given a directory as well, it saves every frame there as a numbered PNG,
 // frame_000001.png and on, with timestamps.txt listing each frame's capture
@@ -43,11 +45,13 @@
 #include <vector>
 
 #include "src/camera_controller.h"
+#include "src/face_detector.h"
 #include "src/face_model.h"
 #include "src/frame.h"
 #include "src/frame_pipeline.h"
+#include "src/gesture_analyzer.h"
+#include "src/head_pose_analyzer.h"
 #include "src/macos/avfoundation_session.h"
-#include "src/reaction.h"
 #include "src/session_camera.h"
 
 namespace facepalm {
@@ -142,8 +146,9 @@ class Recorder {
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
   int frames_per_second = kDefaultFramesPerSecond;
-  std::unique_ptr<FaceModel> model;    // Runs on every frame when set.
-  std::unique_ptr<Recorder> recorder;  // Saves every frame when set.
+  std::unique_ptr<FaceModel> model;        // Runs on every frame when set.
+  std::unique_ptr<FaceDetector> detector;  // Nodding Pigeon's, when set.
+  std::unique_ptr<Recorder> recorder;      // Saves every frame when set.
 };
 
 // The process's thread count now.
@@ -242,6 +247,7 @@ class Probe : public CameraReports {
         recorder_(std::move(options.recorder)),
         has_model_(options.model != nullptr),
         model_(std::move(options.model)),
+        detector_(std::move(options.detector)),
         control_(control),
         capture_(
             [this](const Frame& frame) { OnFrame(frame); },
@@ -258,11 +264,8 @@ class Probe : public CameraReports {
             OnQueue(dispatch_queue_create("facepalm.inference",
                                           DISPATCH_QUEUE_SERIAL)),
             FramePipeline::Callbacks{
-                .make_model =
-                    [this](std::string& error) { return TakeModel(error); },
-                .react = [](const Face& face) -> std::optional<Reaction> {
-                  return ReactionFrom(face);
-                },
+                .make_analyzers =
+                    [this](std::string& error) { return TakeAnalyzers(error); },
                 .on_error =
                     [](const std::string& error) {
                       std::fprintf(stderr, "camera_probe: %s\n", error.c_str());
@@ -337,13 +340,21 @@ class Probe : public CameraReports {
     pipeline_.OnFrame(frame);
   }
 
-  // The pipeline's model factory: the model loaded at start, timed, once.
-  std::unique_ptr<FaceModel> TakeModel(std::string& error) {
+  // The pipeline's analyser factory: head pose over the face model loaded
+  // at start, timed, and Nodding Pigeon when its detector was found; once.
+  FramePipeline::Analyzers TakeAnalyzers(std::string& error) {
+    FramePipeline::Analyzers analyzers;
     if (model_ == nullptr) {
       error = "the face model was already used; camera_probe opens once";
-      return nullptr;
+      return analyzers;
     }
-    return std::make_unique<TimedFaceModel>(std::move(model_), stats_);
+    analyzers.push_back(std::make_unique<HeadPoseAnalyzer>(
+        std::make_unique<TimedFaceModel>(std::move(model_), stats_)));
+    if (detector_ != nullptr) {
+      analyzers.push_back(std::make_unique<GestureAnalyzer>(
+          std::move(detector_), GestureAnalyzer::Thresholds{}));
+    }
+    return analyzers;
   }
 
   // Prints how many frames the model saw, how many had a face, and how long
@@ -373,7 +384,8 @@ class Probe : public CameraReports {
   int seconds_;
   std::unique_ptr<Recorder> recorder_;
   bool has_model_;
-  std::unique_ptr<FaceModel> model_;  // Until the pipeline takes it.
+  std::unique_ptr<FaceModel> model_;        // Until the pipeline takes it.
+  std::unique_ptr<FaceDetector> detector_;  // Until the pipeline takes it.
   ModelStats stats_;
   int threads_at_close_ = 0;
   dispatch_queue_t control_;
@@ -438,6 +450,32 @@ std::unique_ptr<facepalm::FaceModel> LoadModel(const char* path) {
 #endif
 }
 
+// Loads Nodding Pigeon's face detector, face_detection_short_range.tflite,
+// from the folder that holds the face model at `model_path`, or returns null
+// with a note that gestures are off when it is not there or there is no
+// model.
+std::unique_ptr<facepalm::FaceDetector> LoadDetector(const char* model_path) {
+  if (model_path == nullptr) {
+    return nullptr;
+  }
+#ifdef FACEPALM_WITH_FACE_MODEL
+  const std::string model(model_path);
+  const std::string::size_type slash = model.rfind('/');
+  const std::string path =
+      (slash == std::string::npos ? std::string()
+                                  : model.substr(0, slash + 1)) +
+      "face_detection_short_range.tflite";
+  std::string error;
+  auto detector = facepalm::MediaPipeFaceDetector::Create(path, error);
+  if (detector == nullptr) {
+    std::fprintf(stderr, "camera_probe: no gestures: %s\n", error.c_str());
+  }
+  return detector;
+#else
+  return nullptr;
+#endif
+}
+
 }  // namespace
 
 // The standard fixes main's signature, and an allocation failure may end the
@@ -459,6 +497,7 @@ int main(int argc, char** argv) {
       .seconds = seconds,
       .frames_per_second = frames_per_second,
       .model = LoadModel(argc > 3 ? argv[3] : nullptr),
+      .detector = LoadDetector(argc > 3 ? argv[3] : nullptr),
       .recorder =
           argc > 4 ? std::make_unique<facepalm::Recorder>(argv[4]) : nullptr,
   };

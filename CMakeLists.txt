@@ -44,11 +44,17 @@ facepalm_unit(frame)
 facepalm_unit(frame_pipeline)
 # ToRgba is pure computation, so the pipeline's tests run it for real.
 target_link_libraries(frame_pipeline PUBLIC frame)
+facepalm_unit(gesture_analyzer)
 facepalm_unit(head_pose)
+facepalm_unit(head_pose_analyzer)
 facepalm_unit(nodding_pigeon)
 facepalm_unit(reaction)
 # head_pose is pure computation, so the reaction's tests run it for real.
 target_link_libraries(reaction PUBLIC head_pose)
+# The analysers' tests mock their models; the reaction and Nodding Pigeon's
+# model are pure computation, so they run for real.
+target_link_libraries(head_pose_analyzer PUBLIC reaction)
+target_link_libraries(gesture_analyzer PUBLIC nodding_pigeon)
 facepalm_unit(session_camera)
 
 # The macOS capture API, through AVFoundation, and camera_probe, which drives
@@ -64,7 +70,8 @@ if(APPLE)
     "-framework Foundation")
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
-    frame_pipeline reaction "-framework CoreGraphics" "-framework ImageIO")
+    frame_pipeline gesture_analyzer head_pose_analyzer "-framework CoreGraphics"
+    "-framework ImageIO")
 endif()
 
 # face_model_check runs the real face model through MediaPipeFaceModel. It
@@ -88,7 +95,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
   # camera_probe also runs the face model on each frame, given a model (#18).
   target_compile_definitions(camera_probe PRIVATE FACEPALM_WITH_FACE_MODEL)
-  target_link_libraries(camera_probe PRIVATE face_model facepalm_mediapipe)
+  target_link_libraries(camera_probe PRIVATE face_model face_detector
+    facepalm_mediapipe)
   set_target_properties(camera_probe PROPERTIES
     BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
 endif()

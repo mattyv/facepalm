@@ -2,13 +2,15 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "src/camera_controller.h"
-#include "src/face_model.h"
 #include "src/frame.h"
+#include "src/frame_analyzer.h"
 #include "src/post.h"
 
 namespace facepalm {
@@ -59,35 +61,32 @@ void FramePipeline::Ticket() {
 // specs/FramePipeline.tla: CreateModel.
 void FramePipeline::CreateModel() {
   std::string error;
-  model_ = callbacks_.make_model(error);
-  if (!model_) {
+  analyzers_ = callbacks_.make_analyzers(error);
+  if (!error.empty()) {
     callbacks_.on_error(error);
   }
 }
 
 // specs/FramePipeline.tla: DestroyModel.
-void FramePipeline::DestroyModel() { model_.reset(); }
+void FramePipeline::DestroyModel() { analyzers_.clear(); }
 
 // specs/FramePipeline.tla: DetectStart with GuardSkipAbsent, then DetectEnd,
-// or DetectFails with GuardFreeOnError. The reaction goes to the control
+// or DetectFails with GuardFreeOnError: one analyser failing reports its
+// error and leaves the others to run. Each reaction goes to the control
 // queue with the frame's ticket.
 void FramePipeline::Detect() {
-  if (!model_) {
-    Free();
-    return;
-  }
-  std::string error;
-  const FaceModel::Result result =
-      model_->Detect(rgba_, width_, height_, timestamp_ms_, face_, error);
-  if (result == FaceModel::Result::kFailed) {
-    callbacks_.on_error(error);
-  } else if (result == FaceModel::Result::kFace) {
-    std::optional<Reaction> reaction = callbacks_.react(face_);
-    if (reaction) {
-      control_([this, ticket = ticket_, reaction = std::move(*reaction)] {
-        tickets_.OnReaction(ticket, reaction);
-      });
+  std::vector<Reaction> reactions;
+  for (const std::unique_ptr<FrameAnalyzer>& analyzer : analyzers_) {
+    std::string error;
+    if (!analyzer->Analyze(rgba_, width_, height_, timestamp_ms_, reactions,
+                           error)) {
+      callbacks_.on_error(error);
     }
+  }
+  for (Reaction& reaction : reactions) {
+    control_([this, ticket = ticket_, reaction = std::move(reaction)] {
+      tickets_.OnReaction(ticket, reaction);
+    });
   }
   Free();
 }
