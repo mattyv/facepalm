@@ -3,23 +3,33 @@
 // camera's smoke test, and the CPU half of #11's measurement; energy comes
 // from powermetrics, run alongside with sudo.
 //
-// Usage: camera_probe [seconds] [frames per second]
+// Given a face landmarker .task bundle, it also runs the face model on every
+// frame, as the pipeline will, and reports what that costs (#18). That needs
+// a build with FACEPALM_MEDIAPIPE_DYLIB set.
+//
+// Usage: camera_probe [seconds] [frames per second] [model.task]
 
 #include <dispatch/dispatch.h>
+#include <mach/mach.h>
 #include <sys/resource.h>
 
+#include <algorithm>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <vector>
 
 #include "src/camera_controller.h"
+#include "src/face_model.h"
 #include "src/frame.h"
 #include "src/macos/avfoundation_session.h"
 #include "src/session_camera.h"
@@ -33,10 +43,37 @@ constexpr std::int64_t kNanosecondsPerSecond = 1'000'000'000;
 constexpr int kDefaultFramesPerSecond = 15;
 constexpr double kPercent = 100;
 
+constexpr double kPercentile95 = 0.95;
+
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
   int frames_per_second = kDefaultFramesPerSecond;
+  FaceModel* model = nullptr;  // Runs on every frame when set.
 };
+
+// The process's thread count now.
+int Threads() {
+  thread_act_array_t threads = nullptr;
+  mach_msg_type_number_t count = 0;
+  if (task_threads(mach_task_self(), &threads, &count) != KERN_SUCCESS) {
+    return -1;
+  }
+  for (mach_msg_type_number_t i = 0; i < count; ++i) {
+    mach_port_deallocate(mach_task_self(), threads[i]);
+  }
+  vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(threads),
+                count * sizeof(thread_act_t));
+  return static_cast<int>(count);
+}
+
+// The process's peak resident memory so far, in megabytes. macOS reports
+// ru_maxrss in bytes.
+double PeakMegabytes() {
+  rusage usage{};
+  getrusage(RUSAGE_SELF, &usage);
+  constexpr double kBytesPerMegabyte = 1024.0 * 1024.0;
+  return static_cast<double>(usage.ru_maxrss) / kBytesPerMegabyte;
+}
 
 // Posts tasks to a dispatch queue.
 Post OnQueue(dispatch_queue_t queue) {
@@ -72,6 +109,7 @@ class Probe : public CameraReports {
  public:
   Probe(ProbeOptions options, dispatch_queue_t control)
       : seconds_(options.seconds),
+        model_(options.model),
         control_(control),
         capture_(
             [this](const Frame& frame) { OnFrame(frame); },
@@ -95,6 +133,7 @@ class Probe : public CameraReports {
         control_, ^{
           frames_at_close_ = frames_;
           cpu_at_close_ = CpuSeconds();
+          threads_at_close_ = Threads();
           controller_.Leave("camera_probe");
         });
   }
@@ -115,6 +154,9 @@ class Probe : public CameraReports {
         seconds_, frames_at_close_,
         static_cast<double>(frames_at_close_) / seconds_, cpu,
         kPercent * cpu / seconds_, out_of_order_.load());
+    if (model_ != nullptr) {
+      ReportModel();
+    }
     std::exit(0);
   }
 
@@ -136,9 +178,60 @@ class Probe : public CameraReports {
     }
     last_timestamp_ms_ = frame.timestamp_ms;
     ++frames_;
+    if (model_ != nullptr) {
+      Detect(frame);
+    }
+  }
+
+  // Runs on the capture queue: the face model on one frame, timed. The
+  // capture session drops frames that arrive while it runs.
+  void Detect(const Frame& frame) {
+    std::string error;
+    const auto start = std::chrono::steady_clock::now();
+    const FaceModel::Result result = model_->Detect(
+        rgba_, frame.width, frame.height, frame.timestamp_ms, face_, error);
+    const std::chrono::duration<double, std::milli> took =
+        std::chrono::steady_clock::now() - start;
+    const std::scoped_lock lock(stats_mutex_);
+    detect_ms_.push_back(took.count());
+    if (result == FaceModel::Result::kFace) {
+      ++faces_;
+    } else if (result == FaceModel::Result::kFailed) {
+      std::fprintf(stderr, "camera_probe: detect failed: %s\n", error.c_str());
+    }
+  }
+
+  // Prints how many frames the model saw, how many had a face, and how long
+  // detect took.
+  void ReportModel() {
+    const std::scoped_lock lock(stats_mutex_);
+    std::vector<double> sorted = detect_ms_;
+    std::ranges::sort(sorted);
+    double total = 0;
+    for (const double ms : sorted) {
+      total += ms;
+    }
+    const auto at = [&sorted](double fraction) {
+      return sorted.empty()
+                 ? 0.0
+                 : sorted[static_cast<std::size_t>(
+                       fraction * static_cast<double>(sorted.size() - 1))];
+    };
+    std::printf(
+        "detects %zu\nfaces %d\ndetect_ms_mean %.2f\ndetect_ms_p95 %.2f\n"
+        "detect_ms_max %.2f\nthreads %d\npeak_resident_mb %.1f\n",
+        sorted.size(), faces_,
+        sorted.empty() ? 0.0 : total / static_cast<double>(sorted.size()),
+        at(kPercentile95), at(1), threads_at_close_, PeakMegabytes());
   }
 
   int seconds_;
+  FaceModel* model_;
+  std::mutex stats_mutex_;
+  std::vector<double> detect_ms_;  // Under stats_mutex_.
+  int faces_ = 0;                  // Under stats_mutex_.
+  Face face_{};                    // Capture queue only.
+  int threads_at_close_ = 0;
   dispatch_queue_t control_;
   NoClients clients_;
   std::atomic<int> frames_ = 0;
@@ -174,17 +267,43 @@ int PositiveArgument(const char* text, int fallback) {
 
 }  // namespace
 
-// NOLINTNEXTLINE(misc-const-correctness): the standard fixes main's signature.
+// The standard fixes main's signature, and an allocation failure may end the
+// tool.
+// NOLINTNEXTLINE(misc-const-correctness,bugprone-exception-escape)
 int main(int argc, char** argv) {
-  const facepalm::ProbeOptions options{
+  facepalm::ProbeOptions options{
       .seconds = PositiveArgument(argc > 1 ? argv[1] : nullptr,
                                   facepalm::kDefaultSeconds),
       .frames_per_second = PositiveArgument(argc > 2 ? argv[2] : nullptr,
                                             facepalm::kDefaultFramesPerSecond),
   };
   if (options.seconds == 0 || options.frames_per_second == 0) {
-    std::fprintf(stderr, "usage: camera_probe [seconds] [frames per second]\n");
+    std::fprintf(
+        stderr,
+        "usage: camera_probe [seconds] [frames per second] [model.task]\n");
     return 2;
+  }
+  if (argc > 3) {
+#ifdef FACEPALM_WITH_FACE_MODEL
+    std::string error;
+    const auto start = std::chrono::steady_clock::now();
+    // ponytail: leaked on purpose, like the probe.
+    options.model =
+        facepalm::MediaPipeFaceModel::Create(argv[3], error).release();
+    const std::chrono::duration<double, std::milli> took =
+        std::chrono::steady_clock::now() - start;
+    if (options.model == nullptr) {
+      std::fprintf(stderr, "camera_probe: %s\n", error.c_str());
+      return 1;
+    }
+    std::printf("model_create_ms %.1f\nthreads_after_create %d\n", took.count(),
+                facepalm::Threads());
+#else
+    std::fprintf(stderr,
+                 "camera_probe: built without the face model; configure "
+                 "with FACEPALM_MEDIAPIPE_DYLIB\n");
+    return 2;
+#endif
   }
   dispatch_queue_t control =
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);

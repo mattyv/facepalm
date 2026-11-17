@@ -136,7 +136,32 @@ void AvFoundationSession::RequestPermission(std::function<void(bool granted)> do
                            }];
 }
 
+namespace {
+
+constexpr int kWidth = 640;
+constexpr int kHeight = 480;
+
+// Makes the device's first format of `width` x `height` its active one, if it
+// has one; otherwise leaves it as it is.
+void UseFormat(AVCaptureDevice* device, int width, int height) {
+  for (AVCaptureDeviceFormat* format in device.formats) {
+    const CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+    if (size.width == width && size.height == height && [device lockForConfiguration:nil]) {
+      device.activeFormat = format;
+      [device unlockForConfiguration];
+      return;
+    }
+  }
+}
+
+}  // namespace
+
 // Builds the session afresh for the default camera, at 640x480 in 32BGRA.
+// The preset alone is not enough: Start keeps the device locked across
+// startRunning, so the session never applies the preset's format, and the
+// camera would run at its default, 1920x1080 on a MacBook's. So the device's
+// active format is set to 640x480 too, as AVCaptureDevice's activeFormat
+// documentation describes.
 std::optional<std::string> AvFoundationSession::Configure() {
   AVCaptureDevice* device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
   if (device == nil) {
@@ -169,6 +194,7 @@ std::optional<std::string> AvFoundationSession::Configure() {
   if (!added) {
     return std::nullopt;
   }
+  UseFormat(device, kWidth, kHeight);
   return std::string(device.uniqueID.UTF8String);
 }
 
