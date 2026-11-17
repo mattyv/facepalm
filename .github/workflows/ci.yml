@@ -35,6 +35,7 @@ jobs:
             specs/*.sh specs/test/*.bats \
             tools/fixtures/*.sh tools/fixtures/test/*.bats
           shfmt -d scripts/*.sh specs/*.sh tools/fixtures/*.sh
+          bash scripts/check_bats.sh
           bats scripts/test specs/test tools/fixtures/test
       - name: Markdown
         run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"

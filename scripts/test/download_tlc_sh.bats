@@ -54,37 +54,37 @@ download() {
 @test "uses the primary when its content matches" {
   PRIMARY=abc
   download
-  [[ "${status}" -eq 0 ]]
-  ((calls == 1))
-  [[ "${content}" == abc ]]
+  [[ "${status}" -eq 0 ]] || false
+  ((calls == 1)) || false
+  [[ "${content}" == abc ]] || false
 }
 
 @test "falls back after a failure" {
   FALLBACK=abc
   download
-  [[ "${status}" -eq 0 ]]
-  ((calls == 2))
-  [[ "${content}" == abc ]]
+  [[ "${status}" -eq 0 ]] || false
+  ((calls == 2)) || false
+  [[ "${content}" == abc ]] || false
 }
 
 @test "falls back after a checksum mismatch" {
   PRIMARY=bad FALLBACK=abc
   download
-  [[ "${status}" -eq 0 ]]
-  ((calls == 2))
-  [[ "${content}" == abc ]]
+  [[ "${status}" -eq 0 ]] || false
+  ((calls == 2)) || false
+  [[ "${content}" == abc ]] || false
 }
 
 @test "fails and removes the output when neither source matches" {
   PRIMARY=bad FALLBACK=bad
   download
-  [[ "${status}" -ne 0 ]]
-  [[ ! -e "${OUTPUT}" ]]
+  [[ "${status}" -ne 0 ]] || false
+  [[ ! -e "${OUTPUT}" ]] || false
 }
 
 @test "fails and removes the output when both downloads fail" {
   printf stale >"${OUTPUT}"
   download
-  [[ "${status}" -ne 0 ]]
-  [[ ! -e "${OUTPUT}" ]]
+  [[ "${status}" -ne 0 ]] || false
+  [[ ! -e "${OUTPUT}" ]] || false
 }

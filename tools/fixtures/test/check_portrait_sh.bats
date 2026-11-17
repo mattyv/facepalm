@@ -38,39 +38,39 @@ EOF
 @test "passes when every value is within MediaPipe's margins" {
   result '[0.52, 0.23, 0]' 0.61 '1.03, -0.03'
   run bash "${WORK}/repo/tools/fixtures/check_portrait.sh"
-  [[ "${status}" -eq 0 ]]
+  [[ "${status}" -eq 0 ]] || false
 }
 
 @test "fails, naming the output, when a landmark is beyond 0.03" {
   result '[0.54, 0.25, 0]' 0.5 '1, 0'
   run bash "${WORK}/repo/tools/fixtures/check_portrait.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'landmarks: 1 values outside 0.03'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'landmarks: 1 values outside 0.03'* ]] || false
 }
 
 @test "fails when a blendshape is beyond 0.12" {
   result '[0.5, 0.25, 0]' 0.63 '1, 0'
   run bash "${WORK}/repo/tools/fixtures/check_portrait.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'blendshapes: 1 values outside 0.12'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'blendshapes: 1 values outside 0.12'* ]] || false
 }
 
 @test "fails when a matrix value is beyond 0.04" {
   result '[0.5, 0.25, 0]' 0.5 '1, 0.05'
   run bash "${WORK}/repo/tools/fixtures/check_portrait.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'pose: 1 values outside 0.04'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'pose: 1 values outside 0.04'* ]] || false
 }
 
 @test "counts a missing value as outside" {
   result '[0.5, 0.25, 0]' 0.5 '1'
   run bash "${WORK}/repo/tools/fixtures/check_portrait.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *'pose: 1 values outside 0.04'* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *'pose: 1 values outside 0.04'* ]] || false
 }
 
 @test "fails when the tool fails" {
   printf '#!/bin/bash\nexit 1\n' >"${BIN}/face_landmarker_fixtures"
   run bash "${WORK}/repo/tools/fixtures/check_portrait.sh"
-  [[ "${status}" -ne 0 ]]
+  [[ "${status}" -ne 0 ]] || false
 }

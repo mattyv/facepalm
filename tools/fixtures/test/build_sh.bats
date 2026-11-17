@@ -40,52 +40,54 @@ teardown() {
 
 @test "clones MediaPipe at the release, patches it, and builds both targets" {
   run bash "${WORK}/repo/tools/fixtures/build.sh"
-  [[ "${status}" -eq 0 ]]
+  [[ "${status}" -eq 0 ]] || false
   log="$(cat "${LOG}")"
-  [[ "${log}" == *'git clone --quiet --depth 1 --branch v0.10.35 '* ]]
-  [[ "${log}" == *'apply '*'/tools/fixtures/opencv.diff'* ]]
-  [[ "${log}" == *'face_landmarker_v2_with_blendshapes.task?generation='* ]]
-  [[ "${log}" == *'portrait.jpg?generation='* ]]
-  [[ "${log}" == *'build '*'//facepalm_fixtures:face_landmarker_fixtures'* ]]
-  [[ "${log}" == *'//facepalm_shim:libfacepalm_mediapipe.dylib'* ]]
+  [[ "${log}" == *'git clone --quiet --depth 1 --branch v0.10.35 '* ]] || false
+  [[ "${log}" == *'apply '*'/tools/fixtures/opencv.diff'* ]] || false
+  [[ "${log}" == *'face_landmarker_v2_with_blendshapes.task?generation='* ]] \
+    || false
+  [[ "${log}" == *'portrait.jpg?generation='* ]] || false
+  [[ "${log}" == *'build '*'//facepalm_fixtures:face_landmarker_fixtures'* ]] \
+    || false
+  [[ "${log}" == *'//facepalm_shim:libfacepalm_mediapipe.dylib'* ]] || false
   [[ "${log}" != *disk_cache* ]] || false
-  [[ "${log}" != *DEVELOPER_DIR* ]]
-  [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_fixtures" ]]
-  [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_shim" ]]
+  [[ "${log}" != *DEVELOPER_DIR* ]] || false
+  [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_fixtures" ]] || false
+  [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_shim" ]] || false
 }
 
 @test "leaves an existing checkout as it is" {
   mkdir -p "${WORK}/repo/build-mediapipe/mediapipe"
   run bash "${WORK}/repo/tools/fixtures/build.sh"
-  [[ "${status}" -eq 0 ]]
+  [[ "${status}" -eq 0 ]] || false
   log="$(cat "${LOG}")"
-  [[ "${log}" != *clone* ]]
+  [[ "${log}" != *clone* ]] || false
 }
 
 @test "fails when the checkout is not at the pinned commit" {
   FAKE_HEAD=0000000000000000000000000000000000000000
   run bash "${WORK}/repo/tools/fixtures/build.sh"
-  [[ "${status}" -eq 1 ]]
-  [[ "${output}" == *"MediaPipe is at ${FAKE_HEAD}, not ${PINNED}"* ]]
+  [[ "${status}" -eq 1 ]] || false
+  [[ "${output}" == *"MediaPipe is at ${FAKE_HEAD}, not ${PINNED}"* ]] || false
   log="$(cat "${LOG}")"
-  [[ "${log}" != *bazelisk* ]]
+  [[ "${log}" != *bazelisk* ]] || false
 }
 
 @test "fails when a download does not match its checksum" {
   FAKE_SHASUM=1
   run bash "${WORK}/repo/tools/fixtures/build.sh"
-  [[ "${status}" -ne 0 ]]
+  [[ "${status}" -ne 0 ]] || false
   log="$(cat "${LOG}")"
-  [[ "${log}" != *bazelisk* ]]
+  [[ "${log}" != *bazelisk* ]] || false
 }
 
 @test "passes DEVELOPER_DIR through to Bazel when it is set" {
   DEVELOPER_DIR=/Library/Developer/CommandLineTools \
     run bash "${WORK}/repo/tools/fixtures/build.sh"
-  [[ "${status}" -eq 0 ]]
+  [[ "${status}" -eq 0 ]] || false
   log="$(cat "${LOG}")"
   for flag in repo_env action_env host_action_env; do
-    [[ "${log}" == *"--${flag}=DEVELOPER_DIR=/Library/Developer/"* ]]
+    [[ "${log}" == *"--${flag}=DEVELOPER_DIR=/Library/Developer/"* ]] || false
   done
 }
 

@@ -55,7 +55,8 @@ Checks that CI runs:
 
 ```shell
 bash scripts/coverage.sh          # Each source's own tests, against its floors.
-bats scripts/test specs/test      # Tests for the scripts.
+bats scripts/test specs/test tools/fixtures/test  # Tests for the scripts.
+bash scripts/check_bats.sh        # Every bats assertion ends in || false.
 cmake --build build --target format-check
 cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
   && cmake --build build-tidy     # clang-tidy on every source.
