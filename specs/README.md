@@ -111,8 +111,10 @@ Each mutation, and what TLC found:
 | `GuardDestroyOnClose = FALSE`: closing never destroys the model | `ModelGoneAfterClose` |
 | `DetectStart` never enabled | `CanDetect` |
 | `CaptureEnd` writes a slot state outside the type | `TypeOK` |
-| No fairness on `DetectStart`, or on `Ticket` | `SlotFreed` |
-| No fairness on `DestroyModel` | `ModelGoneAfterClose` |
+| No fairness on `Ticket` | `SlotFreed` |
+| No fairness on `CreateModel` | `SlotFreed`: a queued `create` stalls the `detect` behind it |
+| No fairness on `DetectStart` | `SlotFreed` and `ModelGoneAfterClose` |
+| No fairness on `DestroyModel` | `ModelGoneAfterClose` and `SlotFreed` |
 | No fairness on `DetectEnd \/ DetectFails` | `SlotFreed` and `ModelGoneAfterClose` |
 
 The capture callback always returns, but no property needs that, so
