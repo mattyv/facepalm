@@ -1,4 +1,5 @@
-/* facepalm's C interface to MediaPipe's face landmarker, built by Bazel as
+/* facepalm's C interface to MediaPipe's face landmarker and short-range face
+ * detector, built by Bazel as
  * libfacepalm_mediapipe.dylib (src/mediapipe_shim/BUILD). Plain C, so that
  * facepalm's CMake build uses it without MediaPipe's headers, abseil or C++
  * runtime, and nothing allocated on one side is freed on the other. MediaPipe's
@@ -20,7 +21,8 @@ extern "C" {
 enum {
   FP_LANDMARKS = 478,  /* MediaPipe's face mesh, with irises. */
   FP_BLENDSHAPES = 52, /* In MediaPipe's order, starting with _neutral. */
-  FP_POSE_VALUES = 16  /* A 4x4 matrix. */
+  FP_POSE_VALUES = 16, /* A 4x4 matrix. */
+  FP_KEYPOINTS = 6     /* The face detector's key points. */
 };
 
 typedef struct FpFaceModel FpFaceModel;
@@ -53,6 +55,34 @@ int fp_face_model_detect(FpFaceModel* model, const uint8_t* rgba, int width,
 
 /* Closes the model. Not while a detect on it is running. */
 void fp_face_model_destroy(FpFaceModel* model);
+
+typedef struct FpFaceDetector FpFaceDetector;
+
+/* One face as MediaPipe's short-range face detector (BlazeFace) finds it,
+ * normalised to the image: the box's left, top, width and height, and six key
+ * points in the model's order: right eye, left eye, nose tip, mouth centre,
+ * right ear tragion, left ear tragion (the subject's right and left).
+ * Nodding Pigeon's inputs (#34). */
+typedef struct {
+  float box[4];
+  float keypoints[FP_KEYPOINTS][2];
+} FpDetection;
+
+/* Loads the short-range face detector's .tflite, in MediaPipe's IMAGE running
+ * mode, with a minimum detection confidence of 0.5, as Nodding Pigeon runs
+ * it. Returns 0 and sets *out, or -1 and writes why to error. */
+int fp_face_detector_create(const char* model_path, FpFaceDetector** out,
+                            char* error, size_t error_size);
+
+/* Finds faces in one frame of packed RGBA, read during the call only.
+ * Returns how many it found, filling out with the first, or -1 with why in
+ * error when it fails. Calls on one detector must not overlap. */
+int fp_face_detector_detect(FpFaceDetector* detector, const uint8_t* rgba,
+                            int width, int height, FpDetection* out,
+                            char* error, size_t error_size);
+
+/* Closes the detector. Not while a detect on it is running. */
+void fp_face_detector_destroy(FpFaceDetector* detector);
 /* NOLINTEND */
 
 #ifdef __cplusplus

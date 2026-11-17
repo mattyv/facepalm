@@ -63,6 +63,8 @@ main() {
     b261925d4aad812b47a0e8d58c1baa1223270a5d1f663d78338bc881c003879d
   fetch portrait.jpg 1782185108020964 \
     a6f11efaa834706db23f275b6115058fa87fc7f14362681e6abe14e82749de3e
+  fetch face_detection_short_range.tflite 1782184645070605 \
+    bbff11cebd1eb27a1e004cae0b0e63ec8c551cbf34a4451148b4908b8db3eca8
   local env_flags=()
   if [[ -n "${DEVELOPER_DIR:-}" ]]; then
     local flag

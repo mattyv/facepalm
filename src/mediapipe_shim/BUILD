@@ -1,8 +1,8 @@
 # Built inside MediaPipe's workspace, where tools/fixtures/build.sh links this
 # directory as the package //facepalm_shim. Not part of facepalm's CMake build.
 
-# The face landmarker behind facepalm_mediapipe.h's C interface. It exports
-# only that interface's three functions, so the abseil and protobuf inside it
+# The face landmarker and face detector behind facepalm_mediapipe.h's C interface. It exports
+# only that interface's six functions, so the abseil and protobuf inside it
 # cannot clash with another copy in the same process. MediaPipe's own
 # mediapipe/tasks/c/vision/face_landmarker:libface_landmarker.dylib is the
 # reference.
@@ -23,6 +23,8 @@ cc_binary(
     deps = [
         "//mediapipe/framework/formats:image_format_cc_proto",
         "//mediapipe/tasks/cc/vision/core:running_mode",
+        "//mediapipe/tasks/cc/components/containers:detection_result",
+        "//mediapipe/tasks/cc/vision/face_detector",
         "//mediapipe/tasks/cc/vision/face_landmarker",
         "//mediapipe/tasks/cc/vision/utils:image_utils",
         "@com_google_absl//absl/status",
@@ -51,6 +53,8 @@ cc_test(
         "//mediapipe/tasks/cc/components/containers:classification_result",
         "//mediapipe/tasks/cc/components/containers:landmark",
         "//mediapipe/tasks/cc/vision/core:running_mode",
+        "//mediapipe/tasks/cc/components/containers:detection_result",
+        "//mediapipe/tasks/cc/vision/face_detector",
         "//mediapipe/tasks/cc/vision/face_landmarker",
         "//mediapipe/tasks/cc/vision/utils:image_utils",
         "@com_google_absl//absl/status",

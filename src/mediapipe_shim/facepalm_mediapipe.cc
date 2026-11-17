@@ -16,17 +16,25 @@
 #include "facepalm_shim/facepalm_mediapipe_internal.h"
 #include "mediapipe/framework/formats/image_format.pb.h"
 #include "mediapipe/tasks/cc/vision/core/running_mode.h"
+#include "mediapipe/tasks/cc/vision/face_detector/face_detector.h"
 #include "mediapipe/tasks/cc/vision/face_landmarker/face_landmarker.h"
 #include "mediapipe/tasks/cc/vision/utils/image_utils.h"
 
+using ::mediapipe::tasks::components::containers::DetectionResult;
 using ::mediapipe::tasks::vision::CreateImageFromBuffer;
 using ::mediapipe::tasks::vision::core::RunningMode;
+using ::mediapipe::tasks::vision::face_detector::FaceDetector;
+using ::mediapipe::tasks::vision::face_detector::FaceDetectorOptions;
 using ::mediapipe::tasks::vision::face_landmarker::FaceLandmarker;
 using ::mediapipe::tasks::vision::face_landmarker::FaceLandmarkerOptions;
 using ::mediapipe::tasks::vision::face_landmarker::FaceLandmarkerResult;
 
 struct FpFaceModel {
   std::unique_ptr<FaceLandmarker> landmarker;
+};
+
+struct FpFaceDetector {
+  std::unique_ptr<FaceDetector> detector;
 };
 
 namespace facepalm_shim {
@@ -69,8 +77,32 @@ int CopyFace(const FaceLandmarkerResult& result, FpFace& out, char* error,
   return 1;
 }
 
+int CopyDetection(const DetectionResult& result, int width, int height,
+                  FpDetection& out, char* error, size_t error_size) {
+  const int faces = static_cast<int>(result.detections.size());
+  if (faces == 0) return 0;
+  const auto& detection = result.detections[0];
+  if (!detection.keypoints || detection.keypoints->size() != FP_KEYPOINTS) {
+    return Fail(absl::InternalError("unexpected face detector key points"),
+                error, error_size);
+  }
+  // The box is in pixels; Nodding Pigeon reads it normalised, as MediaPipe's
+  // legacy face detection solution gave it.
+  const auto& box = detection.bounding_box;
+  out.box[0] = static_cast<float>(box.left) / width;
+  out.box[1] = static_cast<float>(box.top) / height;
+  out.box[2] = static_cast<float>(box.right - box.left) / width;
+  out.box[3] = static_cast<float>(box.bottom - box.top) / height;
+  for (int i = 0; i < FP_KEYPOINTS; ++i) {
+    out.keypoints[i][0] = (*detection.keypoints)[i].x;
+    out.keypoints[i][1] = (*detection.keypoints)[i].y;
+  }
+  return faces;
+}
+
 }  // namespace facepalm_shim
 
+using ::facepalm_shim::CopyDetection;
 using ::facepalm_shim::CopyFace;
 using ::facepalm_shim::Fail;
 
@@ -110,4 +142,38 @@ extern "C" void fp_face_model_destroy(FpFaceModel* model) {
   // Close stops MediaPipe's graph; its status matters to no one here.
   static_cast<void>(model->landmarker->Close());
   delete model;
+}
+
+extern "C" int fp_face_detector_create(const char* model_path,
+                                       FpFaceDetector** out, char* error,
+                                       size_t error_size) {
+  auto options = std::make_unique<FaceDetectorOptions>();
+  options->base_options.model_asset_path = model_path;
+  options->running_mode = RunningMode::IMAGE;
+  options->min_detection_confidence = 0.5F;
+  absl::StatusOr<std::unique_ptr<FaceDetector>> detector =
+      FaceDetector::Create(std::move(options));
+  if (!detector.ok()) return Fail(detector.status(), error, error_size);
+  *out = new FpFaceDetector{std::move(*detector)};
+  return 0;
+}
+
+extern "C" int fp_face_detector_detect(FpFaceDetector* detector,
+                                       const uint8_t* rgba, int width,
+                                       int height, FpDetection* out,
+                                       char* error, size_t error_size) {
+  // Wraps the caller's pixels in place, as fp_face_model_detect does.
+  mediapipe::Image image =
+      CreateImageFromBuffer(mediapipe::ImageFormat::SRGBA, rgba, width, height)
+          .value();
+  absl::StatusOr<DetectionResult> result =
+      detector->detector->Detect(std::move(image));
+  if (!result.ok()) return Fail(result.status(), error, error_size);
+  return CopyDetection(*result, width, height, *out, error, error_size);
+}
+
+extern "C" void fp_face_detector_destroy(FpFaceDetector* detector) {
+  if (detector == nullptr) return;
+  static_cast<void>(detector->detector->Close());
+  delete detector;
 }

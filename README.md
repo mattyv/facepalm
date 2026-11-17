@@ -12,8 +12,9 @@ Nothing works end to end yet. The design is on
 
 ## What exists
 
--   `src/mediapipe_shim`: MediaPipe's face landmarker as one self-contained
-    library with a plain C interface, built by `tools/fixtures/build.sh`.
+-   `src/mediapipe_shim`: MediaPipe's face landmarker, and its short-range
+    face detector for Nodding Pigeon (#34), as one self-contained library with
+    a plain C interface, built by `tools/fixtures/build.sh`.
     `tools/fixtures/test_shim.sh` tests it against the real model.
 -   `src/face_model`: `FaceModel`, how the frame pipeline will ask for the
     face in a frame, and `MediaPipeFaceModel`, which asks the shim. Its unit

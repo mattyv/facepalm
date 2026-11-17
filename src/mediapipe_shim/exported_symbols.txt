@@ -1,3 +1,6 @@
+_fp_face_detector_create
+_fp_face_detector_destroy
+_fp_face_detector_detect
 _fp_face_model_create
-_fp_face_model_detect
 _fp_face_model_destroy
+_fp_face_model_detect

@@ -9,6 +9,7 @@
 
 #include "absl/status/status.h"
 #include "facepalm_shim/facepalm_mediapipe.h"
+#include "mediapipe/tasks/cc/components/containers/detection_result.h"
 #include "mediapipe/tasks/cc/vision/face_landmarker/face_landmarker_result.h"
 
 namespace facepalm_shim {
@@ -23,6 +24,13 @@ int CopyFace(
     const mediapipe::tasks::vision::face_landmarker::FaceLandmarkerResult&
         result,
     FpFace& out, char* error, size_t error_size);
+
+// Copies the first face of `result`, found in a `width` x `height` image,
+// into `out`, normalised, and returns how many faces it holds; or returns -1
+// with why in `error` when that face has no six key points.
+int CopyDetection(
+    const mediapipe::tasks::components::containers::DetectionResult& result,
+    int width, int height, FpDetection& out, char* error, size_t error_size);
 
 }  // namespace facepalm_shim
 

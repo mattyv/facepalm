@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Checks libfacepalm_mediapipe.dylib, as tools/fixtures/build.sh built it: it
-# must export facepalm_mediapipe.h's three functions and nothing else, so the
+# must export facepalm_mediapipe.h's six functions and nothing else, so the
 # abseil and protobuf inside cannot clash with another copy in the process,
 # and must link no OpenCV dylib, which is linked in statically. Prints its
 # size.
@@ -13,7 +13,8 @@ readonly ROOT
 readonly SHIM="${ROOT}/build-mediapipe/mediapipe/bazel-bin/facepalm_shim"
 readonly DYLIB="${SHIM}/libfacepalm_mediapipe.dylib"
 readonly INTERFACE=(_fp_face_model_create _fp_face_model_destroy
-  _fp_face_model_detect)
+  _fp_face_model_detect _fp_face_detector_create _fp_face_detector_destroy
+  _fp_face_detector_detect)
 
 main() {
   local size exports links failed=0 symbol name library
