@@ -7,6 +7,8 @@
 #
 # On a Mac whose Xcode cannot read its SDK, set DEVELOPER_DIR, for example to
 # /Library/Developer/CommandLineTools; it is passed through to Bazel.
+# BAZEL_DISK_CACHE, when set, names a folder Bazel keeps its compiled outputs
+# in between runs, as CI does.
 
 set -euo pipefail
 
@@ -67,6 +69,9 @@ main() {
     for flag in repo_env action_env host_action_env; do
       env_flags+=("--${flag}=DEVELOPER_DIR=${DEVELOPER_DIR}")
     done
+  fi
+  if [[ -n "${BAZEL_DISK_CACHE:-}" ]]; then
+    env_flags+=("--disk_cache=${BAZEL_DISK_CACHE}")
   fi
   cd "${MEDIAPIPE}"
   "${BAZEL}" --bazelrc="${HERE}/mediapipe.bazelrc" build \

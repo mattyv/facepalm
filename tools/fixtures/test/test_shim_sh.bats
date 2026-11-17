@@ -35,7 +35,7 @@ fi
 EOF
   chmod +x "${WORK}"/bin/* "${mediapipe}"/bazel-bin/facepalm_shim/*
   PATH="${WORK}/bin:${PATH}"
-  unset DEVELOPER_DIR
+  unset DEVELOPER_DIR BAZEL_DISK_CACHE
 }
 
 teardown() {
@@ -77,4 +77,12 @@ teardown() {
   [[ "${status}" -eq 0 ]] || false
   log="$(cat "${LOG}")"
   [[ "${log}" == *'--repo_env=DEVELOPER_DIR=/Library/Developer/'* ]] || false
+}
+
+@test "gives Bazel a disk cache when BAZEL_DISK_CACHE names one" {
+  BAZEL_DISK_CACHE=/tmp/bazel-disk \
+    run bash "${WORK}/repo/tools/fixtures/test_shim.sh"
+  [[ "${status}" -eq 0 ]] || false
+  log="$(cat "${LOG}")"
+  [[ "${log}" == *'--disk_cache=/tmp/bazel-disk'* ]] || false
 }
