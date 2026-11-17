@@ -58,10 +58,11 @@ bash specs/check.sh               # TLC on every spec; see specs/README.md.
 
 ## Measuring the camera on macOS
 
-`camera_probe` opens the camera through the controller and reports the
-frames it received and the CPU time it used. The built-in camera captures at
-15 to 30 frames a second at 640×480; a slower rate asks for 15. The first
-run asks for camera permission for the app it runs in.
+`camera_probe` opens the camera through the controller, converts each frame
+to RGBA as the face model will, and reports the frames it received, the CPU
+time it used, and how many capture times failed to increase. The built-in
+camera captures at 15 to 30 frames a second at 640×480; a slower rate asks
+for 15. The first run asks for camera permission for the app it runs in.
 
 ```shell
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.
