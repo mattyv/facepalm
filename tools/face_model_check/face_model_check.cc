@@ -7,13 +7,21 @@
 // 33 ms apart, so the model tracks the face as it would on the camera, and
 // reports what each frame cost (#18).
 //
+// With --gesture, it runs Nodding Pigeon instead (#34): each image is a
+// frame of a video, through MediaPipeFaceDetector and the C++ model, as
+// Nodding Pigeon's predict_video does with VideoSegment.LAST: frames with
+// exactly one face, consecutive duplicates dropped, the last 60, a short run
+// padded with its last frame. It prints the gesture and the probabilities.
+//
 // Usage: face_model_check <model.task> <image> [frames]
+//        face_model_check --gesture <detector.tflite> <frame.png>...
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <ImageIO/ImageIO.h>
 #include <sys/resource.h>
 
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
@@ -21,12 +29,15 @@
 #include <cstdio>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <vector>
 
+#include "src/face_detector.h"
 #include "src/face_model.h"
+#include "src/nodding_pigeon.h"
 
 namespace {
 
@@ -144,12 +155,61 @@ int Time(facepalm::FaceModel& model, const Image& image, int frames) {
   return 0;
 }
 
+// Runs Nodding Pigeon over `paths`, frames of one video, and prints its
+// gesture and probabilities. Returns 0, or 1 when a frame cannot be read.
+int Gesture(const char* detector_path, std::span<char* const> paths) {
+  namespace np = facepalm::nodding_pigeon;
+  std::string error;
+  auto detector = facepalm::MediaPipeFaceDetector::Create(detector_path, error);
+  if (detector == nullptr) {
+    std::fprintf(stderr, "face_model_check: %s\n", error.c_str());
+    return 1;
+  }
+  np::Window window;
+  for (const char* path : paths) {
+    const std::optional<Image> image = Decode(path);
+    if (!image) {
+      std::fprintf(stderr, "face_model_check: cannot decode %s\n", path);
+      return 1;
+    }
+    facepalm::Detection detection{};
+    const std::optional<int> faces = detector->Detect(
+        image->rgba, image->width, image->height, detection, error);
+    if (!faces) {
+      std::fprintf(stderr, "face_model_check: %s\n", error.c_str());
+      return 1;
+    }
+    if (*faces == 1) {
+      static_cast<void>(window.Add(np::RawFrameFrom(detection)));
+    }
+  }
+  const auto frames = window.Padded();
+  if (!frames) {
+    std::printf("gesture undefined\n");
+    return 0;
+  }
+  constexpr float kMotionThreshold = 0.5F;  // predict_video's defaults.
+  constexpr float kGestureThreshold = 0.9F;
+  const np::Prediction prediction = np::Predict(*frames);
+  constexpr std::array<const char*, 4> kNames = {"stationary", "nodding",
+                                                 "turning", "undefined"};
+  std::printf("gesture %s\nhas_motion %.6f\nnodding %.6f\nturning %.6f\n",
+              kNames.at(static_cast<std::size_t>(np::Classify(
+                  prediction, kMotionThreshold, kGestureThreshold))),
+              prediction.has_motion, prediction.gestures[0],
+              prediction.gestures[1]);
+  return 0;
+}
+
 }  // namespace
 
 // The standard fixes main's signature, and an allocation failure may end the
 // tool.
 // NOLINTNEXTLINE(misc-const-correctness,bugprone-exception-escape)
 int main(int argc, char** argv) {
+  if (argc >= 4 && std::string_view(argv[1]) == "--gesture") {
+    return Gesture(argv[2], std::span<char* const>(argv + 3, argc - 3));
+  }
   int frames = 0;
   if (argc == 4) {
     const std::string_view text(argv[3]);

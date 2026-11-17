@@ -38,12 +38,14 @@ function(facepalm_unit name)
 endfunction()
 
 facepalm_unit(camera_controller)
+facepalm_unit(face_detector)
 facepalm_unit(face_model)
 facepalm_unit(frame)
 facepalm_unit(frame_pipeline)
 # ToRgba is pure computation, so the pipeline's tests run it for real.
 target_link_libraries(frame_pipeline PUBLIC frame)
 facepalm_unit(head_pose)
+facepalm_unit(nodding_pigeon)
 facepalm_unit(reaction)
 # head_pose is pure computation, so the reaction's tests run it for real.
 target_link_libraries(reaction PUBLIC head_pose)
@@ -77,7 +79,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     IMPORTED_LOCATION ${FACEPALM_MEDIAPIPE_DYLIB}
     IMPORTED_SONAME "@rpath/libfacepalm_mediapipe.dylib")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
-  target_link_libraries(face_model_check PRIVATE face_model facepalm_mediapipe
+  target_link_libraries(face_model_check PRIVATE face_model face_detector
+    nodding_pigeon facepalm_mediapipe
     "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
   get_filename_component(FACEPALM_MEDIAPIPE_DIR ${FACEPALM_MEDIAPIPE_DYLIB}
     DIRECTORY)
