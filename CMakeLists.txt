@@ -40,6 +40,9 @@ endfunction()
 facepalm_unit(camera_controller)
 facepalm_unit(face_model)
 facepalm_unit(frame)
+facepalm_unit(frame_pipeline)
+# ToRgba is pure computation, so the pipeline's tests run it for real.
+target_link_libraries(frame_pipeline PUBLIC frame)
 facepalm_unit(head_pose)
 facepalm_unit(session_camera)
 

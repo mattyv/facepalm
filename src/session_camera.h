@@ -7,6 +7,7 @@
 #include <string>
 
 #include "src/camera_controller.h"
+#include "src/post.h"
 
 namespace facepalm {
 
@@ -36,9 +37,6 @@ class CaptureSession {
   virtual bool Start(int frames_per_second) = 0;
   virtual void Stop() = 0;
 };
-
-// Runs a task on a serial queue.
-using Post = std::function<void(std::function<void()>)>;
 
 // A camera over a CaptureSession. Session work runs on `session`, since it
 // blocks; every report runs on `control`, the queue that owns the controller,
