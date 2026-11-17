@@ -45,8 +45,9 @@ void FramePipeline::OnFrame(const Frame& frame) {
 }
 
 // specs/FramePipeline.tla: Ticket, with GuardFreeOnRefusal. A refused frame's
-// pixels are zeroed before the slot is freed, so no image of the user stays
-// in memory after the camera stops.
+// pixels are zeroed before the slot is freed, so a frame captured around the
+// camera stopping does not stay in memory. A ticketed frame's pixels stay in
+// the slot after its detect, until the next frame overwrites them.
 void FramePipeline::Ticket() {
   const std::optional<std::uint64_t> ticket = tickets_.OnFrameCaptured();
   if (!ticket) {

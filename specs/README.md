@@ -92,12 +92,12 @@ the model and detecting can each fail.
 
 | Property | What it says | Test |
 |---|---|---|
-| `NoDetectWithoutModel` | Detect runs only on a model that is ready: not before it loads, after it failed to, or once destroyed. | Nothing yet: #20 |
-| `NeverWrittenWhileRead` | The capture callback never writes the slot while detect reads it. | Nothing yet: #20 |
-| `AtMostOneInFlight` | At most one frame is between capture and being freed. | Nothing yet: #20 |
-| `CanDetect` | Something must happen: a ticketed frame next in line, with the model ready, can be detected. | Nothing yet: #20 |
-| `SlotFreed` | The slot is always freed: after a reaction, a refused ticket, a failed detect, or no model. | Nothing yet: #20 |
-| `ModelGoneAfterClose` | Closing the camera leads to the model being destroyed. | Nothing yet: #20 |
+| `NoDetectWithoutModel` | Detect runs only on a model that is ready: not before it loads, after it failed to, or once destroyed. | `NoDetectWithoutModelTest` in `test/frame_pipeline_test.cc` |
+| `NeverWrittenWhileRead` | The capture callback never writes the slot while detect reads it. | `NeverWrittenWhileReadTest` |
+| `AtMostOneInFlight` | At most one frame is between capture and being freed. | `AtMostOneInFlightTest` |
+| `CanDetect` | Something must happen: a ticketed frame next in line, with the model ready, can be detected. | `CanDetectTest` |
+| `SlotFreed` | The slot is always freed: after a reaction, a refused ticket, a failed detect, or no model. | `SlotFreedTest` |
+| `ModelGoneAfterClose` | Closing the camera leads to the model being destroyed. | `ModelGoneAfterCloseTest` |
 
 Each mutation, and what TLC found:
 
@@ -119,3 +119,19 @@ Each mutation, and what TLC found:
 
 The capture callback always returns, but no property needs that, so
 `CaptureEnd` has no fairness: without it TLC still passes.
+
+`src/frame_pipeline.cc` implements the spec, and each of its methods names
+the action it implements. The same mutations, made to that code, fail the
+tests that stand for the properties they break:
+
+| Mutation to `FramePipeline` | Fails |
+|---|---|
+| A frame is copied in while the slot is taken | `AtMostOneInFlightTest`, `NeverWrittenWhileReadTest` |
+| A refused ticket does not free the slot | `SlotFreedTest.AfterARefusedTicket` |
+| A failed detect does not free the slot | `SlotFreedTest.AfterAFailedDetect` |
+| A detect with no model skips without freeing the slot | `SlotFreedTest.WithNoModel` |
+| A detect runs with no model | `NoDetectWithoutModelTest`, on the null model |
+| Closing destroys the model at once, on the caller's thread | `ModelGoneAfterCloseTest.ClosingDestroysTheModel`, `NoDetectWithoutModelTest.ClosingWaitsForADetectAlreadyQueued` |
+| Closing never destroys the model | `ModelGoneAfterCloseTest.ClosingDestroysTheModel`, `NoDetectWithoutModelTest.DetectsNothingOnceClosed` |
+| A ticketed frame's detect is never queued | `CanDetectTest`, and six others |
+| A refused ticket's pixels are not zeroed | `RefusedTicketTest.ZeroesTheCopiedPixels` (#20's zeroing, which the spec does not model) |

@@ -312,14 +312,44 @@ TEST_F(SlotFreedTest, WithNoModel) {
   inference_.Drain();
 }
 
+// Not a spec property: #20 asks that a refused frame's pixels be zeroed when
+// the slot is freed. The buffer is watched through the span an earlier detect
+// was given, which stays valid because the vector keeps its allocation for a
+// frame of the same size.
+using RefusedTicketTest = FramePipelineTest;
+
+TEST_F(RefusedTicketTest, ZeroesTheCopiedPixels) {
+  MockFaceModel* model = Opened();
+  std::span<const std::uint8_t> buffer;
+  EXPECT_CALL(*model, Detect(_, _, _, _, _, _))
+      .WillOnce([&buffer](std::span<const std::uint8_t> rgba, int, int,
+                          std::int64_t, Face&, std::string&) {
+        buffer = rgba;
+        return FaceModel::Result::kNoFace;
+      });
+  Captured();
+  inference_.Drain();
+
+  EXPECT_CALL(tickets_, OnFrameCaptured()).WillOnce(Return(std::nullopt));
+  pipeline_.OnFrame(FrameOf(kOtherBgra));
+  control_.Drain();
+
+  EXPECT_THAT(buffer, ElementsAre(0, 0, 0, 0));
+  EXPECT_CALL(*model, Destroyed());
+}
+
 using ModelGoneAfterCloseTest = FramePipelineTest;
 
 TEST_F(ModelGoneAfterCloseTest, ClosingDestroysTheModel) {
   MockFaceModel* model = Opened();
   pipeline_.OnCameraClosed();
 
-  EXPECT_CALL(*model, Destroyed());
+  // By the end of the drain, not at the pipeline's own destruction, which
+  // would satisfy a bare expectation even when closing destroys nothing.
+  bool destroyed = false;
+  EXPECT_CALL(*model, Destroyed()).WillOnce([&destroyed] { destroyed = true; });
   inference_.Drain();
+  EXPECT_TRUE(destroyed);
 }
 
 TEST_F(ModelGoneAfterCloseTest, ReopeningMakesANewModel) {

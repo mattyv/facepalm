@@ -20,6 +20,13 @@
       "functions": 100
     }
   },
+  "src/frame_pipeline.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/frame.cc": {
     "unit": {
       "lines": 100,
