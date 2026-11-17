@@ -38,6 +38,7 @@ function(facepalm_unit name)
 endfunction()
 
 facepalm_unit(camera_controller)
+facepalm_unit(frame)
 facepalm_unit(head_pose)
 facepalm_unit(session_camera)
 
@@ -49,7 +50,7 @@ if(APPLE)
   add_library(avfoundation_session src/macos/avfoundation_session.mm)
   target_compile_options(avfoundation_session PRIVATE -fobjc-arc)
   target_include_directories(avfoundation_session PUBLIC ${PROJECT_SOURCE_DIR})
-  target_link_libraries(avfoundation_session PUBLIC session_camera
+  target_link_libraries(avfoundation_session PUBLIC frame session_camera
     "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
     "-framework Foundation")
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)

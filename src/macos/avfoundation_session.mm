@@ -14,6 +14,15 @@
 
 // Hands each sample buffer to a C++ callback, as MediaPipe's
 // MPPCameraInputSource is its own sample buffer delegate.
+namespace {
+
+// A capture time in milliseconds, on the capture session's clock.
+std::int64_t MillisecondsOf(CMTime time) {
+  return CMTimeConvertScale(time, 1000, kCMTimeRoundingMethod_RoundTowardNegativeInfinity).value;
+}
+
+}  // namespace
+
 @interface FacepalmFrameDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
 - (instancetype)initWithHandler:(std::function<void(const facepalm::Frame&)>)handler;
 @end
@@ -42,6 +51,7 @@
       .height = static_cast<int>(CVPixelBufferGetHeight(pixels)),
       .bytes_per_row = CVPixelBufferGetBytesPerRow(pixels),
       .bgra = static_cast<const std::uint8_t*>(CVPixelBufferGetBaseAddress(pixels)),
+      .timestamp_ms = MillisecondsOf(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)),
   };
   _handler(frame);
   CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);

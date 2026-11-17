@@ -17,8 +17,10 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 #include "src/camera_controller.h"
+#include "src/frame.h"
 #include "src/macos/avfoundation_session.h"
 #include "src/session_camera.h"
 
@@ -72,7 +74,7 @@ class Probe : public CameraReports {
       : seconds_(options.seconds),
         control_(control),
         capture_(
-            [this](const Frame& /*frame*/) { ++frames_; },
+            [this](const Frame& frame) { OnFrame(frame); },
             [this] { camera_.OnSessionFailed(); },
             [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
             [this](const std::string& id) { camera_.OnDeviceConnected(id); }),
@@ -109,10 +111,10 @@ class Probe : public CameraReports {
     const double cpu = cpu_at_close_ - cpu_at_open_;
     std::printf(
         "seconds %d\nframes %d\nframes_per_second %.1f\ncpu_seconds %.3f\n"
-        "cpu_percent_of_one_core %.1f\n",
+        "cpu_percent_of_one_core %.1f\ntimestamps_out_of_order %d\n",
         seconds_, frames_at_close_,
         static_cast<double>(frames_at_close_) / seconds_, cpu,
-        kPercent * cpu / seconds_);
+        kPercent * cpu / seconds_, out_of_order_.load());
     std::exit(0);
   }
 
@@ -125,11 +127,25 @@ class Probe : public CameraReports {
   void OnDeviceBack() override { controller_.OnDeviceBack(); }
 
  private:
+  // Runs on the capture queue. Converts each frame as the face model will,
+  // so the CPU figure includes it, and checks that capture times increase.
+  void OnFrame(const Frame& frame) {
+    ToRgba(frame, rgba_);
+    if (frames_ > 0 && frame.timestamp_ms <= last_timestamp_ms_) {
+      ++out_of_order_;
+    }
+    last_timestamp_ms_ = frame.timestamp_ms;
+    ++frames_;
+  }
+
   int seconds_;
   dispatch_queue_t control_;
   NoClients clients_;
   std::atomic<int> frames_ = 0;
   int frames_at_close_ = 0;
+  std::vector<std::uint8_t> rgba_;      // Capture queue only.
+  std::int64_t last_timestamp_ms_ = 0;  // Capture queue only.
+  std::atomic<int> out_of_order_ = 0;
   double cpu_at_open_ = 0;
   double cpu_at_close_ = 0;
   AvFoundationSession capture_;

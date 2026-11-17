@@ -19,6 +19,9 @@ Nothing works end to end yet. The design is on
     transformation matrix, which is stored column by column and carries a
     uniform scale. Its test checks against MediaPipe's own expected matrix
     for its portrait test image.
+-   `src/frame`: a captured frame with its capture time in milliseconds, and
+    the one-pass copy from the camera's padded BGRA rows to the packed RGBA
+    MediaPipe accepts.
 -   `src/camera_controller`: decides when the camera may be on, following
     `specs/CameraLifecycle.tla`, with the camera behind an interface.
 -   `src/session_camera`: a camera over one OS's capture API: permission,
@@ -57,10 +60,11 @@ bash specs/check.sh               # TLC on every spec; see specs/README.md.
 
 ## Measuring the camera on macOS
 
-`camera_probe` opens the camera through the controller and reports the
-frames it received and the CPU time it used. The built-in camera captures at
-15 to 30 frames a second at 640×480; a slower rate asks for 15. The first
-run asks for camera permission for the app it runs in.
+`camera_probe` opens the camera through the controller, converts each frame
+to RGBA as the face model will, and reports the frames it received, the CPU
+time it used, and how many capture times failed to increase. The built-in
+camera captures at 15 to 30 frames a second at 640×480; a slower rate asks
+for 15. The first run asks for camera permission for the app it runs in.
 
 ```shell
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.
