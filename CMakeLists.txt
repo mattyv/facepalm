@@ -76,6 +76,11 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     DIRECTORY)
   set_target_properties(face_model_check PROPERTIES
     BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
+  # camera_probe also runs the face model on each frame, given a model (#18).
+  target_compile_definitions(camera_probe PRIVATE FACEPALM_WITH_FACE_MODEL)
+  target_link_libraries(camera_probe PRIVATE face_model facepalm_mediapipe)
+  set_target_properties(camera_probe PROPERTIES
+    BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
 endif()
 
 # Checks formatting against .clang-format without changing any file.

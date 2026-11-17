@@ -74,6 +74,13 @@ for 15. The first run asks for camera permission for the app it runs in.
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.
 ```
 
+Built with `FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face
+landmarker's `.task` bundle as a third argument, it also runs the face model
+on every frame and reports how long each took, how many had a face, the
+thread count and peak memory. `face_model_check <model> <image> <frames>`
+times the model on one image run as that many frames, for a face held still
+in front of the camera.
+
 For energy, run `powermetrics` alongside it in another terminal, and read
 `camera_probe`'s line:
 
