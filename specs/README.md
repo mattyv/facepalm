@@ -27,6 +27,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 |---|---|---|---|
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 148 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
+| `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 132,884 |
 
 ## `CameraLifecycle`: when the camera may be on
 
@@ -135,3 +136,37 @@ tests that stand for the properties they break:
 | Closing never destroys the model | `ModelGoneAfterCloseTest.ClosingDestroysTheModel`, `NoDetectWithoutModelTest.DetectsNothingOnceClosed` |
 | A ticketed frame's detect is never queued | `CanDetectTest`, and six others |
 | A frame's pixels are not wiped when its slot is freed | `PixelsWipedTest` (both; the spec does not model the wipe) |
+
+## `ReactionFeed`: how readings reach each client
+
+Models #36's delivery. facepalm keeps one timeline of readings: each is an
+interpreted reaction with the one-line summary facepalm writes, and an id.
+Past `Capacity`, the oldest reading is dropped. Each client, an agent session
+or AI Pair, has a cursor. A read returns the readings since that client last
+looked, whether it comes from a hook after an agent action or from the MCP's
+check-in. A client can instead wait for the next reading, which a new reading
+or a timeout ends. The person can rate a reading the client was shown, 1 to
+5, and the rating goes back to facepalm for #35. A client that connects
+starts with no backlog, and keeps what it was shown before, so its earlier
+ratings stand.
+
+| Property | What it says | Test |
+|---|---|---|
+| `NoRepeat` | No reading is shown to the same client twice. | Nothing yet |
+| `NoSilentGap` | Every reading made while a client was connected, up to its cursor, was shown to it or counted as missed. | Nothing yet |
+| `RateOnlyShown` | A client rates only a reading it was shown, so a rating judges the summary the person saw. | Nothing yet |
+| `NoWaitPastAReading` | A waiting client is never left waiting while a reading it has not seen exists. | Nothing yet |
+| `CanShow` | Something must happen: a connected client with a reading it has not seen can be shown it. | Nothing yet |
+| `WaitEnds` | Every wait ends, with a reading or a timeout. | Nothing yet |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardAdvanceCursor = FALSE`: a read leaves the cursor where it was | `CanShow`, 4 states; with `CanShow` left out, `NoRepeat`, 6 states |
+| `GuardReportMissed = FALSE`: dropped readings are skipped without a word | `NoSilentGap`, 5 states |
+| `GuardWakeWaiters = FALSE`: a new reading leaves waiters waiting | `NoWaitPastAReading`, 6 states |
+| `GuardRateOnlyShown = FALSE`: any reading can be rated | `RateOnlyShown`, 5 states |
+| A read shows nothing | `CanShow`, 3 states |
+| A read counts an id outside the type as missed | `TypeOK`, 3 states |
+| No fairness on `WaitTimesOut` | `WaitEnds` |
