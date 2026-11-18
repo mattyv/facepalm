@@ -23,6 +23,12 @@ Nothing works end to end yet. The design is on
     frame at a time, across the capture, controller and inference queues,
     following `specs/FramePipeline.tla`. Each frame's pixels are wiped once
     it is done with.
+-   `src/reaction_feed`: the readings each client is told about (#36): one
+    timeline of interpreted reactions, each with the summary line the person
+    sees and the detail the agent gets. A client reads what came since it
+    last looked, or waits for the next reading, and the person can rate a
+    reading 1 to 5. It follows `specs/ReactionFeed.tla`; nothing feeds it or
+    reads from it yet, which #37's background service will do.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
     to a tenth of a degree, as JSON text.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
@@ -47,6 +53,8 @@ Nothing works end to end yet. The design is on
 -   `specs/FramePipeline.tla`: how a captured frame reaches the face model,
     and the model's lifecycle, checked with TLC before the pipeline's code
     (#20).
+-   `specs/ReactionFeed.tla`: how readings reach each client, waits end, and
+    only a reading that was shown can be rated (#36).
 
 ## Build and test
 
