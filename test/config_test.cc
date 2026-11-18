@@ -102,6 +102,9 @@ TEST(ParseConfigTest, RefusesAThresholdOutsideZeroToOne) {
               Eq("line 1: expected a number from 0 to 1"));
   EXPECT_THAT(ErrorFor("gestures.gesture_threshold = 0.9x"),
               Eq("line 1: expected a number from 0 to 1"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
+  EXPECT_THAT(ErrorFor("gestures.motion_threshold = nan"),
+              Eq("line 1: expected a number from 0 to 1"));
 }
 
 }  // namespace

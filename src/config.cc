@@ -1,6 +1,7 @@
 #include "src/config.h"
 
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <set>
@@ -75,7 +76,9 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   if (name == "gestures.motion_threshold" ||
       name == "gestures.gesture_threshold") {
     const std::optional<float> threshold = Number<float>(value);
-    if (!threshold || *threshold < 0 || *threshold > 1) {
+    // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+    if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
+        *threshold > 1) {
       return "expected a number from 0 to 1";
     }
     (name == "gestures.motion_threshold" ? config.motion_threshold
