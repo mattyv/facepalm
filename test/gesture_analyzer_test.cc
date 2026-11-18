@@ -54,8 +54,10 @@ class GestureAnalyzerTest : public ::testing::Test {
   GestureAnalyzerTest() {
     auto detector = std::make_unique<MockFaceDetector>();
     detector_ = detector.get();
+    // predict_video's default thresholds.
     analyzer_ = std::make_unique<GestureAnalyzer>(
-        std::move(detector), GestureAnalyzer::Thresholds{});
+        std::move(detector),
+        GestureAnalyzer::Thresholds{.motion = 0.5F, .gesture = 0.9F});
   }
 
   // Feeds `frames`, each as the one face in a frame, and returns every

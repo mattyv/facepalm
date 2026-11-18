@@ -20,14 +20,10 @@ namespace facepalm {
 // {"gesture":"shake"} once when a gesture starts, not again while it lasts.
 class GestureAnalyzer : public FrameAnalyzer {
  public:
-  // predict_video's default thresholds.
-  static constexpr float kDefaultMotion = 0.5F;
-  static constexpr float kDefaultGesture = 0.9F;
-
-  // Nodding Pigeon's thresholds.
+  // Nodding Pigeon's thresholds; their defaults live in Config.
   struct Thresholds {
-    float motion = kDefaultMotion;
-    float gesture = kDefaultGesture;
+    float motion;
+    float gesture;
   };
 
   GestureAnalyzer(std::unique_ptr<FaceDetector> detector,
