@@ -27,7 +27,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 |---|---|---|---|
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 148 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
-| `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 132,884 |
+| `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
 | `Service.cfg` | three connections, two client names | holds | 396 |
 
 ## `CameraLifecycle`: when the camera may be on
@@ -147,7 +147,8 @@ or AI Pair, has a cursor. A read returns the readings since that client last
 looked, whether it comes from a hook after an agent action or from the MCP's
 check-in. A client can instead wait for the next reading, which a new reading
 or a timeout ends. The person can rate a reading the client was shown, 1 to
-5, and the rating goes back to facepalm for #35. A client that connects
+5, for five minutes after it was shown, and the rating goes back to facepalm
+for #35; `Expire` is that time passing. A client that connects
 starts with no backlog, and keeps what it was shown before, so its earlier
 ratings stand.
 
@@ -156,6 +157,7 @@ ratings stand.
 | `NoRepeat` | No reading is shown to the same client twice. | `NoRepeatTest` in `test/reaction_feed_test.cc` |
 | `NoSilentGap` | Every reading made while a client was connected, up to its cursor, was shown to it or counted as missed. | `NoSilentGapTest` |
 | `RateOnlyShown` | A client rates only a reading it was shown, so a rating judges the summary the person saw. | `RateOnlyShownTest` |
+| `RateOnlyRecent` | A rating comes within five minutes of the reading being shown, so the person still remembers it; older ones are forgotten. | `RateOnlyRecentTest` |
 | `NoWaitPastAReading` | A waiting client is never left waiting while a reading it has not seen exists. | `NoWaitPastAReadingTest` |
 | `CanShow` | Something must happen: a connected client with a reading it has not seen can be shown it. | `CanShowTest` |
 | `WaitEnds` | Every wait ends, with a reading or a timeout. | `WaitEndsTest` |
@@ -168,6 +170,7 @@ Each mutation, and what TLC found:
 | `GuardReportMissed = FALSE`: dropped readings are skipped without a word | `NoSilentGap`, 5 states |
 | `GuardWakeWaiters = FALSE`: a new reading leaves waiters waiting | `NoWaitPastAReading`, 6 states |
 | `GuardRateOnlyShown = FALSE`: any reading can be rated | `RateOnlyShown`, 5 states |
+| `GuardRateOnlyRecent = FALSE`: a reading can be rated however long ago it was shown | `RateOnlyRecent`, 8 states |
 | A read shows nothing | `CanShow`, 3 states |
 | A read counts an id outside the type as missed | `TypeOK`, 3 states |
 | No fairness on `WaitTimesOut` | `WaitEnds` |
@@ -184,6 +187,7 @@ tests that stand for the properties they break:
 | Disconnecting does not wake the client's wait | `WaitEndsTest.DisconnectingEndsTheWait` |
 | A wait ended by a disconnect answers once the name reconnects | `WaitEndsTest.DisconnectingEndsTheWaitEvenWhenTheNameReconnects` |
 | Any reading can be rated | `RateOnlyShownTest.AReadingNotShownToTheClientIsNot` |
+| A rating ignores the five minutes | `RateOnlyRecentTest.NotOnceFiveMinutesHavePassed` |
 | A read shows nothing | `CanShowTest.AConnectedClientIsShownANewReading`, and nine others |
 
 A wait's tests require it to end within 5 seconds of a 10 second timeout, so

@@ -13,8 +13,10 @@ namespace facepalm {
 constexpr int kLowestScore = 1;
 constexpr int kHighestScore = 5;
 
-ReactionFeed::ReactionFeed(int capacity, OnRating on_rating)
-    : capacity_(capacity), on_rating_(std::move(on_rating)) {}
+ReactionFeed::ReactionFeed(int capacity, OnRating on_rating, Clock clock)
+    : capacity_(capacity),
+      on_rating_(std::move(on_rating)),
+      clock_(std::move(clock)) {}
 
 ReactionFeed::Client* ReactionFeed::Ready(const std::string& name) {
   const auto found = clients_.find(name);
@@ -31,10 +33,12 @@ ReactionFeed::Delivery ReactionFeed::Tell(Client& client) {
   if (client.cursor < oldest) {
     delivery.missed = static_cast<int>(oldest - client.cursor);
   }
+  Expire(client);
+  const auto now = clock_();
   for (const Reading& reading : timeline_) {
     if (reading.id >= client.cursor) {
       delivery.readings.push_back(reading);
-      client.shown.insert(reading.id);
+      client.rateable[reading.id] = now;
     }
   }
   client.cursor = next_;
@@ -107,6 +111,13 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Wait(
   return Tell(*entry);
 }
 
+void ReactionFeed::Expire(Client& client) {
+  const auto now = clock_();
+  std::erase_if(client.rateable, [&](const auto& entry) {
+    return now - entry.second > kRatingWindow;
+  });
+}
+
 bool ReactionFeed::Waiting(const std::string& client) {
   const std::scoped_lock lock(mutex_);
   const auto found = clients_.find(client);
@@ -118,8 +129,12 @@ bool ReactionFeed::Rate(const std::string& client, std::int64_t id, int score) {
   {
     const std::scoped_lock lock(mutex_);
     const auto found = clients_.find(client);
-    if (found == clients_.end() || !found->second.connected ||
-        !found->second.shown.contains(id) || score < kLowestScore ||
+    if (found == clients_.end() || !found->second.connected) {
+      return false;
+    }
+    // With GuardRateOnlyShown and GuardRateOnlyRecent.
+    Expire(found->second);
+    if (!found->second.rateable.contains(id) || score < kLowestScore ||
         score > kHighestScore) {
       return false;
     }

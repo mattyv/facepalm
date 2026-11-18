@@ -58,7 +58,9 @@ std::vector<std::string> Summaries(const ReactionFeed::Delivery& delivery) {
 class ReactionFeedTest : public ::testing::Test {
  protected:
   MockFunction<void(const ReactionFeed::Rating&)> on_rating_;
-  ReactionFeed feed_{/*capacity=*/2, on_rating_.AsStdFunction()};
+  std::chrono::steady_clock::time_point now_;
+  ReactionFeed feed_{/*capacity=*/2, on_rating_.AsStdFunction(),
+                     [this] { return now_; }};
 };
 
 using NoRepeatTest = ReactionFeedTest;
@@ -202,6 +204,39 @@ TEST_F(RateOnlyShownTest, AClientNotConnectedCannotRate) {
   EXPECT_CALL(on_rating_, Call).Times(0);
   EXPECT_FALSE(feed_.Rate("agent", id, 3));
   EXPECT_FALSE(feed_.Rate("stranger", id, 3));
+}
+
+using RateOnlyRecentTest = ReactionFeedTest;
+
+TEST_F(RateOnlyRecentTest, AReadingCanBeRatedUpToFiveMinutesAfterItWasShown) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = feed_.React("nod", "{}");
+  feed_.Read("agent");
+  now_ += std::chrono::minutes(5);
+
+  EXPECT_CALL(on_rating_, Call);
+  EXPECT_TRUE(feed_.Rate("agent", id, 3));
+}
+
+TEST_F(RateOnlyRecentTest, NotOnceFiveMinutesHavePassed) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = feed_.React("nod", "{}");
+  feed_.Read("agent");
+  now_ += std::chrono::minutes(5) + std::chrono::seconds(1);
+
+  EXPECT_CALL(on_rating_, Call).Times(0);
+  EXPECT_FALSE(feed_.Rate("agent", id, 3));
+}
+
+TEST_F(RateOnlyRecentTest, TheFiveMinutesRunFromWhenItWasShown) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = feed_.React("nod", "{}");
+  now_ += std::chrono::minutes(4);
+  feed_.Read("agent");
+  now_ += std::chrono::minutes(4);
+
+  EXPECT_CALL(on_rating_, Call);
+  EXPECT_TRUE(feed_.Rate("agent", id, 3));
 }
 
 using NoWaitPastAReadingTest = ReactionFeedTest;

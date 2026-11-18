@@ -9,7 +9,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -33,7 +32,10 @@ class ReactionFeed : public Feed {
 
   using OnRating = std::function<void(const Rating&)>;
 
-  ReactionFeed(int capacity, OnRating on_rating);
+  using Clock = std::function<std::chrono::steady_clock::time_point()>;
+
+  ReactionFeed(int capacity, OnRating on_rating,
+               Clock clock = std::chrono::steady_clock::now);
 
   // Connect: a client starts with no backlog. False, changing nothing, when
   // the name is already connected (specs/Service.tla's UniqueNames).
@@ -52,7 +54,11 @@ class ReactionFeed : public Feed {
   std::optional<Delivery> Wait(const std::string& client,
                                std::chrono::milliseconds timeout) override;
   [[nodiscard]] bool Waiting(const std::string& client);
-  // Rate: true, and passed on, only for a reading this client was shown and
+  // How long after a reading is shown it can be rated.
+  static constexpr std::chrono::minutes kRatingWindow{5};
+
+  // Rate: true, and passed on, only for a reading this client was shown in
+  // the last kRatingWindow, and
   // a score from 1 to 5.
   bool Rate(const std::string& client, std::int64_t id, int score) override;
 
@@ -60,8 +66,10 @@ class ReactionFeed : public Feed {
   struct Client {
     bool connected = false;
     bool waiting = false;
-    std::int64_t cursor = 0;       // The first id not yet told about.
-    std::set<std::int64_t> shown;  // Kept across reconnects, for ratings.
+    std::int64_t cursor = 0;  // The first id not yet told about.
+    // When each reading was shown, while it can still be rated; kept across
+    // reconnects.
+    std::map<std::int64_t, std::chrono::steady_clock::time_point> rateable;
   };
 
   // The client, if it is connected and not waiting.
@@ -69,9 +77,13 @@ class ReactionFeed : public Feed {
   // Tell: the readings since the client's cursor, the dropped ones counted
   // as missed, and the cursor moved past them all.
   Delivery Tell(Client& client);
+  // ReactionFeed!Expire: forgets what the client was shown too long ago to
+  // rate.
+  void Expire(Client& client);
 
   const int capacity_;
   const OnRating on_rating_;
+  const Clock clock_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::deque<Reading> timeline_;  // Oldest first.
