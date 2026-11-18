@@ -134,6 +134,9 @@ std::optional<std::string> UnixStream::ReadLine() {
   while (true) {
     const std::size_t newline = pending_.find('\n');
     if (newline != std::string::npos) {
+      if (newline > kLongestLine) {
+        return std::nullopt;
+      }
       std::string line = pending_.substr(0, newline);
       pending_.erase(0, newline + 1);
       return line;

@@ -138,6 +138,29 @@ TEST_F(UnixSocketTest, ALineTooLongEndsTheConnection) {
   close(client);
 }
 
+TEST_F(UnixSocketTest, ALineTooLongEndsTheConnectionEvenOnceItsNewlineComes) {
+  auto listener = Listen();
+  const int client = Dial(path_);
+  auto stream = listener->Accept();
+
+  Send(client, std::string(UnixStream::kLongestLine + 1, 'x') + "\n");
+
+  EXPECT_THAT(stream->ReadLine(), Eq(std::nullopt));
+  close(client);
+}
+
+TEST_F(UnixSocketTest, ALineExactlyAtTheLimitArrives) {
+  auto listener = Listen();
+  const int client = Dial(path_);
+  auto stream = listener->Accept();
+  const std::string longest(UnixStream::kLongestLine, 'x');
+
+  Send(client, longest + "\n");
+
+  EXPECT_THAT(stream->ReadLine(), Eq(longest));
+  close(client);
+}
+
 TEST_F(UnixSocketTest, CloseEndsAnAcceptAndRemovesTheSocketFile) {
   auto listener = Listen();
   auto accepted =
