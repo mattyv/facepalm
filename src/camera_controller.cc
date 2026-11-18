@@ -69,12 +69,13 @@ void CameraController::OnClosed() {
   OpenIfWanted();
 }
 
-// specs/CameraLifecycle.tla, DeviceLost: the OS dropped an open camera. One
-// still opening reports OpenFailed in its own time.
+// specs/CameraLifecycle.tla, DeviceLost: the OS dropped an open camera, which
+// ends its attempt. One still opening reports OpenFailed in its own time.
 void CameraController::OnDeviceLost() {
   device_ = false;
   if (state_ == State::kOpen) {
     state_ = State::kClosed;
+    ++attempt_;
   }
 }
 
@@ -84,9 +85,11 @@ void CameraController::OnDeviceBack() {
   OpenIfWanted();
 }
 
-// specs/CameraLifecycle.tla, Capture: only an open camera's frames count.
-std::optional<std::uint64_t> CameraController::OnFrameCaptured() {
-  if (state_ != State::kOpen) {
+// specs/CameraLifecycle.tla, Ticket, with GuardTicketChecksCapture: only an
+// open camera's frames count, and only those its current attempt captured.
+std::optional<std::uint64_t> CameraController::OnFrameCaptured(
+    std::uint64_t attempt) {
+  if (state_ != State::kOpen || attempt != attempt_) {
     return std::nullopt;
   }
   return consent_epoch_;
@@ -112,15 +115,18 @@ void CameraController::OpenIfWanted() {
     return;
   }
   state_ = State::kOpening;
-  camera_.Open();
+  ++attempt_;
+  camera_.Open(attempt_);
 }
 
-// The closing half of RevokeConsent and Leave.
+// The closing half of RevokeConsent and Leave: specs/CameraLifecycle.tla's
+// Closing, which ends the attempt.
 void CameraController::StartClosing() {
   if (state_ != State::kOpening && state_ != State::kOpen) {
     return;
   }
   state_ = State::kClosing;
+  ++attempt_;
   camera_.Close();
 }
 

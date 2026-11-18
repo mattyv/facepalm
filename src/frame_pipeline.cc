@@ -42,13 +42,18 @@ void FramePipeline::OnFrame(const Frame& frame) {
   width_ = frame.width;
   height_ = frame.height;
   timestamp_ms_ = frame.timestamp_ms;
+  attempt_ = frame.attempt;
   slot_.store(Slot::kCopied, std::memory_order_release);
   control_([this] { Ticket(); });
 }
 
 // specs/FramePipeline.tla: Ticket, with GuardFreeOnRefusal.
 void FramePipeline::Ticket() {
-  const std::optional<std::uint64_t> ticket = tickets_.OnFrameCaptured();
+  // CameraLifecycle's Ticket, with GuardTicketChecksCapture: the attempt
+  // was stamped at capture, so a delay here cannot move the frame into a
+  // later one (#40).
+  const std::optional<std::uint64_t> ticket =
+      tickets_.OnFrameCaptured(attempt_);
   if (!ticket) {
     Free();
     return;

@@ -52,9 +52,9 @@ design's protections is a `Guard` constant, so a mutation sets one to
 | `CanOpen` | Something must happen: a wanted, closed camera can start opening. | `WantedOpensTest` |
 | `RevokingCloses` | Revoking consent leads to the camera being closed. | `RevokingClosesTest` |
 | `LastLeaveCloses` | No subscribers leads to the camera being closed. | `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` |
-| `WantedOpens` | From every point, consent, a subscriber, the device and the helper, all held, lead to the camera being open (#45). | `WantedOpensTest` |
-| `NoCaptureWhenClosed` | The device never captures while the controller believes the camera closed (#38). | Nothing yet |
-| `NoStaleEvent` | No event comes from a frame copied before consent was last revoked (#40). | Nothing yet |
+| `WantedOpens` | From every point, consent, a subscriber, the device and the helper, all held, lead to the camera being open (#45). | `WantedOpensTest`; for a camera plugged in after none was found (#39), `SessionCameraTest.ReportsAnyCameraConnectingBeforeOneIsPicked` |
+| `NoCaptureWhenClosed` | The device never captures while the controller believes the camera closed (#38). | `SessionCameraTest.StartsNothingWhenPermissionIsGrantedAfterClose`, `StartsOnlyForTheCurrentAttempt`, `ARefusalAfterCloseReportsNothing` in `test/session_camera_test.cc` |
+| `NoStaleEvent` | No event comes from a frame copied before consent was last revoked (#40). | `NoStaleEventTest` in `test/camera_controller_test.cc`; the pipeline's tests check the frame's stamped attempt reaches its ticket |
 
 Each mutation, and what TLC found:
 
@@ -90,6 +90,21 @@ tests that stand for the properties they break:
 | A new controller opens when consent holds | `DeadHelperHoldsNoCameraTest`, and four others |
 | The device coming back does not reopen | `WantedOpensTest` |
 | Closing does not reopen when wanted | `WantedOpensTest` |
+| A frame from an ended attempt gets a ticket | `NoStaleEventTest.AFrameFromBeforeARevokeAndReopenGetsNoTicket` |
+| Closing does not end the attempt | `NoStaleEventTest.EachOpenIsANewAttemptAndClosingEndsIt` |
+| Losing an open camera does not end its attempt | `NoStaleEventTest.LosingAnOpenCameraEndsItsAttempt` |
+
+`src/session_camera.cc` implements the session side: the start task, with
+`GuardStartChecksAttempt`, and the camera coming back, with
+`GuardDiscoverAnyCamera`. The Mac capture callback stamps each frame with the
+attempt as it starts, and `src/frame_pipeline.cc` hands that stamp to the
+ticket.
+
+| Mutation to `SessionCamera` or `FramePipeline` | Fails |
+|---|---|
+| A start for a closed attempt runs | `SessionCameraTest.StartsNothingWhenPermissionIsGrantedAfterClose`, `StartsOnlyForTheCurrentAttempt`, `ARefusalAfterCloseReportsNothing` |
+| Only the camera in use counts coming back | `SessionCameraTest.ReportsAnyCameraConnectingBeforeOneIsPicked` |
+| The pipeline asks for a ticket without the frame's stamp | Every `FramePipeline` test that captures a frame |
 
 ## `FramePipeline`: how a frame reaches the face model
 

@@ -1,6 +1,7 @@
 #ifndef FACEPALM_SRC_MACOS_AVFOUNDATION_SESSION_H_
 #define FACEPALM_SRC_MACOS_AVFOUNDATION_SESSION_H_
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -33,7 +34,7 @@ class AvFoundationSession : public CaptureSession {
   void RequestPermission(std::function<void(bool granted)> done) override;
   std::optional<std::string> Configure() override;
   FrameRates SupportedFrameRates() override;
-  bool Start(int frames_per_second) override;
+  bool Start(int frames_per_second, std::uint64_t attempt) override;
   void Stop() override;
 
  private:
