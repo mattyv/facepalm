@@ -490,9 +490,9 @@ facepalm::Config LoadConfig() {
 }
 
 // Loads Nodding Pigeon's face detector, face_detection_short_range.tflite,
-// from the folder that holds the face model at `model_path`, or returns null
-// with a note that gestures are off when it is not there or there is no
-// model.
+// from the folder that holds the face model at `model_path`. Returns null
+// silently when there is no model or no dylib build, or with a note that
+// gestures are off when the detector cannot be loaded.
 std::unique_ptr<facepalm::FaceDetector> LoadDetector(const char* model_path) {
   if (model_path == nullptr) {
     return nullptr;
