@@ -28,6 +28,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 148 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 132,884 |
+| `Service.cfg` | three connections, two client names | holds | 396 |
 
 ## `CameraLifecycle`: when the camera may be on
 
@@ -186,3 +187,35 @@ tests that stand for the properties they break:
 
 A wait's tests require it to end within 5 seconds of a 10 second timeout, so
 a missing wake fails them rather than passing late.
+
+## `Service`: the background service and its connections
+
+Models #37's service. It accepts connections on a socket only its user can
+open, and gives each its own thread. A connection's first line names its
+client, which connects that client to `ReactionFeed`; the thread then reads,
+waits for a reading, or rates. The peer can hang up at any time, but a
+thread blocked in a wait is not reading its socket, so it notices only once
+the wait ends. Stopping the service closes every connection, and must not
+hang on a waiting one, since a wait can last its whole timeout.
+
+| Property | What it says | Test |
+|---|---|---|
+| `UniqueNames` | No two connections speak for the same client. | Nothing yet |
+| `FeedMatchesConns` | The feed's clients are exactly the named connections still open. | Nothing yet |
+| `StopWakesWaiters` | Once stopping, no thread is left blocked in a wait. | Nothing yet |
+| `NothingAfterStop` | Once stopped, every connection is closed. | Nothing yet |
+| `CanAccept` | Something must happen: a running service can accept a connection into a free slot. | Nothing yet |
+| `StopEnds` | Stopping always finishes. | Nothing yet |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardUniqueNames = FALSE`: a name already connected is accepted | `UniqueNames`, 5 states |
+| `GuardLeaveOnClose = FALSE`: a closed connection's client stays in the feed | `FeedMatchesConns`, 5 states |
+| `GuardStopWakes = FALSE`: stopping leaves a wait to its timeout | `StopWakesWaiters`, 5 states; with it left out, `StopEnds` |
+| `GuardRefuseWhenStopping = FALSE`: connections are accepted while stopping | `StopEnds`: new ones can keep it from finishing |
+| `Accept` never enabled | `CanAccept`, in the initial state |
+| `Accept` writes a connection state outside the type | `TypeOK`, 2 states |
+| No fairness on `Closed` | `StopEnds` |
+| No fairness on `Stopped` | `StopEnds` |
