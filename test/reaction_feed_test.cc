@@ -291,6 +291,24 @@ TEST_F(WaitEndsTest, DisconnectingEndsTheWait) {
   EXPECT_THAT(Answered(waited), Eq(std::nullopt));
 }
 
+// ReactionFeed!Disconnect ends the wait with nothing, even when the name
+// connects again before the waiting thread wakes: the ended wait must not
+// answer for the new connection, nor move its cursor.
+TEST_F(WaitEndsTest, DisconnectingEndsTheWaitEvenWhenTheNameReconnects) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto waited = std::async(std::launch::async,
+                           [this] { return feed_.Wait("agent", kLong); });
+  while (!feed_.Waiting("agent")) {
+    std::this_thread::yield();
+  }
+
+  feed_.Disconnect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
+
+  EXPECT_THAT(Answered(waited), Eq(std::nullopt));
+  EXPECT_FALSE(feed_.Waiting("agent"));
+}
+
 // specs/Service.tla's UniqueNames: a name already connected is refused,
 // and the client keeps its place.
 TEST_F(WaitEndsTest, ConnectingANameAlreadyConnectedIsRefused) {

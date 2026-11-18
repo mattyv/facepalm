@@ -182,6 +182,7 @@ tests that stand for the properties they break:
 | Dropped readings are not counted as missed | `NoSilentGapTest.DroppedReadingsAreCountedAsMissed`, `NoWaitPastAReadingTest.AMissedReadingAlsoReturnsAtOnce` |
 | A new reading does not wake waiters | `NoWaitPastAReadingTest.ANewReadingEndsTheWait`, and two others |
 | Disconnecting does not wake the client's wait | `WaitEndsTest.DisconnectingEndsTheWait` |
+| A wait ended by a disconnect answers once the name reconnects | `WaitEndsTest.DisconnectingEndsTheWaitEvenWhenTheNameReconnects` |
 | Any reading can be rated | `RateOnlyShownTest.AReadingNotShownToTheClientIsNot` |
 | A read shows nothing | `CanShowTest.AConnectedClientIsShownANewReading`, and nine others |
 

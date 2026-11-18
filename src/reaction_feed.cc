@@ -97,7 +97,10 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Wait(
   entry->waiting = true;
   changed_.wait_for(lock, timeout,
                     [&] { return !entry->waiting || entry->cursor < next_; });
-  if (!entry->connected) {
+  // Only Disconnect clears `waiting` from outside, so this also holds when
+  // the name has already connected again: the ended wait answers nothing,
+  // and leaves the new connection's place alone.
+  if (!entry->waiting) {
     return std::nullopt;
   }
   entry->waiting = false;
