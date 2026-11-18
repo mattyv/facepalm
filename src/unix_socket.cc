@@ -105,6 +105,9 @@ std::unique_ptr<Stream> UnixListener::Accept() {
     if (fds[1].revents != 0) {
       return nullptr;  // Closed.
     }
+    if (fds[0].revents == 0) {
+      continue;  // A signal interrupted the poll; accept(2) would block.
+    }
     connection = accept(fd_, nullptr, nullptr);
   }
   return std::make_unique<UnixStream>(connection);

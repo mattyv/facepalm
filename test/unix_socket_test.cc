@@ -1,11 +1,14 @@
 #include "src/unix_socket.h"
 
+#include <pthread.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
 #include <array>
+#include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -13,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -29,6 +33,8 @@ using ::testing::IsNull;
 using ::testing::NotNull;
 
 constexpr auto kPrompt = std::chrono::seconds(5);
+// Long enough for another thread to reach a blocking call.
+constexpr auto kSettle = std::chrono::milliseconds(50);
 
 // A client end, connected to `path`; -1 when it cannot connect.
 int Dial(const std::string& path) {
@@ -159,6 +165,35 @@ TEST_F(UnixSocketTest, ALineExactlyAtTheLimitArrives) {
 
   EXPECT_THAT(stream->ReadLine(), Eq(longest));
   close(client);
+}
+
+// A signal delivered to the accepting thread interrupts its poll, which then
+// reports nothing readable. Accept must poll again, not fall into accept(2),
+// where Close could no longer wake it.
+TEST_F(UnixSocketTest, ASignalDoesNotKeepCloseFromEndingAnAccept) {
+  struct sigaction action{};
+  action.sa_handler = [](int) {};  // No SA_RESTART: poll fails with EINTR.
+  struct sigaction before{};
+  ASSERT_THAT(sigaction(SIGUSR1, &action, &before), Eq(0));
+  auto listener = Listen();
+  std::promise<pthread_t> accepting;
+  auto accepted = std::async(std::launch::async, [&] {
+    accepting.set_value(pthread_self());
+    return listener->Accept();
+  });
+  const pthread_t thread = accepting.get_future().get();
+  std::this_thread::sleep_for(kSettle);  // Let the thread reach its poll.
+  ASSERT_THAT(pthread_kill(thread, SIGUSR1), Eq(0));
+  std::this_thread::sleep_for(kSettle);  // Let the signal land first.
+
+  listener->Close();
+
+  if (accepted.wait_for(kPrompt) != std::future_status::ready) {
+    ADD_FAILURE() << "Close left Accept blocked";
+    pthread_kill(thread, SIGUSR1);  // Unstick the thread, so the test ends.
+  }
+  EXPECT_THAT(accepted.get(), IsNull());
+  ASSERT_THAT(sigaction(SIGUSR1, &before, nullptr), Eq(0));
 }
 
 TEST_F(UnixSocketTest, CloseEndsAnAcceptAndRemovesTheSocketFile) {
