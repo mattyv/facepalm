@@ -25,15 +25,22 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
-| `CameraLifecycle.cfg` | two clients, one helper restart | holds | 148 |
+| `CameraLifecycle.cfg` | two clients, one helper restart | holds | 1,644 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 
 ## `CameraLifecycle`: when the camera may be on
 
 Models consent, client subscriptions, the camera device, frames in flight,
 and the helper process dying and restarting. The OS can refuse or take away
-the device. Each of the design's protections is a `Guard` constant, so a
-mutation sets one to `FALSE` in a copy of the config.
+the device. Two facts are kept apart, as the code keeps them apart (#38):
+`camera` is what the controller believes, and `capturing` is whether the
+capture device runs; likewise `device` is whether a camera is attached, and
+`usable` whether the controller believes one is. Opening is a start task on
+the session queue, which can run late, after a permission prompt; closing
+makes it stale. A frame is copied when captured and given its consent ticket
+later, so it records whether its capture has ended (#40). Each of the
+design's protections is a `Guard` constant, so a mutation sets one to
+`FALSE` in a copy of the config.
 
 | Property | What it says | Test |
 |---|---|---|
@@ -45,7 +52,9 @@ mutation sets one to `FALSE` in a copy of the config.
 | `CanOpen` | Something must happen: a wanted, closed camera can start opening. | `WantedOpensTest` |
 | `RevokingCloses` | Revoking consent leads to the camera being closed. | `RevokingClosesTest` |
 | `LastLeaveCloses` | No subscribers leads to the camera being closed. | `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` |
-| `WantedOpens` | Consent, a subscriber, the device and the helper, all held, lead to the camera being open. | `WantedOpensTest` |
+| `WantedOpens` | From every point, consent, a subscriber, the device and the helper, all held, lead to the camera being open (#45). | `WantedOpensTest` |
+| `NoCaptureWhenClosed` | The device never captures while the controller believes the camera closed (#38). | Nothing yet |
+| `NoStaleEvent` | No event comes from a frame copied before consent was last revoked (#40). | Nothing yet |
 
 Each mutation, and what TLC found:
 
@@ -53,15 +62,19 @@ Each mutation, and what TLC found:
 |---|---|
 | `GuardOpenNeedsConsent = FALSE`: open without consent | `OpenOnlyWithConsent`, 3 states |
 | `GuardRevokeCloses = FALSE`: revoking leaves it open | `OpenOnlyWithConsent`, 5 states |
-| `GuardRevokeDiscards = FALSE`: a frame in flight survives revoking | `NoEventWithoutConsent`, 8 states |
+| `GuardRevokeDiscards = FALSE`: a ticketed frame survives revoking | `NoEventWithoutConsent`, 10 states |
 | `GuardLastLeaveCloses = FALSE`: the last client leaving leaves it open | `OpenOnlyWhenSubscribed`, 5 states |
-| `GuardEmitToSubscribers = FALSE`: a reaction goes to a client that left | `NoEventToStranger`, 7 states |
+| `GuardEmitToSubscribers = FALSE`: a reaction goes to a client that left | `NoEventToStranger`, 8 states |
 | `GuardRestartRechecks = FALSE`: a restart reopens what was open | `OpenOnlyWhenSubscribed`, 6 states |
-| `Crash` leaves the camera as it was (checked alone) | `DeadHelperHoldsNoCamera` |
-| `Open` also requires no restart yet | `CanOpen` |
-| `Closed` writes a state outside the type | `TypeOK` |
-| No fairness on `Closed` | `RevokingCloses`; checked alone, `LastLeaveCloses` |
-| No fairness on `Open`, or on `Opened` | `WantedOpens` |
+| `Crash` leaves the camera as it was | `OpenOnlyWhenSubscribed`, 5 states; checked alone, `DeadHelperHoldsNoCamera` |
+| `GuardStartChecksAttempt = FALSE`: a start task runs after its attempt was closed | `NoCaptureWhenClosed`, 7 states |
+| `GuardDiscoverAnyCamera = FALSE`: with no camera picked, a new one is ignored | `WantedOpens` (#39) |
+| `GuardTicketChecksCapture = FALSE`: a frame from an ended capture gets a ticket | `NoStaleEvent`, 13 states |
+| `GuardReopens = FALSE`: the camera opens only once | `CanOpen`; with it left out, `WantedOpens`, which the old form, `<>[]Wanted => <>(camera = "open")`, let pass (#45) |
+| `Start` never enabled | `WantedOpens` |
+| No fairness on `Start`, `Open` or `Closed` | `WantedOpens`; for `Closed`, `RevokingCloses` and `LastLeaveCloses` |
+| `Open` also requires no restart yet | `CanOpen`, 5 states |
+| `Closed` writes a state outside the type | `TypeOK`, 6 states |
 
 `src/camera_controller.cc` implements the spec, and each of its methods names
 the action it implements. The same mutations, made to that code, fail the
