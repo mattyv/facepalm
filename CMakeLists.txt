@@ -45,6 +45,7 @@ facepalm_unit(frame_pipeline)
 target_link_libraries(frame_pipeline PUBLIC frame)
 facepalm_unit(head_pose)
 facepalm_unit(reaction)
+facepalm_unit(reaction_feed)
 # head_pose is pure computation, so the reaction's tests run it for real.
 target_link_libraries(reaction PUBLIC head_pose)
 facepalm_unit(session_camera)

@@ -152,12 +152,12 @@ ratings stand.
 
 | Property | What it says | Test |
 |---|---|---|
-| `NoRepeat` | No reading is shown to the same client twice. | Nothing yet |
-| `NoSilentGap` | Every reading made while a client was connected, up to its cursor, was shown to it or counted as missed. | Nothing yet |
-| `RateOnlyShown` | A client rates only a reading it was shown, so a rating judges the summary the person saw. | Nothing yet |
-| `NoWaitPastAReading` | A waiting client is never left waiting while a reading it has not seen exists. | Nothing yet |
-| `CanShow` | Something must happen: a connected client with a reading it has not seen can be shown it. | Nothing yet |
-| `WaitEnds` | Every wait ends, with a reading or a timeout. | Nothing yet |
+| `NoRepeat` | No reading is shown to the same client twice. | `NoRepeatTest` in `test/reaction_feed_test.cc` |
+| `NoSilentGap` | Every reading made while a client was connected, up to its cursor, was shown to it or counted as missed. | `NoSilentGapTest` |
+| `RateOnlyShown` | A client rates only a reading it was shown, so a rating judges the summary the person saw. | `RateOnlyShownTest` |
+| `NoWaitPastAReading` | A waiting client is never left waiting while a reading it has not seen exists. | `NoWaitPastAReadingTest` |
+| `CanShow` | Something must happen: a connected client with a reading it has not seen can be shown it. | `CanShowTest` |
+| `WaitEnds` | Every wait ends, with a reading or a timeout. | `WaitEndsTest` |
 
 Each mutation, and what TLC found:
 
@@ -170,3 +170,19 @@ Each mutation, and what TLC found:
 | A read shows nothing | `CanShow`, 3 states |
 | A read counts an id outside the type as missed | `TypeOK`, 3 states |
 | No fairness on `WaitTimesOut` | `WaitEnds` |
+
+`src/reaction_feed.cc` implements the spec, and each of its methods names
+the action it implements. The same mutations, made to that code, fail the
+tests that stand for the properties they break:
+
+| Mutation to `ReactionFeed` | Fails |
+|---|---|
+| A read leaves the cursor where it was | `NoRepeatTest`, `NoWaitPastAReadingTest.AMissedReadingAlsoReturnsAtOnce` |
+| Dropped readings are not counted as missed | `NoSilentGapTest.DroppedReadingsAreCountedAsMissed`, `NoWaitPastAReadingTest.AMissedReadingAlsoReturnsAtOnce` |
+| A new reading does not wake waiters | `NoWaitPastAReadingTest.ANewReadingEndsTheWait`, and two others |
+| Disconnecting does not wake the client's wait | `WaitEndsTest.DisconnectingEndsTheWait` |
+| Any reading can be rated | `RateOnlyShownTest.AReadingNotShownToTheClientIsNot` |
+| A read shows nothing | `CanShowTest.AConnectedClientIsShownANewReading`, and nine others |
+
+A wait's tests require it to end within 5 seconds of a 10 second timeout, so
+a missing wake fails them rather than passing late.
