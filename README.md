@@ -27,8 +27,15 @@ Nothing works end to end yet. The design is on
     timeline of interpreted reactions, each with the summary line the person
     sees and the detail the agent gets. A client reads what came since it
     last looked, or waits for the next reading, and the person can rate a
-    reading 1 to 5. It follows `specs/ReactionFeed.tla`; nothing feeds it or
-    reads from it yet, which #37's background service will do.
+    reading 1 to 5. It follows `specs/ReactionFeed.tla`.
+-   `src/service`: the background service's connections (#37), following
+    `specs/Service.tla`. Each connection names its client, then reads,
+    waits for a reading, or rates one, in the protocol of `src/protocol`:
+    a request is a line of text, and each reply a line of JSON. Stopping
+    ends every connection, even one waiting.
+-   `src/unix_socket`: the service's connections over a Unix domain socket
+    that only its user can open, on macOS and Linux; tested on real
+    sockets.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
     to a tenth of a degree, as JSON text.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
@@ -55,6 +62,8 @@ Nothing works end to end yet. The design is on
     (#20).
 -   `specs/ReactionFeed.tla`: how readings reach each client, waits end, and
     only a reading that was shown can be rated (#36).
+-   `specs/Service.tla`: the service's connections, unique client names,
+    and a shutdown that cannot hang on a waiting connection (#37).
 
 ## Build and test
 

@@ -64,7 +64,7 @@ class ReactionFeedTest : public ::testing::Test {
 using NoRepeatTest = ReactionFeedTest;
 
 TEST_F(NoRepeatTest, AReadShowsOnlyWhatCameSinceTheLast) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   feed_.React("nod", "{}");
   ASSERT_THAT(
       feed_.Read("agent"),
@@ -79,8 +79,8 @@ TEST_F(NoRepeatTest, AReadShowsOnlyWhatCameSinceTheLast) {
 }
 
 TEST_F(NoRepeatTest, EachClientHasItsOwnPlace) {
-  feed_.Connect("agent");
-  feed_.Connect("ai-pair");
+  ASSERT_TRUE(feed_.Connect("agent"));
+  ASSERT_TRUE(feed_.Connect("ai-pair"));
   feed_.React("nod", "{}");
   feed_.Read("agent");
 
@@ -88,7 +88,7 @@ TEST_F(NoRepeatTest, EachClientHasItsOwnPlace) {
 }
 
 TEST_F(NoRepeatTest, AWaitAnsweredByAReadingMovesPastIt) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   auto waited = std::async(std::launch::async,
                            [this] { return feed_.Wait("agent", kLong); });
   while (!feed_.Waiting("agent")) {
@@ -101,10 +101,10 @@ TEST_F(NoRepeatTest, AWaitAnsweredByAReadingMovesPastIt) {
 }
 
 TEST_F(NoRepeatTest, AReconnectingClientStartsWithNoBacklog) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   feed_.Disconnect("agent");
   feed_.React("nod", "{}");
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
 
   EXPECT_THAT(Summaries(Got(feed_.Read("agent"))), IsEmpty());
 }
@@ -112,7 +112,7 @@ TEST_F(NoRepeatTest, AReconnectingClientStartsWithNoBacklog) {
 using NoSilentGapTest = ReactionFeedTest;
 
 TEST_F(NoSilentGapTest, DroppedReadingsAreCountedAsMissed) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   feed_.React("nod", "{}");
   feed_.React("frown", "{}");
   feed_.React("smile", "{}");
@@ -125,7 +125,7 @@ TEST_F(NoSilentGapTest, DroppedReadingsAreCountedAsMissed) {
 }
 
 TEST_F(NoSilentGapTest, AReadingCarriesItsIdAndDetail) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   const std::int64_t id = feed_.React("nod", R"({"gesture":"nod"})");
 
   const auto delivery = feed_.Read("agent");
@@ -137,7 +137,7 @@ TEST_F(NoSilentGapTest, AReadingCarriesItsIdAndDetail) {
 }
 
 TEST_F(NoSilentGapTest, AClientNotConnectedGetsNothing) {
-  feed_.Connect("left");
+  ASSERT_TRUE(feed_.Connect("left"));
   feed_.Disconnect("left");
   feed_.React("nod", "{}");
 
@@ -150,7 +150,7 @@ TEST_F(NoSilentGapTest, AClientNotConnectedGetsNothing) {
 using RateOnlyShownTest = ReactionFeedTest;
 
 TEST_F(RateOnlyShownTest, AShownReadingIsRated) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   const std::int64_t id = feed_.React("nod", "{}");
   feed_.Read("agent");
 
@@ -162,8 +162,8 @@ TEST_F(RateOnlyShownTest, AShownReadingIsRated) {
 }
 
 TEST_F(RateOnlyShownTest, AReadingNotShownToTheClientIsNot) {
-  feed_.Connect("agent");
-  feed_.Connect("ai-pair");
+  ASSERT_TRUE(feed_.Connect("agent"));
+  ASSERT_TRUE(feed_.Connect("ai-pair"));
   const std::int64_t id = feed_.React("nod", "{}");
   feed_.Read("ai-pair");
 
@@ -173,18 +173,18 @@ TEST_F(RateOnlyShownTest, AReadingNotShownToTheClientIsNot) {
 }
 
 TEST_F(RateOnlyShownTest, AReadingShownBeforeAReconnectStillCan) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   const std::int64_t id = feed_.React("nod", "{}");
   feed_.Read("agent");
   feed_.Disconnect("agent");
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
 
   EXPECT_CALL(on_rating_, Call);
   EXPECT_TRUE(feed_.Rate("agent", id, 2));
 }
 
 TEST_F(RateOnlyShownTest, AScoreOutsideOneToFiveIsRefused) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   const std::int64_t id = feed_.React("nod", "{}");
   feed_.Read("agent");
 
@@ -194,7 +194,7 @@ TEST_F(RateOnlyShownTest, AScoreOutsideOneToFiveIsRefused) {
 }
 
 TEST_F(RateOnlyShownTest, AClientNotConnectedCannotRate) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   const std::int64_t id = feed_.React("nod", "{}");
   feed_.Read("agent");
   feed_.Disconnect("agent");
@@ -207,7 +207,7 @@ TEST_F(RateOnlyShownTest, AClientNotConnectedCannotRate) {
 using NoWaitPastAReadingTest = ReactionFeedTest;
 
 TEST_F(NoWaitPastAReadingTest, ANewReadingEndsTheWait) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   auto waited = std::async(std::launch::async,
                            [this] { return feed_.Wait("agent", kLong); });
   while (!feed_.Waiting("agent")) {
@@ -221,14 +221,14 @@ TEST_F(NoWaitPastAReadingTest, ANewReadingEndsTheWait) {
 }
 
 TEST_F(NoWaitPastAReadingTest, AReadingAlreadyThereReturnsAtOnce) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   feed_.React("nod", "{}");
 
   EXPECT_THAT(Summaries(Got(feed_.Wait("agent", kLong))), ElementsAre("nod"));
 }
 
 TEST_F(NoWaitPastAReadingTest, AMissedReadingAlsoReturnsAtOnce) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   feed_.React("nod", "{}");
   feed_.React("frown", "{}");
   feed_.React("smile", "{}");
@@ -246,14 +246,14 @@ TEST_F(NoWaitPastAReadingTest, AMissedReadingAlsoReturnsAtOnce) {
 using CanShowTest = ReactionFeedTest;
 
 TEST_F(CanShowTest, AConnectedClientIsShownANewReading) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   feed_.React("nod", "{}");
 
   EXPECT_THAT(Summaries(Got(feed_.Read("agent"))), ElementsAre("nod"));
 }
 
 TEST_F(CanShowTest, ASecondWaitFromTheSameClientIsRefused) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   auto waited = std::async(std::launch::async,
                            [this] { return feed_.Wait("agent", kLong); });
   while (!feed_.Waiting("agent")) {
@@ -269,7 +269,7 @@ TEST_F(CanShowTest, ASecondWaitFromTheSameClientIsRefused) {
 using WaitEndsTest = ReactionFeedTest;
 
 TEST_F(WaitEndsTest, AWaitWithNoReadingTimesOutEmpty) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
 
   const auto delivery = feed_.Wait("agent", kShort);
 
@@ -279,7 +279,7 @@ TEST_F(WaitEndsTest, AWaitWithNoReadingTimesOutEmpty) {
 }
 
 TEST_F(WaitEndsTest, DisconnectingEndsTheWait) {
-  feed_.Connect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
   auto waited = std::async(std::launch::async,
                            [this] { return feed_.Wait("agent", kLong); });
   while (!feed_.Waiting("agent")) {
@@ -291,11 +291,13 @@ TEST_F(WaitEndsTest, DisconnectingEndsTheWait) {
   EXPECT_THAT(Answered(waited), Eq(std::nullopt));
 }
 
-TEST_F(WaitEndsTest, ConnectingTwiceKeepsTheClientsPlace) {
-  feed_.Connect("agent");
+// specs/Service.tla's UniqueNames: a name already connected is refused,
+// and the client keeps its place.
+TEST_F(WaitEndsTest, ConnectingANameAlreadyConnectedIsRefused) {
+  EXPECT_TRUE(feed_.Connect("agent"));
   feed_.React("nod", "{}");
-  feed_.Connect("agent");
 
+  EXPECT_FALSE(feed_.Connect("agent"));
   EXPECT_THAT(Summaries(Got(feed_.Read("agent"))), ElementsAre("nod"));
 }
 

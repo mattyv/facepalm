@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+#include "src/feed.h"
+
 namespace facepalm {
 
 // How readings reach each client (#36), following specs/ReactionFeed.tla.
@@ -21,19 +23,8 @@ namespace facepalm {
 // session or AI Pair, reads what came since it last looked, or waits for
 // the next reading. The person rates a reading the client was shown, 1-5.
 // Thread-safe.
-class ReactionFeed {
+class ReactionFeed : public Feed {
  public:
-  struct Reading {
-    std::int64_t id;
-    std::string summary;  // The one line the person sees and rates.
-    std::string detail;   // The full context the agent gets, as JSON.
-  };
-
-  struct Delivery {
-    std::vector<Reading> readings;
-    int missed = 0;  // Readings dropped before this client saw them.
-  };
-
   struct Rating {
     std::string client;
     std::int64_t id;
@@ -44,26 +35,26 @@ class ReactionFeed {
 
   ReactionFeed(int capacity, OnRating on_rating);
 
-  // Connect: a client starts with no backlog. Connecting again changes
-  // nothing.
-  void Connect(const std::string& client);
+  // Connect: a client starts with no backlog. False, changing nothing, when
+  // the name is already connected (specs/Service.tla's UniqueNames).
+  [[nodiscard]] bool Connect(const std::string& client) override;
   // Disconnect: ends the client's wait.
-  void Disconnect(const std::string& client);
+  void Disconnect(const std::string& client) override;
   // React: adds a reading, drops the oldest past capacity, and answers every
   // waiting client. Returns the reading's id.
   std::int64_t React(std::string summary, std::string detail);
   // Read: what came since the client last looked; nullopt when it is not
   // connected or is waiting.
-  std::optional<Delivery> Read(const std::string& client);
+  std::optional<Delivery> Read(const std::string& client) override;
   // Wait: as Read, but with nothing new, waits up to `timeout` for a
   // reading. nullopt when not connected, already waiting, or disconnected
   // while waiting.
   std::optional<Delivery> Wait(const std::string& client,
-                               std::chrono::milliseconds timeout);
+                               std::chrono::milliseconds timeout) override;
   [[nodiscard]] bool Waiting(const std::string& client);
   // Rate: true, and passed on, only for a reading this client was shown and
   // a score from 1 to 5.
-  bool Rate(const std::string& client, std::int64_t id, int score);
+  bool Rate(const std::string& client, std::int64_t id, int score) override;
 
  private:
   struct Client {

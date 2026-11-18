@@ -200,12 +200,12 @@ hang on a waiting one, since a wait can last its whole timeout.
 
 | Property | What it says | Test |
 |---|---|---|
-| `UniqueNames` | No two connections speak for the same client. | Nothing yet |
-| `FeedMatchesConns` | The feed's clients are exactly the named connections still open. | Nothing yet |
-| `StopWakesWaiters` | Once stopping, no thread is left blocked in a wait. | Nothing yet |
-| `NothingAfterStop` | Once stopped, every connection is closed. | Nothing yet |
-| `CanAccept` | Something must happen: a running service can accept a connection into a free slot. | Nothing yet |
-| `StopEnds` | Stopping always finishes. | Nothing yet |
+| `UniqueNames` | No two connections speak for the same client. | `UniqueNamesTest` in `test/service_test.cc`; `ConnectingANameAlreadyConnectedIsRefused` in `test/reaction_feed_test.cc` |
+| `FeedMatchesConns` | The feed's clients are exactly the named connections still open. | `FeedMatchesConnsTest` |
+| `StopWakesWaiters` | Once stopping, no thread is left blocked in a wait. | `StopWakesWaitersTest` |
+| `NothingAfterStop` | Once stopped, every connection is closed. | `NothingAfterStopTest`, `NothingAfterStopLateTest` |
+| `CanAccept` | Something must happen: a running service can accept a connection into a free slot. | `CanAcceptTest` |
+| `StopEnds` | Stopping always finishes. | `StopEndsTest` |
 
 Each mutation, and what TLC found:
 
@@ -219,3 +219,20 @@ Each mutation, and what TLC found:
 | `Accept` writes a connection state outside the type | `TypeOK`, 2 states |
 | No fairness on `Closed` | `StopEnds` |
 | No fairness on `Stopped` | `StopEnds` |
+
+`src/service.cc` implements the spec, and each of its methods names the
+action it implements. `src/unix_socket.cc` gives it a Unix domain socket,
+whose file only its user can open; its tests run on real sockets. The same
+mutations, made to the service's code, fail the tests that stand for the
+properties they break:
+
+| Mutation to `Service` | Fails |
+|---|---|
+| A name already connected is accepted | `UniqueNamesTest.ANameAlreadyConnectedIsRefused` |
+| A closed connection's client stays in the feed | `FeedMatchesConnsTest.AHangUpTakesTheClientOutOfTheFeed` |
+| Stopping does not disconnect the clients, so a wait runs on | `StopWakesWaitersTest.StoppingEndsAWaitAndTheConnection` |
+| A connection arriving while stopping is served | `NothingAfterStopLateTest.AConnectionArrivingWhileStoppingIsShut` |
+| Nothing is ever accepted | Twelve tests, every one that connects |
+
+Each test that waits on another thread gives up after 5 seconds, so a
+mutation fails it rather than hanging it.

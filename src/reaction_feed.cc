@@ -42,13 +42,15 @@ ReactionFeed::Delivery ReactionFeed::Tell(Client& client) {
 }
 
 // ReactionFeed!Connect.
-void ReactionFeed::Connect(const std::string& client) {
+bool ReactionFeed::Connect(const std::string& client) {
   const std::scoped_lock lock(mutex_);
   Client& entry = clients_[client];
-  if (!entry.connected) {
-    entry.connected = true;
-    entry.cursor = next_;
+  if (entry.connected) {
+    return false;
   }
+  entry.connected = true;
+  entry.cursor = next_;
+  return true;
 }
 
 // ReactionFeed!Disconnect.
