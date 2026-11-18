@@ -103,6 +103,26 @@ TEST_F(GestureAnalyzerTest, DoesNotRepeatAGestureWhileItLasts) {
   EXPECT_THAT(reactions, IsEmpty());
 }
 
+TEST_F(GestureAnalyzerTest, DoesNotRepeatANodThatFlickersToUndefined) {
+  // A nod, then 9 frames of a shake: the windows go nod, undefined, nod,
+  // undefined, nod, and only then stationary, then nod (seen live, #34).
+  std::vector<Reaction> reactions = Feed(nodding_pigeon::kNoddingFrames);
+  for (int i = 0; i < 9; ++i) {
+    EXPECT_CALL(*detector_, Detect(_, _, _, _, _))
+        .WillOnce(DoAll(
+            SetArgReferee<3>(DetectionOf(nodding_pigeon::kTurningFrames.at(i))),
+            Return(1)))
+        .RetiresOnSaturation();
+    EXPECT_TRUE(analyzer_->Analyze(rgba_, 1, 1, 0, reactions, error_));
+  }
+  for (const Reaction& reaction : Feed(nodding_pigeon::kNoddingFrames)) {
+    reactions.push_back(reaction);
+  }
+
+  EXPECT_THAT(reactions,
+              ElementsAre(R"({"gesture":"nod"})", R"({"gesture":"nod"})"));
+}
+
 TEST_F(GestureAnalyzerTest, ReactsAgainAfterTheHeadIsStill) {
   Feed(nodding_pigeon::kNoddingFrames);
   Feed(nodding_pigeon::kStationaryFrames);

@@ -41,12 +41,17 @@ bool GestureAnalyzer::Analyze(std::span<const std::uint8_t> rgba, int width,
   const Gesture gesture =
       nodding_pigeon::Classify(nodding_pigeon::Predict(*frames),
                                thresholds_.motion, thresholds_.gesture);
-  if (gesture != last_ && gesture == Gesture::kNodding) {
+  // A gesture is reported once, and again only after a still head or the
+  // other gesture: the model flickers to undefined mid-gesture (#34).
+  if (gesture == Gesture::kStationary) {
+    reported_ = gesture;
+  } else if (gesture != reported_ && gesture == Gesture::kNodding) {
     reactions.emplace_back(R"({"gesture":"nod"})");
-  } else if (gesture != last_ && gesture == Gesture::kTurning) {
+    reported_ = gesture;
+  } else if (gesture != reported_ && gesture == Gesture::kTurning) {
     reactions.emplace_back(R"({"gesture":"shake"})");
+    reported_ = gesture;
   }
-  last_ = gesture;
   return true;
 }
 

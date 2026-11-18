@@ -42,7 +42,8 @@ class GestureAnalyzer : public FrameAnalyzer {
   std::unique_ptr<FaceDetector> detector_;
   Thresholds thresholds_;
   nodding_pigeon::Window window_;
-  nodding_pigeon::Gesture last_ = nodding_pigeon::Gesture::kStationary;
+  // The last gesture reported, or kStationary since the head was last still.
+  nodding_pigeon::Gesture reported_ = nodding_pigeon::Gesture::kStationary;
 };
 
 }  // namespace facepalm
