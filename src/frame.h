@@ -16,6 +16,9 @@ struct Frame {
   // When the camera captured it, in milliseconds on the capture clock.
   // MediaPipe's VIDEO mode needs these to increase, and smooths with them.
   std::int64_t timestamp_ms = 0;
+  // The camera's open attempt that captured it, stamped at the source, so a
+  // frame delayed past a close and reopen is refused (#40).
+  std::uint64_t attempt = 0;
 };
 
 // Copies `frame` into `rgba` as packed RGBA, width * 4 bytes a row, swapping

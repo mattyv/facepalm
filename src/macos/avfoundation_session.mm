@@ -5,6 +5,7 @@
 #import <CoreVideo/CoreVideo.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -25,10 +26,13 @@ std::int64_t MillisecondsOf(CMTime time) {
 
 @interface FacepalmFrameDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
 - (instancetype)initWithHandler:(std::function<void(const facepalm::Frame&)>)handler;
+// The open attempt each frame from here on is stamped with (#40).
+- (void)setAttempt:(std::uint64_t)attempt;
 @end
 
 @implementation FacepalmFrameDelegate {
   std::function<void(const facepalm::Frame&)> _handler;
+  std::atomic<std::uint64_t> _attempt;
 }
 
 - (instancetype)initWithHandler:(std::function<void(const facepalm::Frame&)>)handler {
@@ -36,6 +40,10 @@ std::int64_t MillisecondsOf(CMTime time) {
     _handler = std::move(handler);
   }
   return self;
+}
+
+- (void)setAttempt:(std::uint64_t)attempt {
+  _attempt.store(attempt, std::memory_order_release);
 }
 
 - (void)captureOutput:(AVCaptureOutput*)output
@@ -52,6 +60,9 @@ std::int64_t MillisecondsOf(CMTime time) {
       .bytes_per_row = CVPixelBufferGetBytesPerRow(pixels),
       .bgra = static_cast<const std::uint8_t*>(CVPixelBufferGetBaseAddress(pixels)),
       .timestamp_ms = MillisecondsOf(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)),
+      // Stamped as the callback starts, so a delay after it cannot move the
+      // frame into a later attempt.
+      .attempt = _attempt.load(std::memory_order_acquire),
   };
   _handler(frame);
   CVPixelBufferUnlockBaseAddress(pixels, kCVPixelBufferLock_ReadOnly);
@@ -215,7 +226,8 @@ CaptureSession::FrameRates AvFoundationSession::SupportedFrameRates() {
 // it. The session resets the device's frame duration when it starts, so the
 // device stays locked for configuration across startRunning, as Apple's
 // AVCaptureDevice documentation describes.
-bool AvFoundationSession::Start(int frames_per_second) {
+bool AvFoundationSession::Start(int frames_per_second, std::uint64_t attempt) {
+  [impl_->delegate setAttempt:attempt];
   AVCaptureDevice* device = impl_->device;
   const bool locked = [device lockForConfiguration:nil];
   if (locked) {
@@ -236,6 +248,15 @@ bool AvFoundationSession::Start(int frames_per_second) {
   return impl_->session.running;
 }
 
-void AvFoundationSession::Stop() { [impl_->session stopRunning]; }
+// Stops the session, then lets a frame already handed to the capture queue
+// finish while the attempt it was captured under is still the delegate's.
+// Without the wait, a callback delayed across a close and reopen would stamp
+// its old pixels with the next attempt (specs/CameraLifecycle.tla's Capture
+// stamps the frame at capture, #40). The destructor waits the same way.
+void AvFoundationSession::Stop() {
+  [impl_->session stopRunning];
+  dispatch_sync(impl_->capture_queue, ^{
+                });
+}
 
 }  // namespace facepalm

@@ -33,8 +33,9 @@ class CaptureSession {
   // The configured camera's frame rates.
   virtual FrameRates SupportedFrameRates() = 0;
   // Starts capturing at `frames_per_second`, which is within
-  // SupportedFrameRates. Returns whether it is running.
-  virtual bool Start(int frames_per_second) = 0;
+  // SupportedFrameRates, stamping each frame with `attempt`. Returns whether
+  // it is running.
+  virtual bool Start(int frames_per_second, std::uint64_t attempt) = 0;
   virtual void Stop() = 0;
 };
 
@@ -48,18 +49,18 @@ class SessionCamera : public Camera {
   SessionCamera(CaptureSession& capture, CameraReports& reports, Post session,
                 Post control, int frames_per_second);
 
-  void Open() override;
+  void Open(std::uint64_t attempt) override;
   void Close() override;
 
   // What the OS reports, on any thread: the session failed, or a camera,
   // named by its unique ID, went away or came back. Only the camera in use
-  // counts.
+  // counts, or, before one is in use, any camera coming back (#39).
   void OnSessionFailed();
   void OnDeviceDisconnected(std::string id);
   void OnDeviceConnected(std::string id);
 
  private:
-  void Start();
+  void Start(std::uint64_t attempt);
   void Report(void (CameraReports::*report)());
 
   CaptureSession& capture_;
@@ -69,6 +70,10 @@ class SessionCamera : public Camera {
   int frames_per_second_;
   // The camera in use, touched only on the session queue.
   std::string device_id_;
+  // The open attempt a start may still serve, or kNoAttempt once closed,
+  // touched only on the session queue (#38).
+  static constexpr std::uint64_t kNoAttempt = 0;
+  std::uint64_t attempt_ = kNoAttempt;
 };
 
 }  // namespace facepalm

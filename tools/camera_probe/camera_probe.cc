@@ -4,14 +4,28 @@
 // from powermetrics, run alongside with sudo.
 //
 // Every frame goes through FramePipeline, on queues as the service will run
-// them. Given a face landmarker .task bundle, the pipeline also runs the face
-// model, prints each frame's reaction as it arrives, and reports what the
-// model cost (#18, #21). That needs a build with FACEPALM_MEDIAPIPE_DYLIB.
+// them. Given a face landmarker .task bundle, the pipeline runs the face
+// model once a frame and gives it to a reader for each setting enabled in
+// the config: head pose (#18, #21), head gestures, with Idiap's CCDbHG
+// model printing nod, shake, tilt, turn and up_down reactions (#34), and
+// facial expressions, printing brows_up, smile, lips_pressed, brows_down
+// and eyes_narrowed reactions once each starts (#46). That needs a build
+// with FACEPALM_MEDIAPIPE_DYLIB.
+//
+// Every frame with a face also prints its blendshapes, and, so a recording
+// can be replayed through head_gesture later (#34), its raw gesture
+// channels (`gesture_raw`, head_gesture::RawFrame's 18 values); once a
+// frame's window is ready, its classified probabilities follow
+// (`gesture_probs`, the 6 values head_gesture::Predict gives). These print
+// whether or not gestures.enabled is set, so a recording always has them.
 //
 // Given a directory as well, it saves every frame there as a numbered PNG,
 // frame_000001.png and on, with timestamps.txt listing each frame's capture
 // time in milliseconds: a recording for tools/fixtures to replay (#21). The
 // frames are images of the user, so keep them out of the repository.
+//
+// Its settings come from ~/.config/facepalm/facepalm.conf (src/config.h); a
+// frame rate given here wins over the file's.
 //
 // Usage: camera_probe [seconds] [frames per second] [model.task] [directory]
 
@@ -31,11 +45,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -43,11 +59,18 @@
 #include <vector>
 
 #include "src/camera_controller.h"
+#include "src/config.h"
+#include "src/expression_reader.h"
+#include "src/expressions.h"
+#include "src/face_analyzer.h"
 #include "src/face_model.h"
+#include "src/face_reader.h"
 #include "src/frame.h"
 #include "src/frame_pipeline.h"
+#include "src/gesture_reader.h"
+#include "src/head_gesture_model.h"
+#include "src/head_pose_reader.h"
 #include "src/macos/avfoundation_session.h"
-#include "src/reaction.h"
 #include "src/session_camera.h"
 
 namespace facepalm {
@@ -56,7 +79,6 @@ namespace {
 constexpr int kDefaultSeconds = 10;
 constexpr double kMicrosecondsPerSecond = 1e6;
 constexpr std::int64_t kNanosecondsPerSecond = 1'000'000'000;
-constexpr int kDefaultFramesPerSecond = 15;
 constexpr double kPercent = 100;
 
 constexpr double kPercentile95 = 0.95;
@@ -141,7 +163,8 @@ class Recorder {
 
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
-  int frames_per_second = kDefaultFramesPerSecond;
+  int frames_per_second = Config::kDefaultFramesPerSecond;
+  Config config;
   std::unique_ptr<FaceModel> model;    // Runs on every frame when set.
   std::unique_ptr<Recorder> recorder;  // Saves every frame when set.
 };
@@ -222,6 +245,15 @@ class TimedFaceModel : public FaceModel {
         model_->Detect(rgba, width, height, timestamp_ms, face, error);
     const std::chrono::duration<double, std::milli> took =
         std::chrono::steady_clock::now() - start;
+    if (result == Result::kFace) {
+      // Every blendshape score, in MediaPipe's order, so a recording shows
+      // how far a small expression moves each one.
+      std::printf("blendshapes %lld", static_cast<long long>(timestamp_ms));
+      for (const float score : face.blendshapes) {
+        std::printf(" %.3f", static_cast<double>(score));
+      }
+      std::printf("\n");
+    }
     const std::scoped_lock lock(stats_.mutex);
     stats_.detect_ms.push_back(took.count());
     stats_.faces += result == Result::kFace ? 1 : 0;
@@ -233,6 +265,56 @@ class TimedFaceModel : public FaceModel {
   ModelStats& stats_;
 };
 
+// Prints what the head-gesture model sees, for tools/fixtures to replay
+// later (#34): a reader of its own, beside GestureReader rather than
+// inside it, so a recording always carries the raw channels and
+// probabilities, whether or not gestures.enabled is set.
+//
+// This keeps a window the same way GestureReader does, so printing runs
+// head_gesture::Predict a second time on frames where gestures.enabled also
+// has a real GestureReader running; that repeats the model's CNN forward
+// pass, which real use never does. One pass measures about 4ms a frame on
+// an M-series machine at -O2, so the second costs that again on the
+// analysis thread: nothing at the 15 and 30 frames a second recorded so
+// far, but a bite out of the 16.7ms budget at the configured ceiling of
+// 60, where it can cost a recording some frames. The simplicity of a
+// reader of its own still wins over sharing one Predict call between the
+// two; share them if 60 fps recordings start dropping frames.
+class GestureProbeReader : public FaceReader {
+ public:
+  // `width` and `height` follow FaceReader::OnFace's established order.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+  void OnFace(const Face& face, int width, int height,
+              std::int64_t timestamp_ms,
+              std::vector<Reaction>& /*reactions*/) override {
+    const head_gesture::RawFrame raw =
+        head_gesture::RawFrameFrom(face, width, height);
+    std::printf("gesture_raw %lld", static_cast<long long>(timestamp_ms));
+    for (const float value : raw) {
+      std::printf(" %.6f", static_cast<double>(value));
+    }
+    std::printf("\n");
+
+    const std::optional<
+        std::array<head_gesture::RawFrame, head_gesture::kWindowFrames>>
+        window = window_.Add(raw, timestamp_ms);
+    if (!window) {
+      return;
+    }
+    const head_gesture::Prediction prediction = head_gesture::Predict(*window);
+    std::printf("gesture_probs %lld", static_cast<long long>(timestamp_ms));
+    for (const float probability : prediction.probabilities) {
+      std::printf(" %.6f", static_cast<double>(probability));
+    }
+    std::printf("\n");
+  }
+
+  void OnNoFace() override { window_.Reset(); }
+
+ private:
+  head_gesture::Window window_;
+};
+
 // Forwards the camera's reports to the controller, and measures between the
 // camera opening and closing.
 class Probe : public CameraReports {
@@ -242,6 +324,7 @@ class Probe : public CameraReports {
         recorder_(std::move(options.recorder)),
         has_model_(options.model != nullptr),
         model_(std::move(options.model)),
+        config_(options.config),
         control_(control),
         capture_(
             [this](const Frame& frame) { OnFrame(frame); },
@@ -258,11 +341,8 @@ class Probe : public CameraReports {
             OnQueue(dispatch_queue_create("facepalm.inference",
                                           DISPATCH_QUEUE_SERIAL)),
             FramePipeline::Callbacks{
-                .make_model =
-                    [this](std::string& error) { return TakeModel(error); },
-                .react = [](const Face& face) -> std::optional<Reaction> {
-                  return ReactionFrom(face);
-                },
+                .make_analyzers =
+                    [this](std::string& error) { return TakeAnalyzers(error); },
                 .on_error =
                     [](const std::string& error) {
                       std::fprintf(stderr, "camera_probe: %s\n", error.c_str());
@@ -292,14 +372,17 @@ class Probe : public CameraReports {
     controller_.OnOpenFailed();
     std::fprintf(stderr,
                  "camera_probe: no camera, or camera permission denied\n");
+    model_.reset();
     std::exit(1);
   }
 
-  // The process exits from here with the queues still running, and the probe
-  // is never destroyed, so no queued task outlives what it points to (#21).
+  // The probe stays alive until exit; model destruction finishes first.
   void OnClosed() override {
     controller_.OnClosed();
-    pipeline_.OnCameraClosed();
+    pipeline_.OnCameraClosed([this] {
+      model_.reset();
+      std::exit(0);
+    });
     const double cpu = cpu_at_close_ - cpu_at_open_;
     std::printf(
         "seconds %d\nframes %d\nframes_per_second %.1f\ncpu_seconds %.3f\n"
@@ -310,14 +393,15 @@ class Probe : public CameraReports {
     if (has_model_) {
       ReportModel();
     }
-    std::exit(0);
   }
 
   void OnDeviceLost() override {
     controller_.OnDeviceLost();
-    pipeline_.OnCameraClosed();
+    pipeline_.OnCameraClosed([this] {
+      model_.reset();
+      std::exit(1);
+    });
     std::fprintf(stderr, "camera_probe: the camera was lost\n");
-    std::exit(1);
   }
 
   void OnDeviceBack() override { controller_.OnDeviceBack(); }
@@ -337,13 +421,39 @@ class Probe : public CameraReports {
     pipeline_.OnFrame(frame);
   }
 
-  // The pipeline's model factory: the model loaded at start, timed, once.
-  std::unique_ptr<FaceModel> TakeModel(std::string& error) {
+  // The pipeline's analyser factory: one FaceAnalyzer, over the face model
+  // loaded at start (timed), with a reader for each setting enabled plus
+  // GestureProbeReader, which always runs so a recording always has
+  // gesture_raw/gesture_probs to replay later (#34).
+  FramePipeline::Analyzers TakeAnalyzers(std::string& error) {
+    FramePipeline::Analyzers analyzers;
     if (model_ == nullptr) {
       error = "the face model was already used; camera_probe opens once";
-      return nullptr;
+      return analyzers;
     }
-    return std::make_unique<TimedFaceModel>(std::move(model_), stats_);
+    std::vector<std::unique_ptr<FaceReader>> readers;
+    if (config_.head_pose_enabled) {
+      readers.push_back(std::make_unique<HeadPoseReader>());
+    }
+    if (config_.gestures_enabled) {
+      readers.push_back(std::make_unique<GestureReader>(
+          config_.gesture_confidence_threshold));
+    }
+    if (config_.expressions_enabled) {
+      readers.push_back(
+          std::make_unique<ExpressionReader>(ExpressionTracker::Settings{
+              .rise = config_.expressions_smallest_rise,
+              .pose_degrees = config_.expressions_pose_degrees,
+              .pose_range = config_.expressions_pose_range,
+              .settle_ms = config_.expressions_settle_ms,
+              .spreads = config_.expressions_spreads,
+              .hold_ms = config_.expressions_hold_ms}));
+    }
+    readers.push_back(std::make_unique<GestureProbeReader>());
+    analyzers.push_back(std::make_unique<FaceAnalyzer>(
+        std::make_unique<TimedFaceModel>(std::move(model_), stats_),
+        std::move(readers)));
+    return analyzers;
   }
 
   // Prints how many frames the model saw, how many had a face, and how long
@@ -374,6 +484,7 @@ class Probe : public CameraReports {
   std::unique_ptr<Recorder> recorder_;
   bool has_model_;
   std::unique_ptr<FaceModel> model_;  // Until the pipeline takes it.
+  Config config_;
   ModelStats stats_;
   int threads_at_close_ = 0;
   dispatch_queue_t control_;
@@ -438,6 +549,33 @@ std::unique_ptr<facepalm::FaceModel> LoadModel(const char* path) {
 #endif
 }
 
+// Reads ~/.config/facepalm/facepalm.conf, or $XDG_CONFIG_HOME's
+// facepalm/facepalm.conf when that is set. A missing file gives the
+// defaults; a bad one ends the tool, naming the line.
+facepalm::Config LoadConfig() {
+  const char* xdg = std::getenv("XDG_CONFIG_HOME");
+  const char* home = std::getenv("HOME");
+  const std::string folder =
+      xdg != nullptr && *xdg != '\0'
+          ? std::string(xdg)
+          : std::string(home == nullptr ? "" : home) + "/.config";
+  const std::string path = folder + "/facepalm/facepalm.conf";
+  const std::ifstream file(path);
+  if (!file) {
+    return {};
+  }
+  std::stringstream text;
+  text << file.rdbuf();
+  std::string error;
+  const std::optional<facepalm::Config> config =
+      facepalm::ParseConfig(text.str(), error);
+  if (!config) {
+    std::fprintf(stderr, "camera_probe: %s: %s\n", path.c_str(), error.c_str());
+    std::exit(2);
+  }
+  return *config;
+}
+
 }  // namespace
 
 // The standard fixes main's signature, and an allocation failure may end the
@@ -446,8 +584,9 @@ std::unique_ptr<facepalm::FaceModel> LoadModel(const char* path) {
 int main(int argc, char** argv) {
   const int seconds =
       PositiveArgument(argc > 1 ? argv[1] : nullptr, facepalm::kDefaultSeconds);
-  const int frames_per_second = PositiveArgument(
-      argc > 2 ? argv[2] : nullptr, facepalm::kDefaultFramesPerSecond);
+  const facepalm::Config config = LoadConfig();
+  const int frames_per_second =
+      PositiveArgument(argc > 2 ? argv[2] : nullptr, config.frames_per_second);
   if (seconds == 0 || frames_per_second == 0) {
     std::fprintf(
         stderr,
@@ -458,6 +597,7 @@ int main(int argc, char** argv) {
   facepalm::ProbeOptions options{
       .seconds = seconds,
       .frames_per_second = frames_per_second,
+      .config = config,
       .model = LoadModel(argc > 3 ? argv[3] : nullptr),
       .recorder =
           argc > 4 ? std::make_unique<facepalm::Recorder>(argv[4]) : nullptr,

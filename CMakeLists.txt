@@ -38,12 +38,23 @@ function(facepalm_unit name)
 endfunction()
 
 facepalm_unit(camera_controller)
+facepalm_unit(config)
+facepalm_unit(expressions)
+facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
 facepalm_unit(frame)
 facepalm_unit(frame_pipeline)
 # ToRgba is pure computation, so the pipeline's tests run it for real.
 target_link_libraries(frame_pipeline PUBLIC frame)
+facepalm_unit(expression_reader)
+facepalm_unit(gesture_reader)
 facepalm_unit(head_pose)
+facepalm_unit(head_pose_reader)
+facepalm_unit(head_gesture_model)
+# head_pose is pure computation, so the gesture model's tests run it for
+# real (it needs RotationFrom, and reuses Rotation for its own test
+# fixtures).
+target_link_libraries(head_gesture_model PUBLIC head_pose)
 facepalm_unit(reaction)
 facepalm_unit(reaction_feed)
 facepalm_unit(protocol)
@@ -54,6 +65,14 @@ target_link_libraries(service PUBLIC protocol)
 facepalm_unit(unix_socket)
 # head_pose is pure computation, so the reaction's tests run it for real.
 target_link_libraries(reaction PUBLIC head_pose)
+# head_pose_reader's tests run the real reaction (pure computation);
+# gesture_reader's run the real head-gesture model, and expression_reader's
+# the real ExpressionTracker and head_pose (also pure computation, used to
+# derive the pose it hands the tracker, #46), for the same reason.
+# face_analyzer's tests mock both the face model and the readers.
+target_link_libraries(head_pose_reader PUBLIC reaction)
+target_link_libraries(gesture_reader PUBLIC head_gesture_model)
+target_link_libraries(expression_reader PUBLIC expressions head_pose)
 facepalm_unit(session_camera)
 
 # The macOS capture API, through AVFoundation, and camera_probe, which drives
@@ -69,7 +88,10 @@ if(APPLE)
     "-framework Foundation")
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
-    frame_pipeline reaction "-framework CoreGraphics" "-framework ImageIO")
+    config frame_pipeline face_analyzer expression_reader gesture_reader
+    head_pose_reader
+    "-framework CoreGraphics"
+    "-framework ImageIO")
 endif()
 
 # face_model_check runs the real face model through MediaPipeFaceModel. It
@@ -84,7 +106,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     IMPORTED_LOCATION ${FACEPALM_MEDIAPIPE_DYLIB}
     IMPORTED_SONAME "@rpath/libfacepalm_mediapipe.dylib")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
-  target_link_libraries(face_model_check PRIVATE face_model facepalm_mediapipe
+  target_link_libraries(face_model_check PRIVATE face_model head_gesture_model
+    facepalm_mediapipe
     "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
   get_filename_component(FACEPALM_MEDIAPIPE_DIR ${FACEPALM_MEDIAPIPE_DYLIB}
     DIRECTORY)

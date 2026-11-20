@@ -20,7 +20,8 @@ EOF
   chmod +x "${WORK}"/bin/*
   PATH="${WORK}/bin:${PATH}"
   export FAKE_NM='0 T _fp_face_model_create\n0 T _fp_face_model_destroy\n'
-  FAKE_NM+='0 T _fp_face_model_detect\n'
+  FAKE_NM+='0 T _fp_face_model_detect\n0 T _fp_face_detector_create\n'
+  FAKE_NM+='0 T _fp_face_detector_destroy\n0 T _fp_face_detector_detect\n'
   export FAKE_OTOOL='lib:\n\t@rpath/libfacepalm_mediapipe.dylib\n'
   FAKE_OTOOL+='\t/usr/lib/libc++.1.dylib\n'
 }
@@ -47,6 +48,7 @@ teardown() {
   run bash "${WORK}/repo/tools/fixtures/check_shim.sh"
   [[ "${status}" -eq 1 ]] || false
   [[ "${output}" == *'does not export _fp_face_model_detect'* ]] || false
+  [[ "${output}" == *'does not export _fp_face_detector_detect'* ]] || false
 }
 
 @test "fails when it links an OpenCV dylib" {

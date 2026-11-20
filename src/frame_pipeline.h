@@ -5,13 +5,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
 #include "src/camera_controller.h"
-#include "src/face_model.h"
 #include "src/frame.h"
+#include "src/frame_analyzer.h"
 #include "src/post.h"
 
 namespace facepalm {
@@ -24,24 +23,24 @@ namespace facepalm {
 //              dropped;
 //   control:   the controller's queue, where the frame gets a ticket, and
 //              where OnCameraOpen and OnCameraClosed are called;
-//   inference: creates the model, detects on a ticketed frame, and destroys
-//              the model, in the order they were asked for.
+//   inference: makes the analysers, runs them on a ticketed frame, and
+//              destroys them, in the order they were asked for. The
+//              analysers together are the spec's model.
 //
 // Each method names the spec action it implements. Tasks it posts hold a
 // pointer to it, so it outlives the queues' work.
 class FramePipeline {
  public:
-  // Makes a face model, or returns null and sets `error`.
-  using ModelFactory =
-      std::function<std::unique_ptr<FaceModel>(std::string& error)>;
-  // Makes a reaction from a face, or nothing when there is none to send.
-  using React = std::function<std::optional<Reaction>(const Face& face)>;
-  // Hears why loading the model or a detect failed, on the inference queue.
+  using Analyzers = std::vector<std::unique_ptr<FrameAnalyzer>>;
+  // Makes the analysers, the spec's model. Returns those it could make, and
+  // sets `error` when one could not be made.
+  using AnalyzerFactory = std::function<Analyzers(std::string& error)>;
+  // Hears why making an analyser or analysing a frame failed, on the
+  // inference queue.
   using OnError = std::function<void(const std::string& error)>;
 
   struct Callbacks {
-    ModelFactory make_model;
-    React react;
+    AnalyzerFactory make_analyzers;
     OnError on_error;
   };
 
@@ -54,7 +53,8 @@ class FramePipeline {
   // The camera has stopped: OnClosed and OnDeviceLost both, every way the
   // controller leaves open (spec: Close). A dead helper takes the model with
   // it.
-  void OnCameraClosed();
+  // Posts completion to control only after the analysers are destroyed.
+  void OnCameraClosed(std::function<void()> on_closed = {});
 
   // A captured frame, on the capture queue. Valid only during the call
   // (spec: CaptureStart and CaptureEnd).
@@ -82,9 +82,9 @@ class FramePipeline {
   int width_ = 0;
   int height_ = 0;
   std::int64_t timestamp_ms_ = 0;
+  std::uint64_t attempt_ = 0;  // The open attempt that captured it (#40).
   std::uint64_t ticket_ = 0;
-  std::unique_ptr<FaceModel> model_;  // Inference queue only.
-  Face face_{};                       // Inference queue only.
+  Analyzers analyzers_;  // Inference queue only.
 };
 
 }  // namespace facepalm

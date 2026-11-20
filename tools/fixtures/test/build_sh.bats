@@ -47,6 +47,8 @@ teardown() {
   [[ "${log}" == *'face_landmarker_v2_with_blendshapes.task?generation='* ]] \
     || false
   [[ "${log}" == *'portrait.jpg?generation='* ]] || false
+  [[ "${log}" == *'face_detection_short_range.tflite?generation='* ]] \
+    || false
   [[ "${log}" == *'build '*'//facepalm_fixtures:face_landmarker_fixtures'* ]] \
     || false
   [[ "${log}" == *'//facepalm_shim:libfacepalm_mediapipe.dylib'* ]] || false

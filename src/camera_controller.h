@@ -31,7 +31,9 @@ class CameraReports {
 class Camera {
  public:
   virtual ~Camera() = default;
-  virtual void Open() = 0;
+  // Opens for one attempt: frames it captures carry `attempt` (Frame), and
+  // a Close ends it (specs/CameraLifecycle.tla's EndAttempt).
+  virtual void Open(std::uint64_t attempt) = 0;
   virtual void Close() = 0;
 };
 
@@ -53,9 +55,11 @@ class Clients {
 class FrameTickets {
  public:
   virtual ~FrameTickets() = default;
-  // Returns a ticket for a frame the camera captured, or nothing when the
-  // camera is not open and the frame must be dropped.
-  virtual std::optional<std::uint64_t> OnFrameCaptured() = 0;
+  // Returns a ticket for a frame the camera captured in `attempt`, or
+  // nothing when the camera is not open or that attempt has ended, and the
+  // frame must be dropped.
+  virtual std::optional<std::uint64_t> OnFrameCaptured(
+      std::uint64_t attempt) = 0;
   // Delivers a frame's reaction to every subscribed client, unless consent
   // was revoked after the frame was captured.
   virtual void OnReaction(std::uint64_t ticket, const Reaction& reaction) = 0;
@@ -79,10 +83,11 @@ class CameraController : public CameraReports, public FrameTickets {
   void OnDeviceLost() override;
   void OnDeviceBack() override;
 
-  std::optional<std::uint64_t> OnFrameCaptured() override;
+  std::optional<std::uint64_t> OnFrameCaptured(std::uint64_t attempt) override;
   void OnReaction(std::uint64_t ticket, const Reaction& reaction) override;
 
   [[nodiscard]] State CurrentState() const { return state_; }
+  [[nodiscard]] std::uint64_t CurrentAttempt() const { return attempt_; }
 
  private:
   void OpenIfWanted();
@@ -93,6 +98,8 @@ class CameraController : public CameraReports, public FrameTickets {
   bool consent_;
   bool device_ = true;
   std::set<ClientId> subscribers_;
+  // The current open attempt; opening starts one and closing ends it.
+  std::uint64_t attempt_ = 0;
   State state_ = State::kClosed;
   // Bumped when consent is revoked, which voids every ticket given before.
   std::uint64_t consent_epoch_ = 0;
