@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "src/camera_controller.h"
@@ -11,6 +12,11 @@
 
 namespace facepalm {
 namespace {
+
+// OnFace copies the shim's blendshape array into a Scores; were the shim's
+// count ever to grow past kBlendshapeScores, the copy would write past the
+// end, so hold the two to each other here.
+static_assert(std::extent_v<decltype(Face::blendshapes)> == kBlendshapeScores);
 
 // The reaction for `expression`, named by Name(): {"expression":"smile"}.
 Reaction ReactionFor(Expression expression) {
