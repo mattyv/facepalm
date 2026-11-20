@@ -5,6 +5,18 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Run native tests under Clang sanitizers
+
+-   **Decision:** run the native CTest suite on Linux with AddressSanitizer and
+    UndefinedBehaviorSanitizer together, failing on the first finding.
+-   **Why:** coverage and clang-tidy do not detect all exercised memory errors
+    and undefined behavior at runtime.
+-   **Rejected:** replacing the existing coverage or clang-tidy checks; each
+    finds different problems.
+-   **Cost:** this checks exercised Linux CMake code only. It does not cover the
+    macOS camera, the separately built MediaPipe shim, or unexecuted paths.
+-   **Evidence:** the user's request for sanitizer checks in CI.
+
 ## 2026-11-20: Replay recorded head gestures without a camera
 
 -   **Decision:** replay the probe's raw gesture frames through the live window,
