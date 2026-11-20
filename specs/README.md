@@ -91,8 +91,10 @@ closes. Frames may arrive at any time, even just after closing, and loading
 the model and detecting can each fail. In the code, the model is the list of
 frame analysers (#34): `FaceAnalyzer`, which runs the face model once a
 frame and gives the result to a `FaceReader` for each setting enabled (head
-pose, and Idiap's CCDbHG head-gesture model), made together, run in turn on
-each frame, and destroyed together.
+pose, Idiap's CCDbHG head-gesture model, and facial expressions, #46), made
+together, run in turn on each frame, and destroyed together. No action or
+invariant changes with the expression reader: the pipeline still only ever
+sees the one list of frame analysers.
 
 | Property | What it says | Test |
 |---|---|---|

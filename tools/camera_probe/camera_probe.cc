@@ -6,9 +6,11 @@
 // Every frame goes through FramePipeline, on queues as the service will run
 // them. Given a face landmarker .task bundle, the pipeline runs the face
 // model once a frame and gives it to a reader for each setting enabled in
-// the config: head pose (#18, #21) and head gestures, with Idiap's CCDbHG
-// model printing nod, shake, tilt, turn and up_down reactions (#34). That
-// needs a build with FACEPALM_MEDIAPIPE_DYLIB.
+// the config: head pose (#18, #21), head gestures, with Idiap's CCDbHG
+// model printing nod, shake, tilt, turn and up_down reactions (#34), and
+// facial expressions, printing brows_up, smile, lips_pressed, brows_down
+// and eyes_narrowed reactions once each starts (#46). That needs a build
+// with FACEPALM_MEDIAPIPE_DYLIB.
 //
 // Given a directory as well, it saves every frame there as a numbered PNG,
 // frame_000001.png and on, with timestamps.txt listing each frame's capture
@@ -51,6 +53,8 @@
 
 #include "src/camera_controller.h"
 #include "src/config.h"
+#include "src/expression_reader.h"
+#include "src/expressions.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
 #include "src/face_reader.h"
@@ -371,6 +375,12 @@ class Probe : public CameraReports {
     if (config_.gestures_enabled) {
       readers.push_back(std::make_unique<GestureReader>(
           config_.gesture_confidence_threshold));
+    }
+    if (config_.expressions_enabled) {
+      readers.push_back(std::make_unique<ExpressionReader>(
+          ExpressionTracker::Settings{.rise = config_.expressions_smallest_rise,
+                                      .spreads = config_.expressions_spreads,
+                                      .hold_ms = config_.expressions_hold_ms}));
     }
     if (!readers.empty()) {
       analyzers.push_back(std::make_unique<FaceAnalyzer>(
