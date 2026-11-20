@@ -233,6 +233,15 @@ class TimedFaceModel : public FaceModel {
         model_->Detect(rgba, width, height, timestamp_ms, face, error);
     const std::chrono::duration<double, std::milli> took =
         std::chrono::steady_clock::now() - start;
+    if (result == Result::kFace) {
+      // Every blendshape score, in MediaPipe's order, so a recording shows
+      // how far a small expression moves each one.
+      std::printf("blendshapes %lld", static_cast<long long>(timestamp_ms));
+      for (const float score : face.blendshapes) {
+        std::printf(" %.3f", static_cast<double>(score));
+      }
+      std::printf("\n");
+    }
     const std::scoped_lock lock(stats_.mutex);
     stats_.detect_ms.push_back(took.count());
     stats_.faces += result == Result::kFace ? 1 : 0;
