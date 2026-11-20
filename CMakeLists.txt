@@ -39,6 +39,7 @@ endfunction()
 
 facepalm_unit(camera_controller)
 facepalm_unit(config)
+facepalm_unit(expressions)
 facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
 facepalm_unit(frame)
