@@ -126,8 +126,11 @@ The Debian 13 amd64 package installs the Facepalm 🤦 tray app and the
 `gesture_replay` CLI. Launch **Facepalm** from the desktop applications menu.
 The tray is displayed by desktops with StatusNotifierItem support. GNOME
 may need the [AppIndicator support extension](https://extensions.gnome.org/extension/615/appindicator-support/).
-Facepalm opens a small status window when a compatible tray is unavailable.
-Live camera capture is available through the macOS daemon.
+Facepalm opens a compact status window when a compatible tray is unavailable.
+The window shows whether the local camera service is ready and keeps offline
+replay status available.
+For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
+or the macOS daemon.
 
 Download `facepalm-debian13-amd64` from the Facepalm CI run, extract its
 `.deb`, and install the file with `apt`.
@@ -152,11 +155,11 @@ The separately installed MCP adapter uses the Node.js setup below.
 ### Portable replay and MCP adapter install
 
 The portable build installs the offline gesture replay CLI and the existing
-Node MCP adapter, plus licence and third-party notices. The camera backend and
-daemon are currently available on macOS; Linux camera capture and a Linux
-daemon remain work for #37. The adapter connects to a separately running
-compatible service. With testing
-disabled, the build needs CMake 3.28 or newer, Ninja, and a C++20 compiler.
+Node MCP adapter, plus licence and third-party notices. For live capture,
+build the [Linux camera daemon](docs/linux-camera.md) or stage the macOS
+app. The adapter connects to a separately running compatible service.
+With testing disabled, the build needs CMake 3.28 or newer, Ninja, and a
+C++20 compiler.
 
 ```shell
 cmake -S . -B build-portable -G Ninja -DBUILD_TESTING=OFF \

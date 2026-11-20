@@ -106,11 +106,11 @@ if(FACEPALM_LINUX_TRAY)
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "FACEPALM_LINUX_TRAY requires Linux")
   endif()
-  find_package(Qt6 REQUIRED COMPONENTS Widgets)
+  find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
   add_executable(facepalm_menu tools/menu/main_linux.cc)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
-  target_link_libraries(facepalm_menu PRIVATE Qt6::Widgets)
+  target_link_libraries(facepalm_menu PRIVATE Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -133,7 +133,7 @@ if(FACEPALM_LINUX_TRAY)
     add_executable(linux_tray_integration test/linux_tray_integration.cc)
     set_target_properties(linux_tray_integration PROPERTIES AUTOMOC ON)
     add_dependencies(linux_tray_integration facepalm_menu)
-    target_link_libraries(linux_tray_integration PRIVATE Qt6::Core Qt6::DBus Qt6::Widgets)
+    target_link_libraries(linux_tray_integration PRIVATE Qt6::Core Qt6::DBus Qt6::Network Qt6::Widgets)
     add_test(NAME linux_tray_integration COMMAND ${DBUS_RUN_SESSION} --
       ${XVFB_RUN} -a $<TARGET_FILE:linux_tray_integration> $<TARGET_FILE:facepalm_menu>)
     set_tests_properties(linux_tray_integration PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb" TIMEOUT 40)
@@ -215,6 +215,33 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   target_link_libraries(camera_probe PRIVATE face_model facepalm_mediapipe)
   set_target_properties(camera_probe PROPERTIES
     BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
+endif()
+
+# The Linux daemon uses the pinned native MediaPipe Tasks C library.
+set(FACEPALM_MEDIAPIPE_C_INCLUDE "" CACHE PATH "Root of MediaPipe's native C headers")
+set(FACEPALM_MEDIAPIPE_C_LIBRARY "" CACHE FILEPATH "Linux libmediapipe.so")
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+    (FACEPALM_MEDIAPIPE_C_INCLUDE OR FACEPALM_MEDIAPIPE_C_LIBRARY))
+  if(NOT EXISTS "${FACEPALM_MEDIAPIPE_C_INCLUDE}/mediapipe/tasks/c/vision/face_landmarker/face_landmarker.h" OR
+      NOT EXISTS "${FACEPALM_MEDIAPIPE_C_LIBRARY}")
+    message(FATAL_ERROR "Linux camera requires both the MediaPipe C headers and libmediapipe.so")
+  endif()
+  find_package(Threads REQUIRED)
+  find_path(V4L2_INCLUDE_DIRECTORY NAMES libv4l2.h REQUIRED)
+  find_library(V4L2_LIBRARY NAMES v4l2 libv4l2.so.0 REQUIRED)
+  add_executable(facepalm_daemon tools/daemon/main.cc
+    src/linux/v4l2_session.cc src/linux/mediapipe_c_shim.cc)
+  set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
+    INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
+  target_include_directories(facepalm_daemon SYSTEM PRIVATE
+    ${FACEPALM_MEDIAPIPE_C_INCLUDE} ${V4L2_INCLUDE_DIRECTORY})
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
+    camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
+    reaction_feed rating_log service session_camera unix_socket face_model Threads::Threads
+    ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
+  install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
+  install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/facepalm COMPONENT LinuxCamera)
 endif()
 
 # Checks formatting against .clang-format without changing any file.

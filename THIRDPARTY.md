@@ -58,3 +58,16 @@ The Linux tray host links to the system's Qt 6 Widgets libraries, available
 under the GNU LGPL-3.0 or GPL-2.0 as described in the
 [Qt Widgets documentation](https://doc.qt.io/qt-6/qtwidgets-index.html).
 The system packages supply Qt and their accompanying licence notices.
+
+## Linux camera and face model
+
+The Linux camera daemon uses the system's libv4l2 for device access and RGB
+conversion. It links the native C library from the official MediaPipe 0.10.35
+Linux wheel with headers from the matching source revision. The wheel includes
+the MediaPipe Apache-2.0 licence. The development setup uses the same pinned
+Face Landmarker model as the project fixtures.
+[Video4Linux library documentation][v4l-doc]
+and [MediaPipe release][mp-release].
+
+[v4l-doc]: https://www.kernel.org/doc/html/v4.16/media/uapi/v4l/libv4l-introduction.html
+[mp-release]: https://pypi.org/project/mediapipe/0.10.35/

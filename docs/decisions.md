@@ -5,6 +5,26 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Run the Linux camera through the shared daemon
+
+Use Video4Linux through libv4l2 and link the pinned MediaPipe Tasks C
+library on Linux. The capture adapter joins its worker before reporting
+retirement, and the existing consent, session, frame, and feed owners
+keep their responsibilities. Serial queues run the same daemon composition
+as macOS without requiring libdispatch on Linux.
+
+The build keeps the existing FaceModel interface and uses the official C
+library to avoid a separate application or an inference service. It needs
+matching 0.10.35 headers and library and a Face Landmarker model. The first
+Linux setup uses one selected single-plane camera. Restart after reconnecting
+a disconnected device. The development daemon installs separately from the
+tray `.deb`.
+
+On Debian 13, the integrated camera bound at `/dev/video0`, MediaPipe
+processed a live frame, and MCP returned a classified turn. A refused
+client left the camera closed. Two consecutive approved MCP sessions each
+opened, processed, and released the device. [Facepalm service issue #37](https://github.com/mattyv/facepalm/issues/37)
+
 ## 2026-11-20: Package the Linux tray and replay tools for Debian 13
 
 Use Qt 6 Widgets for the Linux tray, menu and status window. Keep the

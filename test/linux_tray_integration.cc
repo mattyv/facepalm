@@ -12,9 +12,12 @@
 #include <QDBusVariant>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QLocalServer>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QString>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QThread>
 #include <QVariant>
 #include <QVariantMap>
@@ -82,6 +85,7 @@ struct MenuScan {
   int quit = -1;
   bool replay_status = false;
   bool camera_status = false;
+  QString expected_camera;
 };
 
 void ScanMenu(const QDBusArgument& argument, MenuScan& scan) {
@@ -96,7 +100,7 @@ void ScanMenu(const QDBusArgument& argument, MenuScan& scan) {
       !properties.value("enabled", true).toBool()) {
     scan.replay_status = true;
   }
-  if (label == "Linux camera service is not provided." &&
+  if (label == scan.expected_camera &&
       !properties.value("enabled", true).toBool()) {
     scan.camera_status = true;
   }
@@ -115,7 +119,12 @@ void ScanMenu(const QDBusArgument& argument, MenuScan& scan) {
   argument.endStructure();
 }
 
-bool RunWithWatcher(const QString& executable) {
+bool RunWithWatcher(const QString& executable, bool service_available) {
+  QTemporaryDir runtime;
+  if (!runtime.isValid()) return false;
+  const QString socket = runtime.filePath("service.sock");
+  QLocalServer service;
+  if (service_available && !service.listen(socket)) return false;
   auto bus = QDBusConnection::sessionBus();
   Watcher watcher;
   if (!bus.registerService("org.kde.StatusNotifierWatcher") ||
@@ -128,6 +137,9 @@ bool RunWithWatcher(const QString& executable) {
   }
   QProcess app;
   app.setProcessChannelMode(QProcess::ForwardedChannels);
+  auto environment = QProcessEnvironment::systemEnvironment();
+  environment.insert("FACEPALM_SOCKET", socket);
+  app.setProcessEnvironment(environment);
   app.start(executable);
   if (!app.waitForStarted(kTimeoutMs) ||
       !WaitUntil([&] { return !watcher.service().isEmpty(); })) {
@@ -183,6 +195,8 @@ bool RunWithWatcher(const QString& executable) {
     return false;
   }
   MenuScan scan;
+  scan.expected_camera = service_available ? "Camera service is ready."
+                                           : "Camera service is offline.";
   ScanMenu(qvariant_cast<QDBusArgument>(layout.arguments().at(1)), scan);
   if (scan.quit < 0 || !scan.replay_status || !scan.camera_status ||
       Call(menu_interface, "Event",
@@ -236,21 +250,23 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
       close.start("xdotool", {"key", "--window", window, "Escape"});
     } else {
       close.start("xdotool",
-                  {"mousemove", "--window", window, QString::number(width / 2),
-                   QString::number(height - 20), "click", "1"});
+                  {"mousemove", "--window", window, QString::number(width - 50),
+                   QString::number(height - 26), "click", "1"});
     }
     close.waitForFinished(kTimeoutMs);
   }
+  const bool compact =
+      width >= 310 && width <= 400 && height >= 110 && height <= 260;
   const bool exited =
-      shown && width > 0 && height > 20 &&
-      (close_window || close.exitCode() == 0) &&
+      shown && compact && (close_window || close.exitCode() == 0) &&
       WaitUntil([&] { return app.state() == QProcess::NotRunning; }) &&
       app.exitStatus() == QProcess::NormalExit && app.exitCode() == 0;
   if (!exited) {
     std::cerr << "No-tray fallback failed: shown=" << shown
-              << " window=" << window.toStdString()
-              << " close=" << close.exitCode() << " state=" << app.state()
-              << " exit=" << app.exitCode() << " status=" << app.exitStatus()
+              << " window=" << window.toStdString() << " size=" << width << "x"
+              << height << " close=" << close.exitCode()
+              << " state=" << app.state() << " exit=" << app.exitCode()
+              << " status=" << app.exitStatus()
               << " xdotool=" << close.readAllStandardError().toStdString()
               << "\n";
     app.kill();
@@ -267,7 +283,9 @@ int main(int argc, char** argv) {
     return 2;
   }
   const QString executable = app.arguments().at(1);
-  return RunWithWatcher(executable) && RunWithoutWatcher(executable, false) &&
+  return RunWithWatcher(executable, false) &&
+                 RunWithWatcher(executable, true) &&
+                 RunWithoutWatcher(executable, false) &&
                  RunWithoutWatcher(executable, true)
              ? 0
              : 1;
