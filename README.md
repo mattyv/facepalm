@@ -48,6 +48,19 @@ made since, each with its reason, are in the
     defaults were tuned on one person's 80-second recording; the frown
     (brows down) was the weakest of the five to read reliably.
 -   `src/config`: the settings file, below.
+-   `src/reaction_feed`: the readings each client is told about (#36): one
+    timeline of interpreted reactions, each with the summary line the person
+    sees and the detail the agent gets. A client reads what came since it
+    last looked, or waits for the next reading, and the person can rate a
+    reading 1 to 5. It follows `specs/ReactionFeed.tla`.
+-   `src/service`: the background service's connections (#37), following
+    `specs/Service.tla`. Each connection names its client, then reads,
+    waits for a reading, or rates one, in the protocol of `src/protocol`:
+    a request is a line of text, and each reply a line of JSON. Stopping
+    ends every connection, even one waiting.
+-   `src/unix_socket`: the service's connections over a Unix domain socket
+    that only its user can open, on macOS and Linux; tested on real
+    sockets.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
     to a tenth of a degree, as JSON text.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
@@ -72,6 +85,10 @@ made since, each with its reason, are in the
 -   `specs/FramePipeline.tla`: how a captured frame reaches the face model,
     and the model's lifecycle, checked with TLC before the pipeline's code
     (#20).
+-   `specs/ReactionFeed.tla`: how readings reach each client, waits end, and
+    only a reading that was shown can be rated (#36).
+-   `specs/Service.tla`: the service's connections, unique client names,
+    and a shutdown that cannot hang on a waiting connection (#37).
 
 ## Build and test
 

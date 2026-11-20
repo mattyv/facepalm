@@ -56,6 +56,13 @@ facepalm_unit(head_gesture_model)
 # fixtures).
 target_link_libraries(head_gesture_model PUBLIC head_pose)
 facepalm_unit(reaction)
+facepalm_unit(reaction_feed)
+facepalm_unit(protocol)
+facepalm_unit(service)
+# The protocol is pure computation, so the service's tests run it for real.
+target_link_libraries(service PUBLIC protocol)
+# The POSIX socket calls alone; its tests run them on real sockets.
+facepalm_unit(unix_socket)
 # head_pose is pure computation, so the reaction's tests run it for real.
 target_link_libraries(reaction PUBLIC head_pose)
 # head_pose_reader's tests run the real reaction (pure computation);

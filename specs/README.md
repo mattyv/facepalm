@@ -29,6 +29,8 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 |---|---|---|---|
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 1,644 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
+| `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
+| `Service.cfg` | three connections, two client names | holds | 396 |
 
 ## `CameraLifecycle`: when the camera may be on
 
@@ -189,3 +191,107 @@ destruction returns.
 |---|---|
 | `ExitAfterRetirement` and `EventuallyExits` | Hold across four distinct states |
 | `WaitForRetirement = FALSE` | Violates `ExitAfterRetirement` in two steps while destruction is still queued |
+
+## `ReactionFeed`: how readings reach each client
+
+Models #36's delivery. facepalm keeps one timeline of readings: each is an
+interpreted reaction with the one-line summary facepalm writes, and an id.
+Past `Capacity`, the oldest reading is dropped. Each client, an agent session
+or AI Pair, has a cursor. A read returns the readings since that client last
+looked, whether it comes from a hook after an agent action or from the MCP's
+check-in. A client can instead wait for the next reading, which a new reading
+or a timeout ends. The person can rate a reading the client was shown, 1 to
+5, for five minutes after it was shown, and the rating goes back to facepalm
+for #35; `Expire` is that time passing. A client that connects
+starts with no backlog, and keeps what it was shown before, so its earlier
+ratings stand.
+
+| Property | What it says | Test |
+|---|---|---|
+| `NoRepeat` | No reading is shown to the same client twice. | `NoRepeatTest` in `test/reaction_feed_test.cc` |
+| `NoSilentGap` | Every reading made while a client was connected, up to its cursor, was shown to it or counted as missed. | `NoSilentGapTest` |
+| `RateOnlyShown` | A client rates only a reading it was shown, so a rating judges the summary the person saw. | `RateOnlyShownTest` |
+| `RateOnlyRecent` | A rating comes within five minutes of the reading being shown, so the person still remembers it; older ones are forgotten. | `RateOnlyRecentTest` |
+| `NoWaitPastAReading` | A waiting client is never left waiting while a reading it has not seen exists. | `NoWaitPastAReadingTest` |
+| `CanShow` | Something must happen: a connected client with a reading it has not seen can be shown it. | `CanShowTest` |
+| `WaitEnds` | Every wait ends, with a reading or a timeout. | `WaitEndsTest` |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardAdvanceCursor = FALSE`: a read leaves the cursor where it was | `CanShow`, 4 states; with `CanShow` left out, `NoRepeat`, 6 states |
+| `GuardReportMissed = FALSE`: dropped readings are skipped without a word | `NoSilentGap`, 5 states |
+| `GuardWakeWaiters = FALSE`: a new reading leaves waiters waiting | `NoWaitPastAReading`, 6 states |
+| `GuardRateOnlyShown = FALSE`: any reading can be rated | `RateOnlyShown`, 5 states |
+| `GuardRateOnlyRecent = FALSE`: a reading can be rated however long ago it was shown | `RateOnlyRecent`, 8 states |
+| A read shows nothing | `CanShow`, 3 states |
+| A read counts an id outside the type as missed | `TypeOK`, 3 states |
+| No fairness on `WaitTimesOut` | `WaitEnds` |
+
+`src/reaction_feed.cc` implements the spec, and each of its methods names
+the action it implements. The same mutations, made to that code, fail the
+tests that stand for the properties they break:
+
+| Mutation to `ReactionFeed` | Fails |
+|---|---|
+| A read leaves the cursor where it was | `NoRepeatTest`, `NoWaitPastAReadingTest.AMissedReadingAlsoReturnsAtOnce` |
+| Dropped readings are not counted as missed | `NoSilentGapTest.DroppedReadingsAreCountedAsMissed`, `NoWaitPastAReadingTest.AMissedReadingAlsoReturnsAtOnce` |
+| A new reading does not wake waiters | `NoWaitPastAReadingTest.ANewReadingEndsTheWait`, and two others |
+| Disconnecting does not wake the client's wait | `WaitEndsTest.DisconnectingEndsTheWait` |
+| A wait ended by a disconnect answers once the name reconnects | `WaitEndsTest.DisconnectingEndsTheWaitEvenWhenTheNameReconnects` |
+| Any reading can be rated | `RateOnlyShownTest.AReadingNotShownToTheClientIsNot` |
+| A rating ignores the five minutes | `RateOnlyRecentTest.NotOnceFiveMinutesHavePassed` |
+| A read shows nothing | `CanShowTest.AConnectedClientIsShownANewReading`, and nine others |
+
+A wait's tests require it to end within 5 seconds of a 10 second timeout, so
+a missing wake fails them rather than passing late.
+
+## `Service`: the background service and its connections
+
+Models #37's service. It accepts connections on a socket only its user can
+open, and gives each its own thread. A connection's first line names its
+client, which connects that client to `ReactionFeed`; the thread then reads,
+waits for a reading, or rates. The peer can hang up at any time, but a
+thread blocked in a wait is not reading its socket, so it notices only once
+the wait ends. Stopping the service closes every connection, and must not
+hang on a waiting one, since a wait can last its whole timeout.
+
+| Property | What it says | Test |
+|---|---|---|
+| `UniqueNames` | No two connections speak for the same client. | `UniqueNamesTest` in `test/service_test.cc`; `ConnectingANameAlreadyConnectedIsRefused` in `test/reaction_feed_test.cc` |
+| `FeedMatchesConns` | The feed's clients are exactly the named connections still open. | `FeedMatchesConnsTest` |
+| `StopWakesWaiters` | Once stopping, no thread is left blocked in a wait. | `StopWakesWaitersTest` |
+| `NothingAfterStop` | Once stopped, every connection is closed. | `NothingAfterStopTest`, `NothingAfterStopLateTest` |
+| `CanAccept` | Something must happen: a running service can accept a connection into a free slot. | `CanAcceptTest` |
+| `StopEnds` | Stopping always finishes. | `StopEndsTest` |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardUniqueNames = FALSE`: a name already connected is accepted | `UniqueNames`, 5 states |
+| `GuardLeaveOnClose = FALSE`: a closed connection's client stays in the feed | `FeedMatchesConns`, 5 states |
+| `GuardStopWakes = FALSE`: stopping leaves a wait to its timeout | `StopWakesWaiters`, 5 states; with it left out, `StopEnds` |
+| `GuardRefuseWhenStopping = FALSE`: connections are accepted while stopping | `StopEnds`: new ones can keep it from finishing |
+| `Accept` never enabled | `CanAccept`, in the initial state |
+| `Accept` writes a connection state outside the type | `TypeOK`, 2 states |
+| No fairness on `Closed` | `StopEnds` |
+| No fairness on `Stopped` | `StopEnds` |
+
+`src/service.cc` implements the spec, and each of its methods names the
+action it implements. `src/unix_socket.cc` gives it a Unix domain socket,
+whose file only its user can open; its tests run on real sockets. The same
+mutations, made to the service's code, fail the tests that stand for the
+properties they break:
+
+| Mutation to `Service` | Fails |
+|---|---|
+| A name already connected is accepted | `UniqueNamesTest.ANameAlreadyConnectedIsRefused` |
+| A closed connection's client stays in the feed | `FeedMatchesConnsTest.AHangUpTakesTheClientOutOfTheFeed` |
+| Stopping does not disconnect the clients, so a wait runs on | `StopWakesWaitersTest.StoppingEndsAWaitAndTheConnection` |
+| A connection arriving while stopping is served | `NothingAfterStopLateTest.AConnectionArrivingWhileStoppingIsShut` |
+| Nothing is ever accepted | Twelve tests, every one that connects |
+
+Each test that waits on another thread gives up after 5 seconds, so a
+mutation fails it rather than hanging it.
