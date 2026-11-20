@@ -157,14 +157,24 @@ frame rate given on the command line wins. Built with
 `FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face landmarker's
 `.task` bundle as a third argument, it runs the face model once a frame and
 reacts with each setting enabled: the head's angles as
-`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, each nod, shake, tilt, turn
-or up/down (once it starts) as `reaction {"gesture":"nod"}`, and each facial
-expression (once it starts) as `reaction {"expression":"smile"}`. It reports
-how long each detect took, how many frames had a face, the thread count and
-peak memory. Given a directory as a fourth argument, it saves every frame
-there as a PNG, with each frame's capture time in `timestamps.txt`, for
-`face_landmarker_fixtures` to replay. Those frames are images of whoever sat
-at the camera: keep them out of the repository.
+`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, each facial expression
+(once it starts) as `reaction {"expression":"smile"}`, and each nod, shake,
+tilt, turn or up/down as `reaction {"gesture":"nod"}`, once the model has held
+that class continuously for 200ms; it then stays silent, whatever the model
+says next, until the model has held still (`none`) continuously for 750ms,
+so one physical movement is one reaction even where the model's per-frame
+answer flickers between two related classes or to `none` and back (#34).
+It reports how long each detect took, how many frames had a face, the
+thread count and peak memory. Given a directory as a fourth argument, it
+saves every frame there as a PNG, with each frame's capture time in
+`timestamps.txt`, for `face_landmarker_fixtures` to replay. Those frames
+are images of whoever sat at the camera: keep them out of the repository.
+Every frame with a face also prints its gesture channels as
+`gesture_raw <timestamp_ms> <18 values>` (head_gesture::RawFrame, the model's
+own input), and once that frame's window is ready, its class probabilities
+as `gesture_probs <timestamp_ms> <6 values>` (none, nod, shake, tilt, turn,
+up/down), whether or not `gestures.enabled` is set, so a recording always
+has what a replay needs.
 `face_model_check <model> <image> <frames>` times the model on one image run
 as that many frames, for a face held still in front of the camera.
 `face_model_check --gesture <model> <frame.png>...` runs the head-gesture

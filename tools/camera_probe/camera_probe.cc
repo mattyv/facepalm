@@ -12,6 +12,13 @@
 // and eyes_narrowed reactions once each starts (#46). That needs a build
 // with FACEPALM_MEDIAPIPE_DYLIB.
 //
+// Every frame with a face also prints its blendshapes, and, so a recording
+// can be replayed through head_gesture later (#34), its raw gesture
+// channels (`gesture_raw`, head_gesture::RawFrame's 18 values); once a
+// frame's window is ready, its classified probabilities follow
+// (`gesture_probs`, the 6 values head_gesture::Predict gives). These print
+// whether or not gestures.enabled is set, so a recording always has them.
+//
 // Given a directory as well, it saves every frame there as a numbered PNG,
 // frame_000001.png and on, with timestamps.txt listing each frame's capture
 // time in milliseconds: a recording for tools/fixtures to replay (#21). The
@@ -61,6 +68,7 @@
 #include "src/frame.h"
 #include "src/frame_pipeline.h"
 #include "src/gesture_reader.h"
+#include "src/head_gesture_model.h"
 #include "src/head_pose_reader.h"
 #include "src/macos/avfoundation_session.h"
 #include "src/session_camera.h"
@@ -257,6 +265,56 @@ class TimedFaceModel : public FaceModel {
   ModelStats& stats_;
 };
 
+// Prints what the head-gesture model sees, for tools/fixtures to replay
+// later (#34): a reader of its own, beside GestureReader rather than
+// inside it, so a recording always carries the raw channels and
+// probabilities, whether or not gestures.enabled is set.
+//
+// This keeps a window the same way GestureReader does, so printing runs
+// head_gesture::Predict a second time on frames where gestures.enabled also
+// has a real GestureReader running; that repeats the model's CNN forward
+// pass, which real use never does. One pass measures about 4ms a frame on
+// an M-series machine at -O2, so the second costs that again on the
+// analysis thread: nothing at the 15 and 30 frames a second recorded so
+// far, but a bite out of the 16.7ms budget at the configured ceiling of
+// 60, where it can cost a recording some frames. The simplicity of a
+// reader of its own still wins over sharing one Predict call between the
+// two; share them if 60 fps recordings start dropping frames.
+class GestureProbeReader : public FaceReader {
+ public:
+  // `width` and `height` follow FaceReader::OnFace's established order.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+  void OnFace(const Face& face, int width, int height,
+              std::int64_t timestamp_ms,
+              std::vector<Reaction>& /*reactions*/) override {
+    const head_gesture::RawFrame raw =
+        head_gesture::RawFrameFrom(face, width, height);
+    std::printf("gesture_raw %lld", static_cast<long long>(timestamp_ms));
+    for (const float value : raw) {
+      std::printf(" %.6f", static_cast<double>(value));
+    }
+    std::printf("\n");
+
+    const std::optional<
+        std::array<head_gesture::RawFrame, head_gesture::kWindowFrames>>
+        window = window_.Add(raw, timestamp_ms);
+    if (!window) {
+      return;
+    }
+    const head_gesture::Prediction prediction = head_gesture::Predict(*window);
+    std::printf("gesture_probs %lld", static_cast<long long>(timestamp_ms));
+    for (const float probability : prediction.probabilities) {
+      std::printf(" %.6f", static_cast<double>(probability));
+    }
+    std::printf("\n");
+  }
+
+  void OnNoFace() override { window_.Reset(); }
+
+ private:
+  head_gesture::Window window_;
+};
+
 // Forwards the camera's reports to the controller, and measures between the
 // camera opening and closing.
 class Probe : public CameraReports {
@@ -360,8 +418,9 @@ class Probe : public CameraReports {
   }
 
   // The pipeline's analyser factory: one FaceAnalyzer, over the face model
-  // loaded at start (timed), with a reader for each setting enabled; none
-  // when neither is (#34).
+  // loaded at start (timed), with a reader for each setting enabled plus
+  // GestureProbeReader, which always runs so a recording always has
+  // gesture_raw/gesture_probs to replay later (#34).
   FramePipeline::Analyzers TakeAnalyzers(std::string& error) {
     FramePipeline::Analyzers analyzers;
     if (model_ == nullptr) {
@@ -386,11 +445,10 @@ class Probe : public CameraReports {
               .spreads = config_.expressions_spreads,
               .hold_ms = config_.expressions_hold_ms}));
     }
-    if (!readers.empty()) {
-      analyzers.push_back(std::make_unique<FaceAnalyzer>(
-          std::make_unique<TimedFaceModel>(std::move(model_), stats_),
-          std::move(readers)));
-    }
+    readers.push_back(std::make_unique<GestureProbeReader>());
+    analyzers.push_back(std::make_unique<FaceAnalyzer>(
+        std::make_unique<TimedFaceModel>(std::move(model_), stats_),
+        std::move(readers)));
     return analyzers;
   }
 
