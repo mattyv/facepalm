@@ -8,7 +8,9 @@ the camera on the programmer's own machine and tells client tools, such as the
 reacting: a nod, a shake, whether they are following along.
 
 Nothing works end to end yet. The design is on
-[ai-pair#83](https://github.com/mattyv/ai-pair/issues/83).
+[ai-pair#83](https://github.com/mattyv/ai-pair/issues/83), and the decisions
+made since, each with its reason, are in the
+[decisions log](docs/decisions.md).
 
 ## What exists
 

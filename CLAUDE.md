@@ -17,7 +17,12 @@ tools. The design and its decisions are on
 ## Issues and governance
 
 -   **Issues live on `mattyv/facepalm`,** and they are the knowledge surface:
-    decisions, findings and working notes go in issues, not in files here.
+    findings, evidence and working notes go in issues, not in files here.
+-   **Decisions are logged in [docs/decisions.md](docs/decisions.md)** (set by
+    the user on 2026-11-20): when a decision is made or reversed, add an entry
+    at the top in the same PR, with the date, the decision, why, what was
+    rejected, and the issue that holds the evidence. Never edit an old entry;
+    mark it as replaced.
 -   **The issue exists first, and the branch is named for it:**
     `<type>/<issue>-<slug>`, with `<type>` one of `feat`, `fix`, `docs`,
     `chore`. Work happens in a worktree under `.claude/worktrees/<slug>/`; the
