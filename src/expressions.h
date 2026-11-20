@@ -82,6 +82,11 @@ class ExpressionTracker {
   // it, though any expression already showing keeps showing. The resting
   // pose itself keeps learning throughout, including while away, so a new
   // posture held for a while becomes the resting pose and the gate reopens.
+  // When it reopens on a resting pose more than Settings::pose_degrees
+  // from the one it shut on, the posture itself changed and the scores
+  // shifted with it, so the resting face is learned afresh, as after a
+  // gap; after a nod or a glance the head returns to the pose it left, and
+  // the levels it froze still stand.
   std::vector<Expression> Update(const Scores& scores, const HeadRotation& pose,
                                  std::int64_t timestamp_ms);
 
@@ -109,10 +114,20 @@ class ExpressionTracker {
   bool Away(const HeadRotation& pose, double level_weight, bool learning,
             std::int64_t timestamp_ms);
 
+  // Tracks the gate's shut and reopen transitions from `away`, and returns
+  // whether it just reopened on a resting pose more than
+  // Settings::pose_degrees from the one it shut on: the posture changed
+  // while the gate was shut, so the frozen levels no longer describe the
+  // face the scores now come from, and the resting face must be learned
+  // afresh.
+  bool PostureChangedWhileGated(bool away);
+
   Settings settings_;
   std::array<double, 3> resting_pose_{};
   std::deque<std::pair<std::int64_t, std::array<double, 3>>> recent_poses_;
   std::int64_t moved_ms_ = kNotRisen;
+  bool gated_ = false;  // Whether the gate was shut on the last frame.
+  std::array<double, 3> gated_pose_{};  // The resting pose when it shut.
   std::array<State, kExpressions> states_{};
   bool started_ = false;
   std::int64_t started_ms_ = 0;

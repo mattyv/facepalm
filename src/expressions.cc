@@ -86,6 +86,7 @@ void ExpressionTracker::StartOver(const Scores& scores,
   resting_pose_ = AsArray(pose);
   recent_poses_.clear();
   moved_ms_ = kNotRisen;
+  gated_ = false;
   for (std::size_t index = 0; index < states_.size(); ++index) {
     states_.at(index) = State{.level = Signal(index, scores)};
   }
@@ -123,6 +124,27 @@ bool ExpressionTracker::Away(const HeadRotation& pose, double level_weight,
          timestamp_ms - moved_ms_ < settings_.settle_ms;
 }
 
+bool ExpressionTracker::PostureChangedWhileGated(bool away) {
+  if (away) {
+    if (!gated_) {
+      gated_ = true;
+      gated_pose_ = resting_pose_;
+    }
+    return false;
+  }
+  if (!gated_) {
+    return false;
+  }
+  gated_ = false;
+  for (std::size_t axis = 0; axis < resting_pose_.size(); ++axis) {
+    if (std::abs(resting_pose_.at(axis) - gated_pose_.at(axis)) >
+        settings_.pose_degrees) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
                                                   const HeadRotation& pose,
                                                   std::int64_t timestamp_ms) {
@@ -138,7 +160,16 @@ std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
       Weight(since_last, learning ? kLearningSeconds : kRestingSeconds);
   const double spread_weight = Weight(since_last, kSpreadSeconds);
 
-  if (Away(pose, level_weight, learning, timestamp_ms)) {
+  const bool away = Away(pose, level_weight, learning, timestamp_ms);
+  if (PostureChangedWhileGated(away)) {
+    // The gate reopened on a different resting pose than it shut on: the
+    // posture itself changed, and the scores shifted with it (#46), so
+    // what they sit at now is the new resting face, not a rise from the
+    // levels frozen at the old posture. Learn it afresh, as after a gap.
+    StartOver(scores, pose, timestamp_ms);
+    return began;
+  }
+  if (away) {
     // The scores follow the pose, not the face: report nothing, and clear
     // any pending hold so a rise that straddles the movement restarts it.
     // Levels and spreads are frozen until the head settles.

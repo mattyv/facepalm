@@ -429,6 +429,26 @@ TEST_F(ExpressionsTest, ANewPostureHeldForALongTimeBecomesTheRestingPose) {
   EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
 }
 
+// The scores are coupled to pose (#46), so a posture change shifts them
+// and keeps them shifted. Once the new posture has become the resting
+// pose, what the scores sit at there is the new resting face, learned
+// afresh, not a rise from the old one: were the old levels kept, the
+// shift would be reported as an expression the moment the gate reopened.
+TEST_F(ExpressionsTest, APostureChangeDoesNotReportTheScoresItShifted) {
+  Rest();
+
+  pose_.pitch_degrees = -25;
+  rest_.at(kMouthShrugLower) += 0.5F;
+  Hold(120);
+
+  EXPECT_THAT(reported_, IsEmpty());
+
+  // A real expression made from the new posture still reports.
+  Hold(1, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
 // At one frame a second the inter-frame gap (1000 ms) already exceeds the
 // settle time (600 ms), so a single away frame gates out only that frame;
 // the very next frame, a second later, already reports.

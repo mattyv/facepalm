@@ -132,7 +132,11 @@ A nod, a shake or a tilt moves the blendshape scores as much as an
 expression does, so while the head is away from its resting pose, or has
 moved more than a little recently, facepalm reads those scores as pose, not
 face: it neither reports an expression from them nor learns the resting
-face from them. The trade-off is that an expression made while the head
+face from them. A posture that settles somewhere new becomes the resting
+pose, and the face it settles with is learned afresh as the resting face:
+the scores shift with the posture, and a shift held through the whole
+movement is the new posture's face, not an expression made at its end.
+The trade-off is that an expression made while the head
 moves is reported only if it is still held once the head settles again, a
 little after the movement stops.
 
