@@ -75,6 +75,15 @@ leaves. With `GuardLastLeaveDiscards` false, TLC violates `NoStaleEvent`; the
 controller test `LastLeaveInvalidatesTicketsBeforeAReconnect` exercises it.
 The updated model checks 1,588 distinct states under the existing bounds.
 
+## `TurnExcursion`: suppress repeated turns until return
+
+The bounded model abstracts yaw as near or away and the elapsed settling time
+as one action. TLC checks six distinct states with no fairness assumption.
+`NoRearmAway` and `NoRepeat` hold. Setting `GuardReturn` or `GuardRepeat` to
+false violates the corresponding invariant. Tests in `gesture_reader_test`
+cover elapsed time, interruption, tracking loss, angle wrap and the general
+gesture gate. The model does not prove pose accuracy or model classification.
+
 ## `CameraLifecycle`: when the camera may be on
 
 Models consent, client subscriptions, the camera device, frames in flight,

@@ -182,6 +182,14 @@ for 15. The first run asks for camera permission for the app it runs in.
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.
 ```
 
+A reported head turn stays latched until the face returns within ten degrees
+of its estimated starting yaw and the model reads no gesture for 750 ms.
+The estimate is the oldest yaw in the one-second model window when turn
+classification starts. Tracking loss resets the latch; it does not establish
+that the head returned. The ten-degree tolerance is based on one recording and
+may not fit everyone. A turn is head movement, not an inference about gaze or
+attention. Other gesture classes keep their existing reporting rule.
+
 Every frame goes through the frame pipeline, with the settings above; a
 frame rate given on the command line wins. Built with
 `FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face landmarker's

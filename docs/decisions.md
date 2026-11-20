@@ -84,6 +84,20 @@ The rating rejection in this entry is replaced by the feedback decision above.
     Socket hello names are self-asserted, not client authentication.
 -   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
 
+## 2026-11-20: A turn is one excursion from a starting pose
+
+-   **Decision:** after a turn, suppress further turns until yaw returns within
+    ten degrees of the estimated starting yaw and the model reads no gesture
+    for 750 ms. The estimate is the oldest yaw in the model window when the
+    turn candidate starts. Other gesture classes retain their existing rule.
+-   **Why:** a turn and its return were reported repeatedly as separate turns.
+-   **Rejected:** treating any held pose as a completed excursion: it reports
+    the return as another turn.
+-   **Cost:** ten degrees is based on one person's capture; a different return
+    pose can suppress a later turn. Tracking loss starts a new track, without
+    evidence of return. A head turn does not establish gaze or attention.
+-   **Evidence:** [#34](https://github.com/mattyv/facepalm/issues/34).
+
 ## 2026-11-20: Replay recorded head gestures without a camera
 
 -   **Decision:** replay the probe's raw gesture frames through the live window,
