@@ -89,8 +89,10 @@ inference queue runs its tasks in order: create the model when the camera
 opens, detect on a ticketed frame, and destroy the model when the camera
 closes. Frames may arrive at any time, even just after closing, and loading
 the model and detecting can each fail. In the code, the model is the list of
-frame analysers (#34): the face model's head pose and Nodding Pigeon, made
-together, run in turn on each frame, and destroyed together.
+frame analysers (#34): `FaceAnalyzer`, which runs the face model once a
+frame and gives the result to a `FaceReader` for each setting enabled (head
+pose, and Idiap's CCDbHG head-gesture model), made together, run in turn on
+each frame, and destroyed together.
 
 | Property | What it says | Test |
 |---|---|---|
