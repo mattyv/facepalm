@@ -269,9 +269,13 @@ class TimedFaceModel : public FaceModel {
 // This keeps a window the same way GestureReader does, so printing runs
 // head_gesture::Predict a second time on frames where gestures.enabled also
 // has a real GestureReader running; that repeats the model's CNN forward
-// pass, which real use never does, but this is a diagnostic tool, off any
-// hot path, so the simplicity of a reader of its own wins over sharing one
-// Predict call between the two.
+// pass, which real use never does. One pass measures about 4ms a frame on
+// an M-series machine at -O2, so the second costs that again on the
+// analysis thread: nothing at the 15 and 30 frames a second recorded so
+// far, but a bite out of the 16.7ms budget at the configured ceiling of
+// 60, where it can cost a recording some frames. The simplicity of a
+// reader of its own still wins over sharing one Predict call between the
+// two; share them if 60 fps recordings start dropping frames.
 class GestureProbeReader : public FaceReader {
  public:
   // `width` and `height` follow FaceReader::OnFace's established order.
