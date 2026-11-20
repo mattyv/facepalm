@@ -5,6 +5,20 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Use the macOS settings layout on Linux
+
+Use Qt Widgets to present the same detection controls and field order as the
+macOS settings window. Both hosts use the shared config parser and document
+editor, which preserve comments and unrelated values. The desktop launcher
+opens Settings directly, and the tray keeps service readiness and replay
+status. This replaces the status-only Linux window so users can edit the
+daemon configuration on either desktop.
+
+Settings apply at the next daemon start with `--config` and the displayed
+path. Save checks for changes since opening the form and writes atomically.
+A writer racing that final save can still overwrite or be overwritten.
+[Facepalm service issue #37](https://github.com/mattyv/facepalm/issues/37)
+
 ## 2026-11-20: Run the Linux camera through the shared daemon
 
 Use Video4Linux through libv4l2 and link the pinned MediaPipe Tasks C

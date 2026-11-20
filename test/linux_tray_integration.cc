@@ -10,8 +10,10 @@
 #include <QDBusObjectPath>
 #include <QDBusPendingCallWatcher>
 #include <QDBusVariant>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QLocalServer>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -83,6 +85,7 @@ QDBusMessage Call(QDBusInterface& interface, const QString& method,
 
 struct MenuScan {
   int quit = -1;
+  bool settings = false;
   bool replay_status = false;
   bool camera_status = false;
   QString expected_camera;
@@ -96,6 +99,10 @@ void ScanMenu(const QDBusArgument& argument, MenuScan& scan) {
   QString label = properties.value("label").toString();
   label.remove(QLatin1Char('&'));
   if (label.compare("Quit", Qt::CaseInsensitive) == 0) scan.quit = id;
+  if (label.startsWith("Settings") &&
+      properties.value("enabled", true).toBool()) {
+    scan.settings = true;
+  }
   if (label == "Gesture replay is available offline." &&
       !properties.value("enabled", true).toBool()) {
     scan.replay_status = true;
@@ -198,7 +205,8 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
   scan.expected_camera = service_available ? "Camera service is ready."
                                            : "Camera service is offline.";
   ScanMenu(qvariant_cast<QDBusArgument>(layout.arguments().at(1)), scan);
-  if (scan.quit < 0 || !scan.replay_status || !scan.camera_status ||
+  if (scan.quit < 0 || !scan.settings || !scan.replay_status ||
+      !scan.camera_status ||
       Call(menu_interface, "Event",
            {scan.quit, "clicked", QVariant::fromValue(QDBusVariant(0)),
             QVariant::fromValue(uint{0})})
@@ -216,15 +224,32 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
 }
 
 bool RunWithoutWatcher(const QString& executable, bool close_window) {
+  QTemporaryDir config_home;
+  if (!config_home.isValid() || !QDir(config_home.path()).mkpath("facepalm")) {
+    return false;
+  }
+  const QString path = config_home.filePath("facepalm/facepalm.conf");
+  QFile config(path);
+  const QByteArray initial(
+      "camera.frames_per_second = 15 # preserve me\n"
+      "head_pose.enabled = false\n");
+  if (!config.open(QIODevice::WriteOnly) ||
+      config.write(initial) != initial.size()) {
+    return false;
+  }
+  config.close();
   QProcess app;
   app.setProcessChannelMode(QProcess::ForwardedChannels);
+  auto environment = QProcessEnvironment::systemEnvironment();
+  environment.insert("XDG_CONFIG_HOME", config_home.path());
+  app.setProcessEnvironment(environment);
   app.start(executable);
   if (!app.waitForStarted(kTimeoutMs)) return false;
   QString window;
   const bool shown = WaitUntil([&] {
     QProcess search;
     search.start("xdotool",
-                 {"search", "--onlyvisible", "--name", "[Ff]acepalm"});
+                 {"search", "--onlyvisible", "--name", "^Facepalm Settings$"});
     if (!search.waitForFinished(kTimeoutMs) || search.exitCode() != 0)
       return false;
     window = QString::fromUtf8(search.readAllStandardOutput())
@@ -249,16 +274,18 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
     if (close_window) {
       close.start("xdotool", {"key", "--window", window, "Escape"});
     } else {
+      QProcess::execute("xdotool", {"windowfocus", window, "key", "ctrl+a"});
+      QProcess::execute("xdotool", {"type", "24"});
       close.start("xdotool",
-                  {"mousemove", "--window", window, QString::number(width - 50),
-                   QString::number(height - 26), "click", "1"});
+                  {"mousemove", "--window", window, QString::number(width - 76),
+                   QString::number(height - 36), "click", "1"});
     }
     close.waitForFinished(kTimeoutMs);
   }
-  const bool compact =
-      width >= 310 && width <= 400 && height >= 110 && height <= 260;
+  const bool settings_size =
+      width >= 510 && width <= 600 && height >= 430 && height <= 660;
   const bool exited =
-      shown && compact && (close_window || close.exitCode() == 0) &&
+      shown && settings_size && (close_window || close.exitCode() == 0) &&
       WaitUntil([&] { return app.state() == QProcess::NotRunning; }) &&
       app.exitStatus() == QProcess::NormalExit && app.exitCode() == 0;
   if (!exited) {
@@ -272,7 +299,16 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
     app.kill();
     app.waitForFinished(kTimeoutMs);
   }
-  return exited;
+  if (!exited || !config.open(QIODevice::ReadOnly)) return false;
+  const auto saved = config.readAll();
+  if (close_window) return saved == initial;
+  if (!saved.contains("camera.frames_per_second = 24 # preserve me") ||
+      !saved.contains("head_pose.enabled = false")) {
+    std::cerr
+        << "Settings save did not preserve the comment and unrelated value\n";
+    return false;
+  }
+  return true;
 }
 }  // namespace
 

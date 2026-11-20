@@ -126,9 +126,11 @@ The Debian 13 amd64 package installs the Facepalm 🤦 tray app and the
 `gesture_replay` CLI. Launch **Facepalm** from the desktop applications menu.
 The tray is displayed by desktops with StatusNotifierItem support. GNOME
 may need the [AppIndicator support extension](https://extensions.gnome.org/extension/615/appindicator-support/).
-Facepalm opens a compact status window when a compatible tray is unavailable.
-The window shows whether the local camera service is ready and keeps offline
-replay status available.
+The applications menu opens **Facepalm Settings** for frame rate, gesture
+and expression detection, and advanced tuning. Choose **Settings…** from the
+tray to reopen the form. The tray also shows local camera service readiness
+and offline replay availability. Start the daemon with `--config` and the
+path displayed in the form to apply saved settings.
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 

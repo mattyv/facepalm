@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Facepalm
-Comment=Facepalm portable tools status
-Exec=facepalm-menu
+Comment=Configure Facepalm detection
+Exec=facepalm-menu --settings
 Icon=facepalm
 Terminal=false
 Categories=Utility;

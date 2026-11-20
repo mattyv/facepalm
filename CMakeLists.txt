@@ -110,7 +110,7 @@ if(FACEPALM_LINUX_TRAY)
   add_executable(facepalm_menu tools/menu/main_linux.cc)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
-  target_link_libraries(facepalm_menu PRIVATE Qt6::Widgets Qt6::Network)
+  target_link_libraries(facepalm_menu PRIVATE settings_document Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
