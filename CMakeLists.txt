@@ -75,6 +75,12 @@ target_link_libraries(gesture_reader PUBLIC head_gesture_model)
 target_link_libraries(expression_reader PUBLIC expressions head_pose)
 facepalm_unit(session_camera)
 
+facepalm_unit(gesture_replay)
+target_link_libraries(gesture_replay PUBLIC gesture_reader)
+add_executable(gesture_replay_cli tools/gesture_replay/main.cc)
+set_target_properties(gesture_replay_cli PROPERTIES OUTPUT_NAME gesture_replay)
+target_link_libraries(gesture_replay_cli PRIVATE gesture_replay)
+
 # The macOS capture API, through AVFoundation, and camera_probe, which drives
 # it. They need a real camera, so camera_probe is their smoke test (#11);
 # SessionCamera, the logic around them, is unit-tested.
@@ -124,6 +130,7 @@ endif()
 file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
+  ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.cc ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.h
   ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc
   ${PROJECT_SOURCE_DIR}/tools/face_model_check/*.cc
   ${PROJECT_SOURCE_DIR}/tools/fixtures/*.cc)

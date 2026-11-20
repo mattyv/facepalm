@@ -248,3 +248,18 @@ what changed.
 GPL-3.0-only. See [LICENSE](LICENSE). facepalm was MIT before #34 ported
 Idiap's CCDbHG head-gesture model, which is GPL-3.0-only; see
 [THIRDPARTY.md](THIRDPARTY.md) for the model's own notice.
+
+### Replay head gestures offline
+
+Build `gesture_replay` with `cmake --build build --target gesture_replay_cli`, then
+run `build/gesture_replay < camera-probe.log`. Each ready window prints its
+timestamp, six model probabilities, classified gesture and reported gesture.
+The class and report numbers are 0 none, 1 nod, 2 shake, 3 tilt, 4 turn and
+5 up/down. The default confidence threshold is used.
+
+New probe logs include `gesture_no_face` when tracking is lost; replay resets
+the window and reporting gate there. Older logs have no such markers, so their
+raw timestamps alone cannot distinguish tracking loss from a dropped frame.
+Replay keeps the window over a timestamp gap, as the live window does; results
+for older logs may therefore differ from the original live reports. Raw values
+in probe logs are rounded to six decimal places, so replay is approximate.

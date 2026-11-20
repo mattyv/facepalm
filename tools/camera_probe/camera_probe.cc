@@ -309,7 +309,10 @@ class GestureProbeReader : public FaceReader {
     std::printf("\n");
   }
 
-  void OnNoFace() override { window_.Reset(); }
+  void OnNoFace() override {
+    std::printf("gesture_no_face\n");
+    window_.Reset();
+  }
 
  private:
   head_gesture::Window window_;
