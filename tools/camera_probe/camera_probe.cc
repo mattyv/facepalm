@@ -372,14 +372,17 @@ class Probe : public CameraReports {
     controller_.OnOpenFailed();
     std::fprintf(stderr,
                  "camera_probe: no camera, or camera permission denied\n");
+    model_.reset();
     std::exit(1);
   }
 
-  // The process exits from here with the queues still running, and the probe
-  // is never destroyed, so no queued task outlives what it points to (#21).
+  // The probe stays alive until exit; model destruction finishes first.
   void OnClosed() override {
     controller_.OnClosed();
-    pipeline_.OnCameraClosed();
+    pipeline_.OnCameraClosed([this] {
+      model_.reset();
+      std::exit(0);
+    });
     const double cpu = cpu_at_close_ - cpu_at_open_;
     std::printf(
         "seconds %d\nframes %d\nframes_per_second %.1f\ncpu_seconds %.3f\n"
@@ -390,14 +393,15 @@ class Probe : public CameraReports {
     if (has_model_) {
       ReportModel();
     }
-    std::exit(0);
   }
 
   void OnDeviceLost() override {
     controller_.OnDeviceLost();
-    pipeline_.OnCameraClosed();
+    pipeline_.OnCameraClosed([this] {
+      model_.reset();
+      std::exit(1);
+    });
     std::fprintf(stderr, "camera_probe: the camera was lost\n");
-    std::exit(1);
   }
 
   void OnDeviceBack() override { controller_.OnDeviceBack(); }

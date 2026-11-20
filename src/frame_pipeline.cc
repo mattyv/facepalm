@@ -29,8 +29,13 @@ void FramePipeline::OnCameraOpen() {
 
 // specs/FramePipeline.tla: Close, with GuardOneQueue and GuardDestroyOnClose:
 // the destroy waits on the inference queue behind any detect.
-void FramePipeline::OnCameraClosed() {
-  inference_([this] { DestroyModel(); });
+void FramePipeline::OnCameraClosed(std::function<void()> on_closed) {
+  inference_([this, on_closed = std::move(on_closed)] {
+    DestroyModel();
+    if (on_closed) {
+      control_(on_closed);
+    }
+  });
 }
 
 // specs/FramePipeline.tla: CaptureStart and CaptureEnd, with GuardOneSlot.
