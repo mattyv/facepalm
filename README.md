@@ -38,6 +38,13 @@ Nothing works end to end yet. The design is on
     is the model itself, ported from
     [idiap/ccdbhg-head-gesture-recognition](https://github.com/idiap/ccdbhg-head-gesture-recognition)
     (GPL-3.0-only); see [Licence](#licence).
+-   `src/expression_reader`, `src/expressions`: a `FaceReader` that reacts
+    once to each facial expression starting: brows up, a smile, pressed
+    lips, brows down (a frown) or narrowed eyes (#46). `ExpressionTracker`,
+    in `src/expressions`, is the mapping from MediaPipe's blendshape scores
+    to expressions, judged against the person's own resting face. Its
+    defaults were tuned on one person's 80-second recording; the frown
+    (brows down) was the weakest of the five to read reliably.
 -   `src/config`: the settings file, below.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
     to a tenth of a degree, as JSON text.
@@ -105,7 +112,33 @@ head_pose.enabled = true
 # its most likely class before it is reported.
 gestures.enabled = true
 gestures.confidence_threshold = 0.5
+# Brows up, a smile, pressed lips, brows down (a frown) and narrowed eyes.
+expressions.enabled = true
+# The smallest rise above the person's own resting face that counts.
+expressions.smallest_rise = 0.06
+# How many times the resting face's own wobble a rise must also exceed.
+expressions.spreads = 3
+# How long a rise must last before it counts, so a blink is not a squint.
+expressions.hold_ms = 200
+# How far the head may lean from its resting pose, in degrees, and how much
+# it may move within the last 500 ms, before expressions pause (#46).
+expressions.pose_degrees = 10
+expressions.pose_range = 3
+# How long after the head was last away or moving it keeps pausing.
+expressions.settle_ms = 600
 ```
+
+A nod, a shake or a tilt moves the blendshape scores as much as an
+expression does, so while the head is away from its resting pose, or has
+moved more than a little recently, facepalm reads those scores as pose, not
+face: it neither reports an expression from them nor learns the resting
+face from them. A posture that settles somewhere new becomes the resting
+pose, and the face it settles with is learned afresh as the resting face:
+the scores shift with the posture, and a shift held through the whole
+movement is the new posture's face, not an expression made at its end.
+The trade-off is that an expression made while the head
+moves is reported only if it is still held once the head settles again, a
+little after the movement stops.
 
 ## Measuring the camera on macOS
 
@@ -124,8 +157,9 @@ frame rate given on the command line wins. Built with
 `FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face landmarker's
 `.task` bundle as a third argument, it runs the face model once a frame and
 reacts with each setting enabled: the head's angles as
-`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, and each nod, shake, tilt,
-turn or up/down as `reaction {"gesture":"nod"}`, once the model has held
+`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, each facial expression
+(once it starts) as `reaction {"expression":"smile"}`, and each nod, shake,
+tilt, turn or up/down as `reaction {"gesture":"nod"}`, once the model has held
 that class continuously for 200ms; it then stays silent, whatever the model
 says next, until the model has held still (`none`) continuously for 750ms,
 so one physical movement is one reaction even where the model's per-frame
