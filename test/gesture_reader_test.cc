@@ -271,13 +271,14 @@ TEST(GestureReportGateTest, AStillHeadShortOfStillMsDoesNotEndTheEpisode) {
   ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);
   ASSERT_EQ(gate.Update(Gesture::kNod, 200), Gesture::kNod);  // Reported.
 
-  // One ms short of still_ms (750ms, from the first kNone): the episode
-  // stays open, so even a gesture that would otherwise confirm right after
-  // is not reported.
+  // One ms short of still_ms at the last kNone frame (749ms from the
+  // first), and the head moves again at the 750ms mark itself: only a
+  // kNone frame can close the episode, so it stays open, and even a
+  // gesture that would otherwise confirm right after is not reported.
   EXPECT_EQ(gate.Update(Gesture::kNone, 300), Gesture::kNone);
   EXPECT_EQ(gate.Update(Gesture::kNone, 1049), Gesture::kNone);  // 749ms.
-  EXPECT_EQ(gate.Update(Gesture::kShake, 1049), Gesture::kNone);
-  EXPECT_EQ(gate.Update(Gesture::kShake, 1249), Gesture::kNone);  // 200ms.
+  EXPECT_EQ(gate.Update(Gesture::kShake, 1050), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kShake, 1250), Gesture::kNone);  // 200ms.
 }
 
 TEST(GestureReportGateTest,
