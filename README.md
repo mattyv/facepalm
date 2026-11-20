@@ -92,7 +92,7 @@ made since, each with its reason, are in the
 
 ## Build and test
 
-Requires CMake 3.28 or later, Ninja, a C++20 compiler, and GoogleTest. On
+Tests require CMake 3.28 or later, Ninja, a C++20 compiler, and GoogleTest. On
 macOS, `brew install cmake ninja googletest llvm bats-core shellcheck shfmt
 jq`.
 
@@ -119,6 +119,77 @@ bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
 
 See [local macOS app staging](docs/local-app.md) for the development installer.
+
+### Linux desktop tray and Debian package
+
+The Debian 13 amd64 package installs the Facepalm 🤦 tray app and the
+`gesture_replay` CLI. Launch **Facepalm** from the desktop applications menu.
+The tray is displayed by desktops with StatusNotifierItem support. GNOME
+may need the [AppIndicator support extension](https://extensions.gnome.org/extension/615/appindicator-support/).
+Facepalm opens a small status window when a compatible tray is unavailable.
+Live camera capture is available through the macOS daemon.
+
+Download `facepalm-debian13-amd64` from the Facepalm CI run, extract its
+`.deb`, and install the file with `apt`.
+
+```shell
+sudo apt install ./facepalm_0.1.0_amd64.deb
+```
+
+For a local Debian 13 build, install `qt6-base-dev`, `qt6-wayland`, and
+`dpkg-dev` along with the compiler, CMake and Ninja. Then configure, build
+and package the desktop tools.
+
+```shell
+cmake -S . -B build-debian -G Ninja -DBUILD_TESTING=OFF \
+  -DCMAKE_BUILD_TYPE=Release -DFACEPALM_LINUX_TRAY=ON
+cmake --build build-debian --target facepalm_menu gesture_replay_cli
+cpack --config build-debian/CPackConfig.cmake -B build-debian/package
+```
+
+The separately installed MCP adapter uses the Node.js setup below.
+
+### Portable replay and MCP adapter install
+
+The portable build installs the offline gesture replay CLI and the existing
+Node MCP adapter, plus licence and third-party notices. The camera backend and
+daemon are currently available on macOS; Linux camera capture and a Linux
+daemon remain work for #37. The adapter connects to a separately running
+compatible service. With testing
+disabled, the build needs CMake 3.28 or newer, Ninja, and a C++20 compiler.
+
+```shell
+cmake -S . -B build-portable -G Ninja -DBUILD_TESTING=OFF \
+  -DCMAKE_INSTALL_PREFIX="$HOME/.local/facepalm"
+cmake --build build-portable
+cmake --install build-portable
+"$HOME/.local/facepalm/bin/gesture_replay" < camera-probe.log
+cd "$HOME/.local/facepalm/share/facepalm/mcp"
+npm ci --omit=dev
+node main.js /path/to/service.sock --client-token-file /path/to/private-token
+```
+
+The MCP adapter needs Node.js 22 or newer and the lockfile dependencies.
+`npm ci` obtains those packages from a registry or an existing npm cache;
+CMake installs the source and lockfile without `node_modules`. With the default
+relative install paths, the installed tree can be moved as a unit. Provision
+a compatible service and any required private token separately.
+
+To test the install and relocation without GoogleTest, pass a new, disposable
+path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the
+installed adapter against the existing test-only service, first install the
+adapter dependencies and build the fixture using the testing build above.
+
+```shell
+(cd mcp && npm ci)
+cmake --build build --target mcp_service_fixture
+cmake -DSOURCE_DIR="$PWD" -DSMOKE_ROOT=/tmp/facepalm-install-smoke \
+  -DMCP_NODE_MODULES="$PWD/mcp/node_modules" \
+  -DMCP_FIXTURE="$PWD/build/mcp_service_fixture" -P test/install_smoke.cmake
+```
+
+Omit both MCP arguments to check the replay install alone. The fixture supplies
+a test feed over a local socket; it does not exercise a camera.
 
 The MCP integration test uses a synthetic feed and the real local socket; it
 requires Node.js 22 and the MCP adapter dependencies, but no camera:

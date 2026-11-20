@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Facepalm
+Comment=Facepalm portable tools status
+Exec=facepalm-menu
+Icon=facepalm
+Terminal=false
+Categories=Utility;

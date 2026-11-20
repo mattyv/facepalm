@@ -5,6 +5,34 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Package the Linux tray and replay tools for Debian 13
+
+Use Qt 6 Widgets for the Linux tray, menu and status window. Keep the
+existing shared core and macOS AppKit host. Qt supplies the desktop tray
+protocol and menu, so Facepalm only owns its status and controls.
+
+Build and install-test the `.deb` in separate Debian 13 amd64 environments.
+The package contains the tray, desktop launcher, licensed icon and replay
+CLI. The MCP adapter keeps its separate Node.js 22 install because Debian
+13 supplies Node.js 20. Users launch the tray from their applications menu.
+
+Desktops with StatusNotifierItem support show the icon. The status window
+covers desktops without a compatible tray. The Linux camera daemon is a
+separate portability milestone. [Facepalm service issue #37](https://github.com/mattyv/facepalm/issues/37)
+
+## 2026-11-20: Install the portable replay and MCP adapter separately
+
+-   **Decision:** use CMake's `BUILD_TESTING` switch and install the existing
+    replay CLI and MCP adapter with its lockfile under a relocatable prefix.
+-   **Why:** the portable tools can be built and installed without GoogleTest
+    or a camera backend, while normal test builds retain their existing suite.
+-   **Rejected:** installing a synthetic fixture as a daemon or presenting the
+    portable tools as a complete Linux camera application.
+-   **Cost:** the adapter needs Node.js and separately installed npm
+    dependencies and a separately provisioned compatible service. This does
+    not deliver a Linux camera backend, daemon, model, or live camera test.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37).
+
 ## 2026-11-20: Use an ELF export list for the Linux MediaPipe shim
 
 -   **Decision:** build a `.so` on Linux with the same six-function C ABI as
