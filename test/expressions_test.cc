@@ -44,13 +44,13 @@ class ExpressionsTest : public ::testing::Test {
     }
   }
 
-  // One frame, `raised` lifted by `rise`.
+  // One frame, `raised` lifted by `rise`, `frame_ms_` after the last.
   void Frame(std::initializer_list<int> raised, float rise) {
     Scores scores = rest_;
     for (const int index : raised) {
       scores.at(static_cast<std::size_t>(index)) += rise;
     }
-    now_ms_ += kFrameMs;
+    now_ms_ += frame_ms_;
     for (const Expression started : tracker_.Update(scores, now_ms_)) {
       reported_.push_back(started);
     }
@@ -61,6 +61,7 @@ class ExpressionsTest : public ::testing::Test {
 
   Scores rest_{};
   std::int64_t now_ms_ = 1000;
+  std::int64_t frame_ms_ = kFrameMs;
   ExpressionTracker tracker_{
       ExpressionTracker::Settings{.rise = 0.05, .spreads = 3, .hold_ms = 200}};
   std::vector<Expression> reported_;
@@ -224,6 +225,57 @@ TEST_F(ExpressionsTest, LearnsTheRestingFaceAgainAfterAGap) {
   Hold(2, {kMouthSmileLeft, kMouthSmileRight});
 
   EXPECT_THAT(reported_, IsEmpty());
+}
+
+// A gap of exactly two seconds is not "more than two": the resting face is
+// kept, and a rise right after the gap is an expression, not a new face.
+TEST_F(ExpressionsTest, KeepsTheRestingFaceOverAGapOfTwoSeconds) {
+  Rest();
+  now_ms_ += 2000 - kFrameMs;
+
+  Hold(1, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// One frame a second stays within the two-second gap, and the hold is
+// time, not frames: the second raised frame is already a second old.
+TEST_F(ExpressionsTest, ReportsAtOneFrameEachSecond) {
+  frame_ms_ = 1000;
+  for (int frame = 0; frame < 6; ++frame) {
+    Frame({}, 0);
+  }
+
+  for (int frame = 0; frame < 3; ++frame) {
+    Frame({kMouthSmileLeft, kMouthSmileRight}, kSmall);
+  }
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// At sixty frames a second a blink is several frames of squint; the hold
+// being time, not frames, is what keeps it out, while a real squint counts.
+TEST_F(ExpressionsTest, IgnoresABlinkAtSixtyFramesPerSecondButNotASquint) {
+  frame_ms_ = 16;
+  constexpr int kRestFrames = 300;  // 4.8 seconds: enough to learn.
+  for (int frame = 0; frame < kRestFrames; ++frame) {
+    Frame({}, 0);
+  }
+
+  constexpr int kBlinkFrames = 6;  // About 100 ms, under the 200 ms hold.
+  for (int frame = 0; frame < kBlinkFrames; ++frame) {
+    Frame({kEyeSquintLeft, kEyeSquintRight}, kSmall);
+  }
+  constexpr int kBetweenFrames = 60;
+  for (int frame = 0; frame < kBetweenFrames; ++frame) {
+    Frame({}, 0);
+  }
+  constexpr int kSquintFrames = 31;  // Half a second, over the hold.
+  for (int frame = 0; frame < kSquintFrames; ++frame) {
+    Frame({kEyeSquintLeft, kEyeSquintRight}, kSmall);
+  }
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kEyesNarrowed));
 }
 
 TEST_F(ExpressionsTest, ReadsRaisedBrowsFromTheBrowUpScores) {
