@@ -13,6 +13,8 @@ namespace facepalm {
 namespace {
 
 constexpr int kMostFramesPerSecond = 60;
+constexpr float kMostExpressionsSpreads = 100;
+constexpr int kMostExpressionsHoldMs = 5000;
 
 // `text` without spaces or tabs at either end.
 std::string_view Trim(std::string_view text) {
@@ -52,36 +54,107 @@ struct Setting {
   std::string_view value;
 };
 
+// Sets camera.frames_per_second from `value`, or returns why it cannot.
+std::optional<std::string> SetFramesPerSecond(std::string_view value,
+                                              Config& config) {
+  const std::optional<int> rate = Number<int>(value);
+  if (!rate || *rate < 1 || *rate > kMostFramesPerSecond) {
+    return "expected a whole number from 1 to 60";
+  }
+  config.frames_per_second = *rate;
+  return std::nullopt;
+}
+
+// Sets the on/off setting `setting.name` names from `setting.value`, or
+// returns why it cannot. `setting.name` is one of head_pose.enabled,
+// gestures.enabled or expressions.enabled, as `Set` has already checked.
+std::optional<std::string> SetSwitch(const Setting& setting, Config& config) {
+  const std::optional<bool> enabled = Boolean(setting.value);
+  if (!enabled) {
+    return "expected true or false";
+  }
+  if (setting.name == "head_pose.enabled") {
+    config.head_pose_enabled = *enabled;
+  } else if (setting.name == "gestures.enabled") {
+    config.gestures_enabled = *enabled;
+  } else {
+    config.expressions_enabled = *enabled;
+  }
+  return std::nullopt;
+}
+
+// Sets gestures.confidence_threshold from `value`, or returns why it
+// cannot.
+std::optional<std::string> SetGestureConfidenceThreshold(std::string_view value,
+                                                         Config& config) {
+  const std::optional<float> threshold = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
+      *threshold > 1) {
+    return "expected a number from 0 to 1";
+  }
+  config.gesture_confidence_threshold = *threshold;
+  return std::nullopt;
+}
+
+// Sets expressions.smallest_rise from `value`, or returns why it cannot.
+std::optional<std::string> SetExpressionsSmallestRise(std::string_view value,
+                                                      Config& config) {
+  const std::optional<float> rise = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!rise || std::isnan(*rise) || *rise < 0 || *rise > 1) {
+    return "expected a number from 0 to 1";
+  }
+  config.expressions_smallest_rise = *rise;
+  return std::nullopt;
+}
+
+// Sets expressions.spreads from `value`, or returns why it cannot.
+std::optional<std::string> SetExpressionsSpreads(std::string_view value,
+                                                 Config& config) {
+  const std::optional<float> spreads = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!spreads || std::isnan(*spreads) || *spreads < 0 ||
+      *spreads > kMostExpressionsSpreads) {
+    return "expected a number from 0 to 100";
+  }
+  config.expressions_spreads = *spreads;
+  return std::nullopt;
+}
+
+// Sets expressions.hold_ms from `value`, or returns why it cannot.
+std::optional<std::string> SetExpressionsHoldMs(std::string_view value,
+                                                Config& config) {
+  const std::optional<int> hold_ms = Number<int>(value);
+  if (!hold_ms || *hold_ms < 0 || *hold_ms > kMostExpressionsHoldMs) {
+    return "expected a whole number from 0 to 5000";
+  }
+  config.expressions_hold_ms = *hold_ms;
+  return std::nullopt;
+}
+
 // Sets the setting in `config`, or returns why it cannot.
 std::optional<std::string> Set(const Setting& setting, Config& config) {
   const std::string_view name = setting.name;
   const std::string_view value = setting.value;
   if (name == "camera.frames_per_second") {
-    const std::optional<int> rate = Number<int>(value);
-    if (!rate || *rate < 1 || *rate > kMostFramesPerSecond) {
-      return "expected a whole number from 1 to 60";
-    }
-    config.frames_per_second = *rate;
-    return std::nullopt;
+    return SetFramesPerSecond(value, config);
   }
-  if (name == "head_pose.enabled" || name == "gestures.enabled") {
-    const std::optional<bool> enabled = Boolean(value);
-    if (!enabled) {
-      return "expected true or false";
-    }
-    (name == "head_pose.enabled" ? config.head_pose_enabled
-                                 : config.gestures_enabled) = *enabled;
-    return std::nullopt;
+  if (name == "head_pose.enabled" || name == "gestures.enabled" ||
+      name == "expressions.enabled") {
+    return SetSwitch(setting, config);
   }
   if (name == "gestures.confidence_threshold") {
-    const std::optional<float> threshold = Number<float>(value);
-    // isnan too: from_chars reads "nan", and NaN passes the comparisons.
-    if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
-        *threshold > 1) {
-      return "expected a number from 0 to 1";
-    }
-    config.gesture_confidence_threshold = *threshold;
-    return std::nullopt;
+    return SetGestureConfidenceThreshold(value, config);
+  }
+  if (name == "expressions.smallest_rise") {
+    return SetExpressionsSmallestRise(value, config);
+  }
+  if (name == "expressions.spreads") {
+    return SetExpressionsSpreads(value, config);
+  }
+  if (name == "expressions.hold_ms") {
+    return SetExpressionsHoldMs(value, config);
   }
   return "unknown setting " + std::string(name);
 }
