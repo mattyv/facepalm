@@ -230,7 +230,8 @@ TEST_P(LiveCaseTest, WindowResamplesToTheExpectedFixedY) {
       FeedTrack(window, GetParam());
   ASSERT_TRUE(result.has_value());
   // value_or: clang-tidy cannot see the assertion; zeroes would fail below.
-  const std::array<RawFrame, kWindowFrames> actual = result.value_or({});
+  const std::array<RawFrame, kWindowFrames> actual =
+      result.value_or(std::array<RawFrame, kWindowFrames>{});
   const std::array<RawFrame, kWindowFrames> expected =
       ToWindow(GetParam().expected_fixed_y);
   for (int t = 0; t < kWindowFrames; ++t) {
