@@ -53,7 +53,8 @@ class FramePipeline {
   // The camera has stopped: OnClosed and OnDeviceLost both, every way the
   // controller leaves open (spec: Close). A dead helper takes the model with
   // it.
-  void OnCameraClosed();
+  // Posts completion to control only after the analysers are destroyed.
+  void OnCameraClosed(std::function<void()> on_closed = {});
 
   // A captured frame, on the capture queue. Valid only during the call
   // (spec: CaptureStart and CaptureEnd).

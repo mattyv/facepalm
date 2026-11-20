@@ -413,6 +413,28 @@ TEST_F(ModelGoneAfterCloseTest, ClosingDestroysTheAnalysers) {
   EXPECT_TRUE(destroyed);
 }
 
+TEST_F(ModelGoneAfterCloseTest,
+       CompletionFollowsPendingAnalysisAndDestruction) {
+  MockAnalyzer* analyzer = Opened();
+  std::vector<std::string> events;
+  EXPECT_CALL(*analyzer, Analyze(_, _, _, _, _, _))
+      .WillOnce([&events](std::span<const std::uint8_t>, int, int, std::int64_t,
+                          std::vector<Reaction>&, std::string&) {
+        events.emplace_back("analyse");
+        return true;
+      });
+  EXPECT_CALL(*analyzer, Destroyed()).WillOnce([&events] {
+    events.emplace_back("destroy");
+  });
+  Captured();
+  pipeline_.OnCameraClosed([&events] { events.emplace_back("complete"); });
+  EXPECT_THAT(events, ElementsAre());
+  inference_.Drain();
+  EXPECT_THAT(events, ElementsAre("analyse", "destroy"));
+  control_.Drain();
+  EXPECT_THAT(events, ElementsAre("analyse", "destroy", "complete"));
+}
+
 TEST_F(ModelGoneAfterCloseTest, ReopeningMakesNewAnalysers) {
   MockAnalyzer* first = Opened();
   EXPECT_CALL(*first, Destroyed());

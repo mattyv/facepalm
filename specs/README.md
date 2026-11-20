@@ -93,8 +93,10 @@ closes. Frames may arrive at any time, even just after closing, and loading
 the model and detecting can each fail. In the code, the model is the list of
 frame analysers (#34): `FaceAnalyzer`, which runs the face model once a
 frame and gives the result to a `FaceReader` for each setting enabled (head
-pose, and Idiap's CCDbHG head-gesture model), made together, run in turn on
-each frame, and destroyed together.
+pose, Idiap's CCDbHG head-gesture model, and facial expressions, #46), made
+together, run in turn on each frame, and destroyed together. No action or
+invariant changes with the expression reader: the pipeline still only ever
+sees the one list of frame analysers.
 
 | Property | What it says | Test |
 |---|---|---|
@@ -140,3 +142,19 @@ tests that stand for the properties they break:
 | Closing never destroys the analysers | `ModelGoneAfterCloseTest.ClosingDestroysTheAnalysers`, `NoDetectWithoutModelTest.AnalysesNothingOnceClosed` |
 | A ticketed frame's analyse is never queued | `CanDetectTest` (all three), and ten others |
 | A frame's pixels are not wiped when its slot is freed | `PixelsWipedTest` (both; the spec does not model the wipe) |
+
+## `ProbeShutdown`: when the camera probe may exit
+
+The probe exits after the inference queue finishes destroying the face model.
+MediaPipe uses process-wide state during destruction, so running process exit
+handlers at the same time can abort after the capture summary has been printed.
+
+`ProbeShutdown.cfg` checks one terminal camera close. Weak fairness assumes
+the queued teardown starts, the model closes, and the control queue processes
+completion. The model checks ordering after camera closure and assumes model
+destruction returns.
+
+| Property | Result |
+|---|---|
+| `ExitAfterRetirement` and `EventuallyExits` | Hold across four distinct states |
+| `WaitForRetirement = FALSE` | Violates `ExitAfterRetirement` in two steps while destruction is still queued |

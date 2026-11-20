@@ -6,9 +6,11 @@
 // Every frame goes through FramePipeline, on queues as the service will run
 // them. Given a face landmarker .task bundle, the pipeline runs the face
 // model once a frame and gives it to a reader for each setting enabled in
-// the config: head pose (#18, #21) and head gestures, with Idiap's CCDbHG
-// model printing nod, shake, tilt, turn and up_down reactions (#34). That
-// needs a build with FACEPALM_MEDIAPIPE_DYLIB.
+// the config: head pose (#18, #21), head gestures, with Idiap's CCDbHG
+// model printing nod, shake, tilt, turn and up_down reactions (#34), and
+// facial expressions, printing brows_up, smile, lips_pressed, brows_down
+// and eyes_narrowed reactions once each starts (#46). That needs a build
+// with FACEPALM_MEDIAPIPE_DYLIB.
 //
 // Every frame with a face also prints its blendshapes, and, so a recording
 // can be replayed through head_gesture later (#34), its raw gesture
@@ -58,6 +60,8 @@
 
 #include "src/camera_controller.h"
 #include "src/config.h"
+#include "src/expression_reader.h"
+#include "src/expressions.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
 #include "src/face_reader.h"
@@ -368,14 +372,17 @@ class Probe : public CameraReports {
     controller_.OnOpenFailed();
     std::fprintf(stderr,
                  "camera_probe: no camera, or camera permission denied\n");
+    model_.reset();
     std::exit(1);
   }
 
-  // The process exits from here with the queues still running, and the probe
-  // is never destroyed, so no queued task outlives what it points to (#21).
+  // The probe stays alive until exit; model destruction finishes first.
   void OnClosed() override {
     controller_.OnClosed();
-    pipeline_.OnCameraClosed();
+    pipeline_.OnCameraClosed([this] {
+      model_.reset();
+      std::exit(0);
+    });
     const double cpu = cpu_at_close_ - cpu_at_open_;
     std::printf(
         "seconds %d\nframes %d\nframes_per_second %.1f\ncpu_seconds %.3f\n"
@@ -386,14 +393,15 @@ class Probe : public CameraReports {
     if (has_model_) {
       ReportModel();
     }
-    std::exit(0);
   }
 
   void OnDeviceLost() override {
     controller_.OnDeviceLost();
-    pipeline_.OnCameraClosed();
+    pipeline_.OnCameraClosed([this] {
+      model_.reset();
+      std::exit(1);
+    });
     std::fprintf(stderr, "camera_probe: the camera was lost\n");
-    std::exit(1);
   }
 
   void OnDeviceBack() override { controller_.OnDeviceBack(); }
@@ -430,6 +438,16 @@ class Probe : public CameraReports {
     if (config_.gestures_enabled) {
       readers.push_back(std::make_unique<GestureReader>(
           config_.gesture_confidence_threshold));
+    }
+    if (config_.expressions_enabled) {
+      readers.push_back(
+          std::make_unique<ExpressionReader>(ExpressionTracker::Settings{
+              .rise = config_.expressions_smallest_rise,
+              .pose_degrees = config_.expressions_pose_degrees,
+              .pose_range = config_.expressions_pose_range,
+              .settle_ms = config_.expressions_settle_ms,
+              .spreads = config_.expressions_spreads,
+              .hold_ms = config_.expressions_hold_ms}));
     }
     readers.push_back(std::make_unique<GestureProbeReader>());
     analyzers.push_back(std::make_unique<FaceAnalyzer>(
