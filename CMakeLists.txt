@@ -48,6 +48,11 @@ target_link_libraries(frame_pipeline PUBLIC frame)
 facepalm_unit(gesture_analyzer)
 facepalm_unit(head_pose)
 facepalm_unit(head_pose_analyzer)
+facepalm_unit(head_gesture_model)
+# head_pose is pure computation, so the gesture model's tests run it for
+# real (it needs RotationFrom, and reuses Rotation for its own test
+# fixtures).
+target_link_libraries(head_gesture_model PUBLIC head_pose)
 facepalm_unit(nodding_pigeon)
 facepalm_unit(reaction)
 # head_pose is pure computation, so the reaction's tests run it for real.
