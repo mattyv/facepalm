@@ -4,6 +4,8 @@ description: Check Facepalm reactions since this session last checked.
 disable-model-invocation: true
 ---
 
+# Check Facepalm reactions
+
 Use the configured Facepalm MCP `wait_for_reaction` tool with `timeout_ms: 0`.
 Show each returned reading's summary verbatim with its exact ID, and report any
 missed count. If there are no readings, say so; this alone does not establish
