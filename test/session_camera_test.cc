@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <optional>
@@ -26,7 +27,7 @@ class MockCaptureSession : public CaptureSession {
   MOCK_METHOD(void, RequestPermission, (std::function<void(bool)>), (override));
   MOCK_METHOD(std::optional<std::string>, Configure, (), (override));
   MOCK_METHOD(FrameRates, SupportedFrameRates, (), (override));
-  MOCK_METHOD(bool, Start, (int), (override));
+  MOCK_METHOD(bool, Start, (int, std::uint64_t), (override));
   MOCK_METHOD(void, Stop, (), (override));
 };
 
@@ -71,6 +72,7 @@ class FakeQueue {
 };
 
 constexpr int kFramesPerSecond = 15;
+constexpr std::uint64_t kAttempt = 1;
 // The unique ID of the camera the fake session configures.
 const std::string& CameraId() {
   static const auto* const id = new std::string("built-in");
@@ -109,16 +111,17 @@ TEST_F(SessionCameraTest, OpensWithPermissionAtTheChosenFrameRate) {
     EXPECT_CALL(capture_, CurrentPermission())
         .WillOnce(Return(Permission::kGranted));
     EXPECT_CALL(capture_, Configure()).WillOnce(Return(CameraId()));
-    EXPECT_CALL(capture_, Start(kFramesPerSecond)).WillOnce(Return(true));
+    EXPECT_CALL(capture_, Start(kFramesPerSecond, kAttempt))
+        .WillOnce(Return(true));
     EXPECT_CALL(reports_, OnOpened());
   }
-  camera_.Open();
+  camera_.Open(kAttempt);
   Settle();
   EXPECT_EQ(ran_on_, (std::vector<std::string>{"session", "control"}));
 }
 
 TEST_F(SessionCameraTest, DoesNothingUntilItsQueueRuns) {
-  camera_.Open();
+  camera_.Open(kAttempt);
   camera_.Close();
   EXPECT_TRUE(ran_on_.empty());
 }
@@ -127,7 +130,7 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWhenPermissionIsDenied) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kDenied));
   EXPECT_CALL(reports_, OnOpenFailed());
-  camera_.Open();
+  camera_.Open(kAttempt);
   Settle();
 }
 
@@ -139,11 +142,12 @@ TEST_F(SessionCameraTest, AsksForPermissionAndOpensWhenGranted) {
       .WillOnce([&answer](std::function<void(bool)> done) {
         answer = std::move(done);
       });
-  camera_.Open();
+  camera_.Open(kAttempt);
   Settle();
   ASSERT_TRUE(answer);
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(CameraId()));
-  EXPECT_CALL(capture_, Start(kFramesPerSecond)).WillOnce(Return(true));
+  EXPECT_CALL(capture_, Start(kFramesPerSecond, kAttempt))
+      .WillOnce(Return(true));
   EXPECT_CALL(reports_, OnOpened());
   ran_on_.clear();
   answer(/*granted=*/true);
@@ -161,7 +165,7 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWhenTheUserRefuses) {
         done(/*granted=*/false);
       });
   EXPECT_CALL(reports_, OnOpenFailed());
-  camera_.Open();
+  camera_.Open(kAttempt);
   Settle();
 }
 
@@ -170,7 +174,7 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWithoutACamera) {
       .WillOnce(Return(Permission::kGranted));
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(std::nullopt));
   EXPECT_CALL(reports_, OnOpenFailed());
-  camera_.Open();
+  camera_.Open(kAttempt);
   Settle();
 }
 
@@ -178,9 +182,10 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWhenTheSessionDoesNotRun) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kGranted));
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(CameraId()));
-  EXPECT_CALL(capture_, Start(kFramesPerSecond)).WillOnce(Return(false));
+  EXPECT_CALL(capture_, Start(kFramesPerSecond, kAttempt))
+      .WillOnce(Return(false));
   EXPECT_CALL(reports_, OnOpenFailed());
-  camera_.Open();
+  camera_.Open(kAttempt);
   Settle();
 }
 
@@ -201,9 +206,9 @@ void OpenOn(SessionCamera& camera, MockCaptureSession& capture,
   EXPECT_CALL(capture, CurrentPermission())
       .WillOnce(Return(Permission::kGranted));
   EXPECT_CALL(capture, Configure()).WillOnce(Return(CameraId()));
-  EXPECT_CALL(capture, Start(_)).WillOnce(Return(true));
+  EXPECT_CALL(capture, Start(_, _)).WillOnce(Return(true));
   EXPECT_CALL(reports, OnOpened());
-  camera.Open();
+  camera.Open(kAttempt);
   settle();
   testing::Mock::VerifyAndClearExpectations(&capture);
   testing::Mock::VerifyAndClearExpectations(&reports);
@@ -245,8 +250,87 @@ TEST_F(SessionCameraTest, IgnoresAnotherCameraConnecting) {
   Settle();
 }
 
-TEST_F(SessionCameraTest, IgnoresAnyCameraConnectingBeforeOneIsConfigured) {
-  camera_.OnDeviceConnected(CameraId());
+// specs/CameraLifecycle.tla's WantedOpens, with GuardDiscoverAnyCamera
+// (#39): with no camera picked yet, any camera coming counts.
+TEST_F(SessionCameraTest, ReportsAnyCameraConnectingBeforeOneIsPicked) {
+  EXPECT_CALL(capture_, CurrentPermission())
+      .WillOnce(Return(Permission::kGranted));
+  EXPECT_CALL(capture_, Configure()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(reports_, OnOpenFailed());
+  camera_.Open(kAttempt);
+  Settle();
+  EXPECT_CALL(reports_, OnDeviceBack());
+  camera_.OnDeviceConnected("usb");
+  Settle();
+}
+
+// specs/CameraLifecycle.tla's NoCaptureWhenClosed, with
+// GuardStartChecksAttempt (#38): a permission granted after the camera was
+// closed starts nothing.
+TEST_F(SessionCameraTest, StartsNothingWhenPermissionIsGrantedAfterClose) {
+  std::function<void(bool)> answer;
+  EXPECT_CALL(capture_, CurrentPermission())
+      .WillOnce(Return(Permission::kUndetermined));
+  EXPECT_CALL(capture_, RequestPermission(_))
+      .WillOnce([&answer](std::function<void(bool)> done) {
+        answer = std::move(done);
+      });
+  camera_.Open(kAttempt);
+  Settle();
+  EXPECT_CALL(capture_, Stop());
+  EXPECT_CALL(reports_, OnClosed());
+  camera_.Close();
+  Settle();
+  ASSERT_TRUE(answer);
+
+  answer(/*granted=*/true);  // StrictMock: no Configure, Start or report.
+  Settle();
+}
+
+// The same, with the camera reopened before the first answer comes: only
+// the current attempt's answer starts it.
+TEST_F(SessionCameraTest, StartsOnlyForTheCurrentAttempt) {
+  std::vector<std::function<void(bool)>> answers;
+  EXPECT_CALL(capture_, CurrentPermission())
+      .Times(2)
+      .WillRepeatedly(Return(Permission::kUndetermined));
+  EXPECT_CALL(capture_, RequestPermission(_))
+      .Times(2)
+      .WillRepeatedly([&answers](std::function<void(bool)> done) {
+        answers.push_back(std::move(done));
+      });
+  EXPECT_CALL(capture_, Stop());
+  EXPECT_CALL(reports_, OnClosed());
+  camera_.Open(kAttempt);
+  camera_.Close();
+  camera_.Open(kAttempt + 1);
+  Settle();
+  ASSERT_EQ(answers.size(), 2U);
+  EXPECT_CALL(capture_, Configure()).WillOnce(Return(CameraId()));
+  EXPECT_CALL(capture_, Start(kFramesPerSecond, kAttempt + 1))
+      .WillOnce(Return(true));
+  EXPECT_CALL(reports_, OnOpened());
+
+  answers[0](/*granted=*/true);
+  answers[1](/*granted=*/true);
+  Settle();
+}
+
+TEST_F(SessionCameraTest, ARefusalAfterCloseReportsNothing) {
+  std::function<void(bool)> answer;
+  EXPECT_CALL(capture_, CurrentPermission())
+      .WillOnce(Return(Permission::kUndetermined));
+  EXPECT_CALL(capture_, RequestPermission(_))
+      .WillOnce([&answer](std::function<void(bool)> done) {
+        answer = std::move(done);
+      });
+  EXPECT_CALL(capture_, Stop());
+  EXPECT_CALL(reports_, OnClosed());
+  camera_.Open(kAttempt);
+  camera_.Close();
+  Settle();
+
+  answer(/*granted=*/false);
   Settle();
 }
 
@@ -262,13 +346,14 @@ int StartedRate(int wanted, FrameRates rates) {
   ON_CALL(capture, Configure()).WillByDefault(Return(CameraId()));
   ON_CALL(capture, SupportedFrameRates()).WillByDefault(Return(rates));
   int started = 0;
-  ON_CALL(capture, Start(_)).WillByDefault([&started](int rate) {
-    started = rate;
-    return true;
-  });
+  ON_CALL(capture, Start(_, _))
+      .WillByDefault([&started](int rate, std::uint64_t) {
+        started = rate;
+        return true;
+      });
   SessionCamera camera(capture, reports, queue.AsPost(), queue.AsPost(),
                        wanted);
-  camera.Open();
+  camera.Open(kAttempt);
   queue.Drain();
   return started;
 }

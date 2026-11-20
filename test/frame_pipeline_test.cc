@@ -34,7 +34,8 @@ using ::testing::StrictMock;
 
 class MockTickets : public FrameTickets {
  public:
-  MOCK_METHOD(std::optional<std::uint64_t>, OnFrameCaptured, (), (override));
+  MOCK_METHOD(std::optional<std::uint64_t>, OnFrameCaptured,
+              (std::uint64_t attempt), (override));
   MOCK_METHOD(void, OnReaction,
               (std::uint64_t ticket, const Reaction& reaction), (override));
 };
@@ -79,13 +80,15 @@ constexpr std::array<std::uint8_t, 4> kBgra = {1, 2, 3, 4};
 constexpr std::array<std::uint8_t, 4> kOtherBgra = {9, 9, 9, 9};
 constexpr std::int64_t kTimestampMs = 66;
 constexpr std::uint64_t kTicket = 7;
+constexpr std::uint64_t kAttempt = 3;
 
 Frame FrameOf(const std::array<std::uint8_t, 4>& bgra) {
   return Frame{.width = 1,
                .height = 1,
                .bytes_per_row = 4,
                .bgra = bgra.data(),
-               .timestamp_ms = kTimestampMs};
+               .timestamp_ms = kTimestampMs,
+               .attempt = kAttempt};
 }
 
 // An Analyze that appends `reaction` and succeeds. A failed allocation would
@@ -123,9 +126,11 @@ class FramePipelineTest : public ::testing::Test {
     inference_.Drain();
   }
 
-  // Captures kBgra, and gives it kTicket.
+  // Captures kBgra, and gives it kTicket. The ticket is asked for with the
+  // attempt the frame was stamped with at capture (CameraLifecycle's
+  // GuardTicketChecksCapture, #40).
   void Captured() {
-    EXPECT_CALL(tickets_, OnFrameCaptured()).WillOnce(Return(kTicket));
+    EXPECT_CALL(tickets_, OnFrameCaptured(kAttempt)).WillOnce(Return(kTicket));
     pipeline_.OnFrame(FrameOf(kBgra));
     control_.Drain();
   }
@@ -277,7 +282,7 @@ TEST_F(NeverWrittenWhileReadTest, AFrameArrivingDuringAnalyseLeavesItsPixels) {
 using AtMostOneInFlightTest = FramePipelineTest;
 
 TEST_F(AtMostOneInFlightTest, DropsAFrameThatArrivesBeforeTheTicket) {
-  EXPECT_CALL(tickets_, OnFrameCaptured()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(tickets_, OnFrameCaptured(_)).WillOnce(Return(std::nullopt));
   pipeline_.OnFrame(FrameOf(kBgra));
   pipeline_.OnFrame(FrameOf(kOtherBgra));
   control_.Drain();
@@ -293,7 +298,7 @@ TEST_F(AtMostOneInFlightTest, DropsAFrameThatArrivesBeforeTheAnalyse) {
 using SlotFreedTest = FramePipelineTest;
 
 TEST_F(SlotFreedTest, AfterARefusedTicket) {
-  EXPECT_CALL(tickets_, OnFrameCaptured())
+  EXPECT_CALL(tickets_, OnFrameCaptured(_))
       .WillOnce(Return(std::nullopt))
       .WillOnce(Return(std::nullopt));
   pipeline_.OnFrame(FrameOf(kBgra));
@@ -389,7 +394,7 @@ TEST_F(PixelsWipedTest, AfterARefusedTicket) {
   Captured();
   inference_.Drain();
   // The next frame's pixels are copied in, then refused.
-  EXPECT_CALL(tickets_, OnFrameCaptured()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(tickets_, OnFrameCaptured(_)).WillOnce(Return(std::nullopt));
   pipeline_.OnFrame(FrameOf(kOtherBgra));
   control_.Drain();
 

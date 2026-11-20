@@ -82,6 +82,7 @@ class FramePipeline {
   int width_ = 0;
   int height_ = 0;
   std::int64_t timestamp_ms_ = 0;
+  std::uint64_t attempt_ = 0;  // The open attempt that captured it (#40).
   std::uint64_t ticket_ = 0;
   Analyzers analyzers_;  // Inference queue only.
 };

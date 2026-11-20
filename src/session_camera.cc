@@ -18,11 +18,12 @@ SessionCamera::SessionCamera(CaptureSession& capture, CameraReports& reports,
 
 // specs/CameraLifecycle.tla, Open: asks for permission the first time, then
 // starts. Denied permission is the spec's OpenFailed.
-void SessionCamera::Open() {
-  session_([this] {
+void SessionCamera::Open(std::uint64_t attempt) {
+  session_([this, attempt] {
+    attempt_ = attempt;
     const CaptureSession::Permission permission = capture_.CurrentPermission();
     if (permission == CaptureSession::Permission::kGranted) {
-      Start();
+      Start(attempt);
       return;
     }
     if (permission == CaptureSession::Permission::kDenied) {
@@ -31,10 +32,15 @@ void SessionCamera::Open() {
     }
     // Undetermined: ask. The answer arrives on any thread, so starting goes
     // back to the session queue.
-    capture_.RequestPermission([this](bool granted) {
-      session_([this, granted] {
+    capture_.RequestPermission([this, attempt](bool granted) {
+      session_([this, attempt, granted] {
+        // Start, with GuardStartChecksAttempt: an answer for an attempt that
+        // was closed meanwhile starts nothing and reports nothing (#38).
+        if (attempt != attempt_) {
+          return;
+        }
         if (granted) {
-          Start();
+          Start(attempt);
         } else {
           Report(&CameraReports::OnOpenFailed);
         }
@@ -44,8 +50,10 @@ void SessionCamera::Open() {
 }
 
 // specs/CameraLifecycle.tla, Closed follows once the session has stopped.
+// The attempt ends first, so a permission answer still to come is void.
 void SessionCamera::Close() {
   session_([this] {
+    attempt_ = kNoAttempt;
     capture_.Stop();
     Report(&CameraReports::OnClosed);
   });
@@ -70,10 +78,11 @@ void SessionCamera::OnDeviceDisconnected(std::string id) {
   });
 }
 
-// specs/CameraLifecycle.tla, DeviceBack, for the camera in use only.
+// specs/CameraLifecycle.tla, DeviceBack, for the camera in use, or any camera
+// while none is (GuardDiscoverAnyCamera, #39).
 void SessionCamera::OnDeviceConnected(std::string id) {
   session_([this, id = std::move(id)] {
-    if (id == device_id_) {
+    if (id == device_id_ || device_id_.empty()) {
       Report(&CameraReports::OnDeviceBack);
     }
   });
@@ -82,7 +91,7 @@ void SessionCamera::OnDeviceConnected(std::string id) {
 // specs/CameraLifecycle.tla, Opened when the session runs, OpenFailed when
 // there is no camera to use or it does not start. Asks for the supported rate
 // nearest the one wanted.
-void SessionCamera::Start() {
+void SessionCamera::Start(std::uint64_t attempt) {
   bool running = false;
   const std::optional<std::string> device = capture_.Configure();
   if (device.has_value()) {
@@ -92,7 +101,7 @@ void SessionCamera::Start() {
     const int rate = rates.max == 0
                          ? frames_per_second_
                          : std::clamp(frames_per_second_, rates.min, rates.max);
-    running = capture_.Start(rate);
+    running = capture_.Start(rate, attempt);
   }
   Report(running ? &CameraReports::OnOpened : &CameraReports::OnOpenFailed);
 }

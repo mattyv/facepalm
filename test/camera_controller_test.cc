@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace facepalm {
 namespace {
@@ -16,7 +17,7 @@ using ::testing::StrictMock;
 
 class MockCamera : public Camera {
  public:
-  MOCK_METHOD(void, Open, (), (override));
+  MOCK_METHOD(void, Open, (std::uint64_t attempt), (override));
   MOCK_METHOD(void, Close, (), (override));
 };
 
@@ -38,7 +39,8 @@ void OpenWithClient(CameraController& controller) {
 // Returns the ticket for a frame captured now, failing the test when the
 // controller drops the frame.
 std::uint64_t CaptureTicket(CameraController& controller) {
-  const std::optional<std::uint64_t> ticket = controller.OnFrameCaptured();
+  const std::optional<std::uint64_t> ticket =
+      controller.OnFrameCaptured(controller.CurrentAttempt());
   if (!ticket.has_value()) {
     ADD_FAILURE() << "the frame was dropped";
     return 0;
@@ -58,7 +60,7 @@ class OpenOnlyWithConsentTest : public CameraControllerTest {};
 
 TEST_F(OpenOnlyWithConsentTest, NeverOpensForASubscriberWithoutConsent) {
   CameraController controller(camera_, clients_, /*consent=*/false);
-  EXPECT_CALL(camera_, Open()).Times(0);
+  EXPECT_CALL(camera_, Open(_)).Times(0);
   controller.Subscribe("a");
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
 }
@@ -99,7 +101,7 @@ TEST_F(OpenOnlyWithConsentTest, RevokingWithTheCameraClosedClosesNothing) {
 class OpenOnlyWhenSubscribedTest : public CameraControllerTest {};
 
 TEST_F(OpenOnlyWhenSubscribedTest, NeverOpensWithConsentAlone) {
-  EXPECT_CALL(camera_, Open()).Times(0);
+  EXPECT_CALL(camera_, Open(_)).Times(0);
   CameraController controller(camera_, clients_, /*consent=*/true);
   controller.GrantConsent();
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
@@ -149,7 +151,56 @@ TEST_F(NoEventWithoutConsentTest, DropsAReactionWhileConsentIsRevoked) {
 
 TEST_F(NoEventWithoutConsentTest, DropsAFrameCapturedWhenNotOpen) {
   CameraController controller(camera_, clients_, /*consent=*/true);
-  EXPECT_FALSE(controller.OnFrameCaptured().has_value());
+  EXPECT_FALSE(
+      controller.OnFrameCaptured(controller.CurrentAttempt()).has_value());
+}
+
+// specs/CameraLifecycle.tla's NoStaleEvent, with GuardTicketChecksCapture
+// (#40): a frame stamped with an attempt that has ended gets no ticket,
+// however late it arrives.
+class NoStaleEventTest : public CameraControllerTest {};
+
+TEST_F(NoStaleEventTest, AFrameFromBeforeARevokeAndReopenGetsNoTicket) {
+  CameraController controller(camera_, clients_, /*consent=*/false);
+  OpenWithClient(controller);
+  const std::uint64_t old_attempt = controller.CurrentAttempt();
+  controller.RevokeConsent();
+  controller.OnClosed();
+  controller.GrantConsent();
+  controller.OnOpened();
+  ASSERT_EQ(controller.CurrentState(), State::kOpen);
+
+  EXPECT_FALSE(controller.OnFrameCaptured(old_attempt).has_value());
+  EXPECT_TRUE(
+      controller.OnFrameCaptured(controller.CurrentAttempt()).has_value());
+}
+
+TEST_F(NoStaleEventTest, EachOpenIsANewAttemptAndClosingEndsIt) {
+  CameraController controller(camera_, clients_, /*consent=*/true);
+  std::vector<std::uint64_t> opened;
+  ON_CALL(camera_, Open(_)).WillByDefault([&opened](std::uint64_t attempt) {
+    opened.push_back(attempt);
+  });
+  controller.Subscribe("a");
+  controller.Leave("a");
+  const std::uint64_t after_close = controller.CurrentAttempt();
+  controller.OnClosed();
+  controller.Subscribe("a");
+
+  ASSERT_EQ(opened.size(), 2U);
+  EXPECT_NE(opened[0], opened[1]);
+  EXPECT_NE(after_close, opened[0]);
+  EXPECT_EQ(controller.CurrentAttempt(), opened[1]);
+}
+
+TEST_F(NoStaleEventTest, LosingAnOpenCameraEndsItsAttempt) {
+  CameraController controller(camera_, clients_, /*consent=*/false);
+  OpenWithClient(controller);
+  const std::uint64_t attempt = controller.CurrentAttempt();
+
+  controller.OnDeviceLost();
+
+  EXPECT_NE(controller.CurrentAttempt(), attempt);
 }
 
 class NoEventToStrangerTest : public CameraControllerTest {};
@@ -169,7 +220,7 @@ TEST_F(NoEventToStrangerTest, DeliversToEachSubscribedClientOnly) {
 class DeadHelperHoldsNoCameraTest : public CameraControllerTest {};
 
 TEST_F(DeadHelperHoldsNoCameraTest, ARestartedControllerStartsClosed) {
-  EXPECT_CALL(camera_, Open()).Times(0);
+  EXPECT_CALL(camera_, Open(_)).Times(0);
   const CameraController controller(camera_, clients_, /*consent=*/true);
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
 }
@@ -179,7 +230,7 @@ class WantedOpensTest : public CameraControllerTest {};
 TEST_F(WantedOpensTest, OpensOnceConsentAndASubscriberHold) {
   CameraController controller(camera_, clients_, /*consent=*/false);
   controller.Subscribe("a");
-  EXPECT_CALL(camera_, Open()).Times(1);
+  EXPECT_CALL(camera_, Open(_)).Times(1);
   controller.GrantConsent();
   controller.Subscribe("b");
   EXPECT_EQ(controller.CurrentState(), State::kOpening);
@@ -192,7 +243,7 @@ TEST_F(WantedOpensTest, ReopensWhenTheDeviceComesBack) {
   OpenWithClient(controller);
   controller.OnDeviceLost();
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
-  EXPECT_CALL(camera_, Open());
+  EXPECT_CALL(camera_, Open(_));
   controller.OnDeviceBack();
   EXPECT_EQ(controller.CurrentState(), State::kOpening);
 }
@@ -201,8 +252,8 @@ TEST_F(WantedOpensTest, WaitsForTheDeviceAfterTheOsRefusesIt) {
   CameraController controller(camera_, clients_, /*consent=*/true);
   {
     InSequence order;
-    EXPECT_CALL(camera_, Open());
-    EXPECT_CALL(camera_, Open());
+    EXPECT_CALL(camera_, Open(_));
+    EXPECT_CALL(camera_, Open(_));
   }
   controller.Subscribe("a");
   controller.OnOpenFailed();
@@ -219,7 +270,7 @@ TEST_F(WantedOpensTest, ReopensAfterClosingWhenWantedAgain) {
   controller.RevokeConsent();
   controller.GrantConsent();
   EXPECT_EQ(controller.CurrentState(), State::kClosing);
-  EXPECT_CALL(camera_, Open());
+  EXPECT_CALL(camera_, Open(_));
   controller.OnClosed();
   EXPECT_EQ(controller.CurrentState(), State::kOpening);
 }
@@ -239,7 +290,7 @@ TEST_F(RevokingClosesTest, ClosedOnceTheCameraReportsIt) {
   CameraController controller(camera_, clients_, /*consent=*/false);
   OpenWithClient(controller);
   controller.RevokeConsent();
-  EXPECT_CALL(camera_, Open()).Times(0);
+  EXPECT_CALL(camera_, Open(_)).Times(0);
   controller.OnClosed();
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
 }
@@ -248,7 +299,7 @@ class LateReportsTest : public CameraControllerTest {};
 
 TEST_F(LateReportsTest, ReportsOutOfTurnChangeNothing) {
   CameraController controller(camera_, clients_, /*consent=*/true);
-  EXPECT_CALL(camera_, Open()).Times(0);
+  EXPECT_CALL(camera_, Open(_)).Times(0);
   controller.OnOpened();
   controller.OnOpenFailed();
   controller.OnClosed();
