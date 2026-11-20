@@ -248,6 +248,15 @@ bool AvFoundationSession::Start(int frames_per_second, std::uint64_t attempt) {
   return impl_->session.running;
 }
 
-void AvFoundationSession::Stop() { [impl_->session stopRunning]; }
+// Stops the session, then lets a frame already handed to the capture queue
+// finish while the attempt it was captured under is still the delegate's.
+// Without the wait, a callback delayed across a close and reopen would stamp
+// its old pixels with the next attempt (specs/CameraLifecycle.tla's Capture
+// stamps the frame at capture, #40). The destructor waits the same way.
+void AvFoundationSession::Stop() {
+  [impl_->session stopRunning];
+  dispatch_sync(impl_->capture_queue, ^{
+                });
+}
 
 }  // namespace facepalm

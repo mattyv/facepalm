@@ -98,7 +98,10 @@ tests that stand for the properties they break:
 `GuardStartChecksAttempt`, and the camera coming back, with
 `GuardDiscoverAnyCamera`. The Mac capture callback stamps each frame with the
 attempt as it starts, and `src/frame_pipeline.cc` hands that stamp to the
-ticket.
+ticket. `AvFoundationSession::Stop` waits for the capture queue, so a
+callback already queued finishes under the attempt it captured for, and a
+later `Start` cannot relabel its frame; no unit test reaches that code, so
+it is held to the spec's `Capture` by reading.
 
 | Mutation to `SessionCamera` or `FramePipeline` | Fails |
 |---|---|
