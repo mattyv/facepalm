@@ -8,6 +8,8 @@
 #include <initializer_list>
 #include <vector>
 
+#include "src/head_pose.h"
+
 namespace facepalm {
 namespace {
 
@@ -31,7 +33,9 @@ constexpr int kMouthSmileLeft = 44;
 constexpr int kMouthSmileRight = 45;
 
 // Feeds an ExpressionTracker frames at 15 per second, and collects every
-// expression it reports.
+// expression it reports. `pose_` is the head pose on every frame until a
+// test changes it; it starts at the tracker's resting pose (all zero), so a
+// test that never touches it sees the gate exactly as if it did not exist.
 class ExpressionsTest : public ::testing::Test {
  protected:
   // `seconds` of frames with every score in `raised` lifted by `rise` above
@@ -44,14 +48,15 @@ class ExpressionsTest : public ::testing::Test {
     }
   }
 
-  // One frame, `raised` lifted by `rise`, `frame_ms_` after the last.
+  // One frame, `raised` lifted by `rise`, `frame_ms_` after the last, with
+  // the head at `pose_`.
   void Frame(std::initializer_list<int> raised, float rise) {
     Scores scores = rest_;
     for (const int index : raised) {
       scores.at(static_cast<std::size_t>(index)) += rise;
     }
     now_ms_ += frame_ms_;
-    for (const Expression started : tracker_.Update(scores, now_ms_)) {
+    for (const Expression started : tracker_.Update(scores, pose_, now_ms_)) {
       reported_.push_back(started);
     }
   }
@@ -60,10 +65,15 @@ class ExpressionsTest : public ::testing::Test {
   void Rest() { Hold(5); }
 
   Scores rest_{};
+  HeadRotation pose_{};
   std::int64_t now_ms_ = 1000;
   std::int64_t frame_ms_ = kFrameMs;
-  ExpressionTracker tracker_{
-      ExpressionTracker::Settings{.rise = 0.05, .spreads = 3, .hold_ms = 200}};
+  ExpressionTracker tracker_{ExpressionTracker::Settings{.rise = 0.05,
+                                                         .pose_degrees = 10,
+                                                         .pose_range = 3,
+                                                         .settle_ms = 600,
+                                                         .spreads = 3,
+                                                         .hold_ms = 200}};
   std::vector<Expression> reported_;
 };
 
@@ -319,6 +329,153 @@ TEST_F(ExpressionsTest, ReportsExpressionsThatStartTogether) {
            kMouthSmileRight});
 
   EXPECT_THAT(reported_, ElementsAre(Expression::kBrowsUp, Expression::kSmile));
+}
+
+// Head pose gate (#46): a nod, a shake or a tilt moves the blendshape scores
+// as much as an expression does, so the tracker pauses while the head is
+// away from its resting pose or moving.
+
+// A head held well away from its resting pose reports nothing, though the
+// scores rise the whole time.
+TEST_F(ExpressionsTest, AHeadHeldAwayFromItsRestingPoseReportsNothing) {
+  Rest();
+  pose_.pitch_degrees = -25;
+
+  Hold(3, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, IsEmpty());
+}
+
+// A nodding head oscillates within the pose-range window without ever
+// deviating far from the resting pose on its own; the range check alone
+// gates it out.
+TEST_F(ExpressionsTest, ANoddingHeadReportsNothingThoughTheScoresRise) {
+  Rest();
+
+  constexpr int kNodFrames = 2 * kFramesPerSecond;
+  for (int frame = 0; frame < kNodFrames; ++frame) {
+    pose_.pitch_degrees = frame % 2 == 0 ? -4 : 4;
+    Frame({kMouthSmileLeft, kMouthSmileRight}, kSmall);
+  }
+
+  EXPECT_THAT(reported_, IsEmpty());
+}
+
+// The gate stays shut for the settle time after the head last moved (plus
+// the time the pose-range window takes to flush the movement out), then
+// opens, and a rise already under way is reported once the hold catches up.
+TEST_F(ExpressionsTest, TheGateStaysShutForTheSettleTimeThenOpens) {
+  Rest();
+  pose_.pitch_degrees = -25;
+  Hold(1);
+  pose_.pitch_degrees = 0;
+  // The pose-range window takes about half a second to flush the turn
+  // away; the settle time then keeps the gate shut a further 600 ms. A
+  // second is comfortably inside that, and comfortably past the roughly
+  // 800 ms a report would need if the settle time did not apply.
+  Hold(1, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, IsEmpty());
+
+  Hold(1.2, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// While the head is away, the levels and the spreads are frozen: a face
+// held smiling hard throughout a nod does not drag the baseline up with it,
+// so a small rise right after the head settles is still judged against the
+// old resting face and counts.
+TEST_F(ExpressionsTest, LevelsAndSpreadDoNotLearnWhileTheHeadIsAway) {
+  Rest();
+  pose_.pitch_degrees = -25;
+  Hold(5, {kMouthSmileLeft, kMouthSmileRight}, 0.3F);
+  pose_.pitch_degrees = 0;
+
+  Hold(2, {kMouthSmileLeft, kMouthSmileRight}, 0.06F);
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// A rise that straddles a head movement restarts its hold: the partial
+// hold from before the movement does not combine with time after the gate
+// reopens to report sooner than a fresh hold would.
+TEST_F(ExpressionsTest, ARiseThatStraddlesMovementRestartsItsHold) {
+  Rest();
+  Hold(0.15, {kMouthSmileLeft, kMouthSmileRight});
+  pose_.pitch_degrees = -25;
+  Hold(1, {kMouthSmileLeft, kMouthSmileRight});
+  pose_.pitch_degrees = 0;
+  Hold(1, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, IsEmpty());
+
+  Hold(1.2, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// A new posture held for long enough becomes the resting pose itself, and
+// expressions are reported again from there.
+TEST_F(ExpressionsTest, ANewPostureHeldForALongTimeBecomesTheRestingPose) {
+  Rest();
+  pose_.pitch_degrees = -25;
+  Hold(120);
+
+  EXPECT_THAT(reported_, IsEmpty());
+
+  Hold(1, {kMouthSmileLeft, kMouthSmileRight});
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// At one frame a second the inter-frame gap (1000 ms) already exceeds the
+// settle time (600 ms), so a single away frame gates out only that frame;
+// the very next frame, a second later, already reports.
+TEST_F(ExpressionsTest,
+       GatesForTheSettleTimeNotAFixedFrameCountAtOneFramePerSecond) {
+  frame_ms_ = 1000;
+  for (int frame = 0; frame < 6; ++frame) {
+    Frame({}, 0);
+  }
+
+  pose_.pitch_degrees = -25;
+  Frame({kMouthSmileLeft, kMouthSmileRight}, kSmall);
+  pose_.pitch_degrees = 0;
+  for (int frame = 0; frame < 3; ++frame) {
+    Frame({kMouthSmileLeft, kMouthSmileRight}, kSmall);
+  }
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// At sixty frames a second, the same settle time spans many frames: still
+// gated at 640 ms after the movement, open and reported well past the
+// roughly 1.1 second the window and the settle time together take.
+TEST_F(ExpressionsTest,
+       GatesForTheSettleTimeNotAFixedFrameCountAtSixtyFramesPerSecond) {
+  frame_ms_ = 16;
+  constexpr int kRestFrames = 300;  // 4.8 seconds: enough to learn.
+  for (int frame = 0; frame < kRestFrames; ++frame) {
+    Frame({}, 0);
+  }
+
+  pose_.pitch_degrees = -25;
+  Frame({kMouthSmileLeft, kMouthSmileRight}, kSmall);
+  pose_.pitch_degrees = 0;
+  constexpr int kStillGatedFrames = 40;  // About 640 ms.
+  for (int frame = 0; frame < kStillGatedFrames; ++frame) {
+    Frame({kMouthSmileLeft, kMouthSmileRight}, kSmall);
+  }
+
+  EXPECT_THAT(reported_, IsEmpty());
+
+  constexpr int kAfterGateFrames = 60;  // About 960 ms more.
+  for (int frame = 0; frame < kAfterGateFrames; ++frame) {
+    Frame({kMouthSmileLeft, kMouthSmileRight}, kSmall);
+  }
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
 }
 
 TEST(ExpressionNameTest, NamesEachExpression) {

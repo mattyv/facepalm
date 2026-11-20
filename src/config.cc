@@ -15,6 +15,9 @@ namespace {
 constexpr int kMostFramesPerSecond = 60;
 constexpr float kMostExpressionsSpreads = 100;
 constexpr int kMostExpressionsHoldMs = 5000;
+constexpr float kMostExpressionsPoseDegrees = 180;
+constexpr float kMostExpressionsPoseRange = 180;
+constexpr int kMostExpressionsSettleMs = 5000;
 
 // `text` without spaces or tabs at either end.
 std::string_view Trim(std::string_view text) {
@@ -133,6 +136,43 @@ std::optional<std::string> SetExpressionsHoldMs(std::string_view value,
   return std::nullopt;
 }
 
+// Sets expressions.pose_degrees from `value`, or returns why it cannot.
+std::optional<std::string> SetExpressionsPoseDegrees(std::string_view value,
+                                                     Config& config) {
+  const std::optional<float> degrees = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!degrees || std::isnan(*degrees) || *degrees < 0 ||
+      *degrees > kMostExpressionsPoseDegrees) {
+    return "expected a number from 0 to 180";
+  }
+  config.expressions_pose_degrees = *degrees;
+  return std::nullopt;
+}
+
+// Sets expressions.pose_range from `value`, or returns why it cannot.
+std::optional<std::string> SetExpressionsPoseRange(std::string_view value,
+                                                   Config& config) {
+  const std::optional<float> range = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!range || std::isnan(*range) || *range < 0 ||
+      *range > kMostExpressionsPoseRange) {
+    return "expected a number from 0 to 180";
+  }
+  config.expressions_pose_range = *range;
+  return std::nullopt;
+}
+
+// Sets expressions.settle_ms from `value`, or returns why it cannot.
+std::optional<std::string> SetExpressionsSettleMs(std::string_view value,
+                                                  Config& config) {
+  const std::optional<int> settle_ms = Number<int>(value);
+  if (!settle_ms || *settle_ms < 0 || *settle_ms > kMostExpressionsSettleMs) {
+    return "expected a whole number from 0 to 5000";
+  }
+  config.expressions_settle_ms = *settle_ms;
+  return std::nullopt;
+}
+
 // Sets the setting in `config`, or returns why it cannot.
 std::optional<std::string> Set(const Setting& setting, Config& config) {
   const std::string_view name = setting.name;
@@ -155,6 +195,15 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   }
   if (name == "expressions.hold_ms") {
     return SetExpressionsHoldMs(value, config);
+  }
+  if (name == "expressions.pose_degrees") {
+    return SetExpressionsPoseDegrees(value, config);
+  }
+  if (name == "expressions.pose_range") {
+    return SetExpressionsPoseRange(value, config);
+  }
+  if (name == "expressions.settle_ms") {
+    return SetExpressionsSettleMs(value, config);
   }
   return "unknown setting " + std::string(name);
 }

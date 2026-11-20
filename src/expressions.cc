@@ -9,15 +9,18 @@
 #include <string_view>
 #include <vector>
 
+#include "src/head_pose.h"
+
 namespace facepalm {
 namespace {
 
 constexpr std::int64_t kLearningMs = 3000;
 constexpr std::int64_t kGapMs = 2000;
 constexpr double kMsPerSecond = 1000;
-// How fast the resting face follows the scores: quickly while it is first
-// learned, slowly afterwards, so that an expression held for a few seconds
-// stays an expression and a new seat or new light is absorbed in a minute.
+// How fast the resting face and the resting pose follow their input: quickly
+// while first learned, slowly afterwards, so that an expression held for a
+// few seconds stays an expression and a new seat, new light or new posture
+// is absorbed in a minute.
 constexpr double kLearningSeconds = 1;
 constexpr double kRestingSeconds = 20;
 // How fast the resting spread follows the scores: faster than the level, so
@@ -26,6 +29,8 @@ constexpr double kSpreadSeconds = 5;
 // An expression showing has ended once its rise is under this much of what
 // started it, so that one easing a little is not reported twice.
 constexpr double kEndFraction = 0.5;
+// The window a head's pose range (#46) is measured over.
+constexpr std::int64_t kPoseRangeWindowMs = 500;
 
 // MediaPipe's indices for the scores read here.
 constexpr std::array<int, 3> kBrowsUp = {3, 4, 5};  // browInnerUp, OuterUp*.
@@ -57,6 +62,12 @@ double Weight(std::int64_t step_ms, double seconds) {
   return 1 - std::exp(-static_cast<double>(step_ms) / kMsPerSecond / seconds);
 }
 
+// `pose`'s yaw, pitch and roll, in that order, so the gate can treat the
+// three axes alike.
+std::array<double, 3> AsArray(const HeadRotation& pose) {
+  return {pose.yaw_degrees, pose.pitch_degrees, pose.roll_degrees};
+}
+
 }  // namespace
 
 std::string_view Name(Expression expression) {
@@ -68,27 +79,75 @@ std::string_view Name(Expression expression) {
 ExpressionTracker::ExpressionTracker(Settings settings) : settings_(settings) {}
 
 void ExpressionTracker::StartOver(const Scores& scores,
+                                  const HeadRotation& pose,
                                   std::int64_t timestamp_ms) {
   started_ = true;
   started_ms_ = timestamp_ms;
+  resting_pose_ = AsArray(pose);
+  recent_poses_.clear();
+  moved_ms_ = kNotRisen;
   for (std::size_t index = 0; index < states_.size(); ++index) {
     states_.at(index) = State{.level = Signal(index, scores)};
   }
 }
 
+bool ExpressionTracker::Away(const HeadRotation& pose, double level_weight,
+                             bool learning, std::int64_t timestamp_ms) {
+  // The resting pose, and whether the head is away from it or has moved
+  // recently, update on every frame, learning included, so that a posture
+  // held for a while becomes the resting pose and reopens the gate.
+  const std::array<double, 3> current_pose = AsArray(pose);
+  recent_poses_.emplace_back(timestamp_ms, current_pose);
+  while (recent_poses_.front().first < timestamp_ms - kPoseRangeWindowMs) {
+    recent_poses_.pop_front();
+  }
+  double away_by = 0;
+  double range = 0;
+  for (std::size_t axis = 0; axis < current_pose.size(); ++axis) {
+    away_by = std::max(
+        away_by, std::abs(current_pose.at(axis) - resting_pose_.at(axis)));
+    double lowest = current_pose.at(axis);
+    double highest = current_pose.at(axis);
+    for (const auto& recent : recent_poses_) {
+      lowest = std::min(lowest, recent.second.at(axis));
+      highest = std::max(highest, recent.second.at(axis));
+    }
+    range = std::max(range, highest - lowest);
+    resting_pose_.at(axis) +=
+        level_weight * (current_pose.at(axis) - resting_pose_.at(axis));
+  }
+  if (away_by > settings_.pose_degrees || range > settings_.pose_range) {
+    moved_ms_ = timestamp_ms;
+  }
+  return !learning && moved_ms_ != kNotRisen &&
+         timestamp_ms - moved_ms_ < settings_.settle_ms;
+}
+
 std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
+                                                  const HeadRotation& pose,
                                                   std::int64_t timestamp_ms) {
   std::vector<Expression> began;
   const std::int64_t since_last = timestamp_ms - last_ms_;
   last_ms_ = timestamp_ms;
   if (!started_ || since_last > kGapMs) {
-    StartOver(scores, timestamp_ms);
+    StartOver(scores, pose, timestamp_ms);
     return began;
   }
   const bool learning = timestamp_ms - started_ms_ < kLearningMs;
   const double level_weight =
       Weight(since_last, learning ? kLearningSeconds : kRestingSeconds);
   const double spread_weight = Weight(since_last, kSpreadSeconds);
+
+  if (Away(pose, level_weight, learning, timestamp_ms)) {
+    // The scores follow the pose, not the face: report nothing, and clear
+    // any pending hold so a rise that straddles the movement restarts it.
+    // Levels and spreads are frozen until the head settles.
+    for (State& state : states_) {
+      state.risen_ms = kNotRisen;
+    }
+    return began;
+  }
+
   for (std::size_t index = 0; index < states_.size(); ++index) {
     State& state = states_.at(index);
     const double rise = Signal(index, scores) - state.level;

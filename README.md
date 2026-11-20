@@ -120,7 +120,21 @@ expressions.smallest_rise = 0.06
 expressions.spreads = 3
 # How long a rise must last before it counts, so a blink is not a squint.
 expressions.hold_ms = 200
+# How far the head may lean from its resting pose, in degrees, and how much
+# it may move within the last 500 ms, before expressions pause (#46).
+expressions.pose_degrees = 10
+expressions.pose_range = 3
+# How long after the head was last away or moving it keeps pausing.
+expressions.settle_ms = 600
 ```
+
+A nod, a shake or a tilt moves the blendshape scores as much as an
+expression does, so while the head is away from its resting pose, or has
+moved more than a little recently, facepalm reads those scores as pose, not
+face: it neither reports an expression from them nor learns the resting
+face from them. The trade-off is that an expression made while the head
+moves is reported only if it is still held once the head settles again, a
+little after the movement stops.
 
 ## Measuring the camera on macOS
 

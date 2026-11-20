@@ -377,10 +377,14 @@ class Probe : public CameraReports {
           config_.gesture_confidence_threshold));
     }
     if (config_.expressions_enabled) {
-      readers.push_back(std::make_unique<ExpressionReader>(
-          ExpressionTracker::Settings{.rise = config_.expressions_smallest_rise,
-                                      .spreads = config_.expressions_spreads,
-                                      .hold_ms = config_.expressions_hold_ms}));
+      readers.push_back(
+          std::make_unique<ExpressionReader>(ExpressionTracker::Settings{
+              .rise = config_.expressions_smallest_rise,
+              .pose_degrees = config_.expressions_pose_degrees,
+              .pose_range = config_.expressions_pose_range,
+              .settle_ms = config_.expressions_settle_ms,
+              .spreads = config_.expressions_spreads,
+              .hold_ms = config_.expressions_hold_ms}));
     }
     if (!readers.empty()) {
       analyzers.push_back(std::make_unique<FaceAnalyzer>(

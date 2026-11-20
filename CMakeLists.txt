@@ -60,11 +60,12 @@ facepalm_unit(reaction)
 target_link_libraries(reaction PUBLIC head_pose)
 # head_pose_reader's tests run the real reaction (pure computation);
 # gesture_reader's run the real head-gesture model, and expression_reader's
-# the real ExpressionTracker, for the same reason. face_analyzer's tests
-# mock both the face model and the readers.
+# the real ExpressionTracker and head_pose (also pure computation, used to
+# derive the pose it hands the tracker, #46), for the same reason.
+# face_analyzer's tests mock both the face model and the readers.
 target_link_libraries(head_pose_reader PUBLIC reaction)
 target_link_libraries(gesture_reader PUBLIC head_gesture_model)
-target_link_libraries(expression_reader PUBLIC expressions)
+target_link_libraries(expression_reader PUBLIC expressions head_pose)
 facepalm_unit(session_camera)
 
 # The macOS capture API, through AVFoundation, and camera_probe, which drives

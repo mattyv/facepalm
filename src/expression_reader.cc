@@ -9,6 +9,7 @@
 #include "src/camera_controller.h"
 #include "src/expressions.h"
 #include "src/face_model.h"
+#include "src/head_pose.h"
 
 namespace facepalm {
 namespace {
@@ -24,6 +25,15 @@ Reaction ReactionFor(Expression expression) {
          "\"}";
 }
 
+// `face`'s head pose, read the same way ReactionFrom (src/reaction.cc) reads
+// it: the facial transformation matrix MediaPipe hands back, undone into a
+// rotation and then into yaw, pitch and roll.
+HeadRotation PoseOf(const Face& face) {
+  PoseMatrix pose{};
+  std::ranges::copy(face.pose_column_major, pose.begin());
+  return HeadRotationFrom(RotationFrom(pose));
+}
+
 }  // namespace
 
 ExpressionReader::ExpressionReader(ExpressionTracker::Settings settings)
@@ -34,7 +44,8 @@ void ExpressionReader::OnFace(const Face& face, int /*width*/, int /*height*/,
                               std::vector<Reaction>& reactions) {
   Scores scores{};
   std::ranges::copy(face.blendshapes, scores.begin());
-  for (const Expression started : tracker_.Update(scores, timestamp_ms)) {
+  for (const Expression started :
+       tracker_.Update(scores, PoseOf(face), timestamp_ms)) {
     reactions.push_back(ReactionFor(started));
   }
 }
