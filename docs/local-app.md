@@ -2,7 +2,8 @@
 
 The staging scripts assemble an unsigned, local development bundle from
 already-built components. They do not download, install, launch, start a
-service, or grant camera access. The bundle contains a menu bar app, the foreground daemon, and the MCP adapter.
+service, or grant camera access. The bundle contains a menu bar app, the
+foreground daemon, and the MCP adapter.
 
 Provide an already-built MediaPipe shim, its face model, and a self-contained
 Node 22 or newer distribution containing `bin/node` and `LICENSE`. Set
@@ -59,8 +60,8 @@ Contents/Resources/mcp/main.js RUNTIME/service.sock --client-token-file RUNTIME/
 ```
 
 Choose **Settings** from the 🤦 menu to set the frame rate, enable detectors,
-or adjust gesture confidence and expression tuning. To apply a saved file on your next
-daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"`
+or adjust gesture confidence and expression tuning. To apply saved settings
+on the next daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"`
 to the daemon command. The dialog shows the path it used. Use one approved MCP
 connection at a time. It receives interpreted gesture and expression events.
 For Claude Code, see the [bundled plugin instructions](../integrations/claude-code/README.md).

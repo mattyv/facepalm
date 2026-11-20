@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Facepalm
+Comment=Configure Facepalm detection
+Exec=facepalm-menu --settings
+Icon=facepalm
+Terminal=false
+Categories=Utility;

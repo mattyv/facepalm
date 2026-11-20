@@ -67,8 +67,62 @@ jobs:
           bats integrations/claude-code/test
           cmake --build build-coverage --target mcp_service_fixture
           MCP_FIXTURE="$PWD/build-coverage/mcp_service_fixture" node --test test/integration/*.test.mjs
+      - name: Portable install smoke
+        run: |
+          cmake -DSOURCE_DIR="$PWD" \
+            -DSMOKE_ROOT="${RUNNER_TEMP}/facepalm-install-smoke" \
+            -DMCP_NODE_MODULES="$PWD/mcp/node_modules" \
+            -DMCP_FIXTURE="$PWD/build-coverage/mcp_service_fixture" \
+            -P test/install_smoke.cmake
       - name: Script tests
         run: bats scripts/test specs/test tools/fixtures/test
+
+  debian-package:
+    runs-on: ubuntu-latest
+    container: debian:13-slim
+    steps:
+      - name: Install build and desktop test tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential ca-certificates cmake dbus-daemon dpkg-dev file git \
+            libgmock-dev ninja-build qt6-base-dev qt6-wayland xauth xdotool xvfb
+      - uses: actions/checkout@v7
+      - name: Build and exercise Linux tray
+        run: |
+          cmake -S . -B build-debian -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DFACEPALM_LINUX_TRAY=ON
+          cmake --build build-debian --target facepalm_menu gesture_replay_cli linux_tray_integration
+          ctest --test-dir build-debian -R '^linux_tray_integration$' --output-on-failure --no-tests=error
+      - name: Build Debian package
+        run: cpack --config build-debian/CPackConfig.cmake -B build-debian/package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: facepalm-debian13-amd64
+          path: build-debian/package/*.deb
+          if-no-files-found: error
+
+  debian-install:
+    needs: debian-package
+    runs-on: ubuntu-latest
+    container: debian:13-slim
+    steps:
+      - name: Install package verification tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates cmake desktop-file-utils git
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: facepalm-debian13-amd64
+          path: debian-package
+      - name: Install, run, and purge package
+        run: |
+          set -- "$PWD"/debian-package/*.deb
+          test "$#" -eq 1
+          cmake -DPACKAGE_FILE="$1" \
+            -DSMOKE_ROOT="${RUNNER_TEMP}/facepalm-deb-smoke" \
+            -DINSTALL_PACKAGE=ON -P test/deb_smoke.cmake
 
   sanitizers:
     runs-on: ubuntu-latest

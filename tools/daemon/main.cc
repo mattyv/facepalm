@@ -1,4 +1,13 @@
+#ifdef __linux__
+#include <pthread.h>
+
+#include <condition_variable>
+#include <mutex>
+#include <queue>
+#include <thread>
+#else
 #include <dispatch/dispatch.h>
+#endif
 
 #include <chrono>
 #include <csignal>
@@ -25,7 +34,11 @@
 #include "src/face_reader.h"
 #include "src/frame_pipeline.h"
 #include "src/gesture_reader.h"
+#ifdef __linux__
+#include "src/linux/v4l2_session.h"
+#else
 #include "src/macos/avfoundation_session.h"
+#endif
 #include "src/rating_log.h"
 #include "src/reaction_feed.h"
 #include "src/service.h"
@@ -35,6 +48,42 @@
 namespace facepalm {
 namespace {
 constexpr int kFeedCapacity = 100;
+#ifdef __linux__
+// The queue processes effects serially just like the macOS dispatch queues.
+class SerialQueue {
+ public:
+  Post Poster() {
+    return [this](const std::function<void()>& task) {
+      {
+        const std::scoped_lock lock(mutex_);
+        pending_.push(task);
+      }
+      ready_.notify_one();
+    };
+  }
+
+ private:
+  void Run(std::stop_token stop) {
+    for (;;) {
+      std::function<void()> task;
+      {
+        std::unique_lock lock(mutex_);
+        if (!ready_.wait(lock, stop, [this] { return !pending_.empty(); })) {
+          return;
+        }
+        task = std::move(pending_.front());
+        pending_.pop();
+      }
+      task();
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable_any ready_;
+  std::queue<std::function<void()>> pending_;
+  std::jthread worker_{[this](std::stop_token stop) { Run(stop); }};
+};
+#else
 Post OnQueue(dispatch_queue_t queue) {
   return [queue](const std::function<void()>& task) {
     const std::function<void()> owned = task;
@@ -43,6 +92,8 @@ Post OnQueue(dispatch_queue_t queue) {
     });
   };
 }
+
+#endif
 
 // Only interpreted gesture and expression events enter the feed.
 class FeedClients : public Clients {
@@ -76,8 +127,9 @@ class Engine : public DaemonController, public DaemonPipeline {
  public:
   Engine(std::unique_ptr<Listener> listener, std::string token,
          std::string model, Config config, std::unique_ptr<RatingLog> ratings,
-         dispatch_queue_t control)
-      : control_queue_(control),
+         Post control, Post camera, Post inference,
+         [[maybe_unused]] std::string device = {})
+      : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
         ratings_(std::move(ratings)),
@@ -89,8 +141,7 @@ class Engine : public DaemonController, public DaemonPipeline {
         approved_(
             feed_, std::move(token),
             [this](bool joined) {
-              OnQueue(control_queue_)(
-                  [this, joined] { control_.Subscription(joined); });
+              control_queue_([this, joined] { control_.Subscription(joined); });
             },
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
@@ -100,32 +151,36 @@ class Engine : public DaemonController, public DaemonPipeline {
         control_(
             *this, *this, [this] { service_.Stop(); },
             [this] { std::_Exit(failed_ ? 1 : 0); }),
+#ifdef __linux__
+        capture_(
+            std::move(device),
+            [this](const Frame& frame) { pipeline_.OnFrame(frame); },
+            [this] { camera_.OnSessionFailed(); }),
+#else
         capture_(
             [this](const Frame& frame) { pipeline_.OnFrame(frame); },
             [this] { camera_.OnSessionFailed(); },
             [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
             [this](const std::string& id) { camera_.OnDeviceConnected(id); }),
-        camera_(capture_, control_,
-                OnQueue(dispatch_queue_create("facepalm.camera",
-                                              DISPATCH_QUEUE_SERIAL)),
-                OnQueue(control_queue_), config.frames_per_second),
+#endif
+        camera_(capture_, control_, std::move(camera), control_queue_,
+                config.frames_per_second),
         controller_(camera_, clients_, true),
         pipeline_(
-            controller_, OnQueue(control_queue_),
-            OnQueue(dispatch_queue_create("facepalm.inference",
-                                          DISPATCH_QUEUE_SERIAL)),
+            controller_, control_queue_, std::move(inference),
             FramePipeline::Callbacks{
                 .make_analyzers =
                     [this](std::string& error) { return MakeAnalyzers(error); },
                 .on_error =
                     [this](const std::string&) {
-                      OnQueue(control_queue_)([this] {
+                      control_queue_([this] {
                         std::fprintf(stderr,
                                      "facepalm-daemon: model failure\n");
                         failed_ = true;
                         control_.Stop();
                       });
-                    }}) {}
+                    }}) {
+  }
 
   void Start() { service_.Start(); }
   void Stop() { control_.Stop(); }
@@ -182,7 +237,7 @@ class Engine : public DaemonController, public DaemonPipeline {
   }
 
   bool failed_ = false;  // Control queue only.
-  dispatch_queue_t control_queue_;
+  Post control_queue_;
   std::string model_;
   Config config_;
   std::unique_ptr<RatingLog> ratings_;
@@ -191,7 +246,11 @@ class Engine : public DaemonController, public DaemonPipeline {
   ApprovedFeed approved_;
   Service service_;
   DaemonControl control_;
+#ifdef __linux__
+  V4l2Session capture_;
+#else
   AvFoundationSession capture_;
+#endif
   SessionCamera camera_;
   CameraController controller_;
   FramePipeline pipeline_;
@@ -295,11 +354,47 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "cannot open socket\n");
     return 1;
   }
+#ifdef __linux__
+  // Block before starting worker threads, so the main thread can route stop
+  // requests onto the control queue without a signal-handler callback.
+  sigset_t signals{};
+  sigemptyset(&signals);
+  sigaddset(&signals, SIGINT);
+  sigaddset(&signals, SIGTERM);
+  if (pthread_sigmask(SIG_BLOCK, &signals, nullptr) != 0) {
+    std::fprintf(stderr, "cannot configure daemon signals\n");
+    return 1;
+  }
+  facepalm::SerialQueue control;
+  facepalm::SerialQueue camera;
+  facepalm::SerialQueue inference;
+  const char* device = std::getenv("FACEPALM_CAMERA_DEVICE");
+  facepalm::Engine engine(std::move(listener), *token, options->model, config,
+                          std::move(ratings), control.Poster(), camera.Poster(),
+                          inference.Poster(),
+                          device != nullptr ? device : "/dev/video0");
+  engine.Start();
+  int signal_number = 0;
+  if (sigwait(&signals, &signal_number) != 0) {
+    std::_Exit(1);
+  }
+  control.Poster()([&engine] { engine.Stop(); });
+  // DaemonControl exits after the camera, model and clients have retired.
+  for (;;) {
+    if (sigwait(&signals, &signal_number) != 0) {
+      std::_Exit(1);
+    }
+  }
+#else
   dispatch_queue_t control =
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);
   auto* engine =
       new facepalm::Engine(std::move(listener), *token, options->model, config,
-                           std::move(ratings), control);
+                           std::move(ratings), facepalm::OnQueue(control),
+                           facepalm::OnQueue(dispatch_queue_create(
+                               "facepalm.camera", DISPATCH_QUEUE_SERIAL)),
+                           facepalm::OnQueue(dispatch_queue_create(
+                               "facepalm.inference", DISPATCH_QUEUE_SERIAL)));
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
     dispatch_source_t source =
@@ -311,4 +406,5 @@ int main(int argc, char** argv) {
   }
   engine->Start();
   dispatch_main();
+#endif
 }

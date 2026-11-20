@@ -4,6 +4,8 @@ description: Open the installed Facepalm settings window on macOS.
 disable-model-invocation: true
 ---
 
+# Open Facepalm Settings
+
 Use `~/Applications/Facepalm.app` or the app path the user provides. Check
 that `Contents/Info.plist` names `facepalm-menu` as `CFBundleExecutable`.
 If it does, call `open -a "$app" --args --settings` with that path. If it

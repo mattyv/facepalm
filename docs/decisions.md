@@ -5,6 +5,68 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Use the macOS settings layout on Linux
+
+Use Qt Widgets to present the same detection controls and field order as the
+macOS settings window. Both hosts use the shared config parser and document
+editor, which preserve comments and unrelated values. The desktop launcher
+opens Settings directly, and the tray keeps service readiness and replay
+status. This replaces the status-only Linux window so users can edit the
+daemon configuration on either desktop.
+
+Settings apply at the next daemon start with `--config` and the displayed
+path. Save checks for changes since opening the form and writes atomically.
+A writer racing that final save can still overwrite or be overwritten.
+[Facepalm service issue #37](https://github.com/mattyv/facepalm/issues/37)
+
+## 2026-11-20: Run the Linux camera through the shared daemon
+
+Use Video4Linux through libv4l2 and link the pinned MediaPipe Tasks C
+library on Linux. The capture adapter joins its worker before reporting
+retirement, and the existing consent, session, frame, and feed owners
+keep their responsibilities. Serial queues run the same daemon composition
+as macOS without requiring libdispatch on Linux.
+
+The build keeps the existing FaceModel interface and uses the official C
+library to avoid a separate application or an inference service. It needs
+matching 0.10.35 headers and library and a Face Landmarker model. The first
+Linux setup uses one selected single-plane camera. Restart after reconnecting
+a disconnected device. The development daemon installs separately from the
+tray `.deb`.
+
+On Debian 13, the integrated camera bound at `/dev/video0`, MediaPipe
+processed a live frame, and MCP returned a classified turn. A refused
+client left the camera closed. Two consecutive approved MCP sessions each
+opened, processed, and released the device. [Facepalm service issue #37](https://github.com/mattyv/facepalm/issues/37)
+
+## 2026-11-20: Package the Linux tray and replay tools for Debian 13
+
+Use Qt 6 Widgets for the Linux tray, menu and status window. Keep the
+existing shared core and macOS AppKit host. Qt supplies the desktop tray
+protocol and menu, so Facepalm only owns its status and controls.
+
+Build and install-test the `.deb` in separate Debian 13 amd64 environments.
+The package contains the tray, desktop launcher, licensed icon and replay
+CLI. The MCP adapter keeps its separate Node.js 22 install because Debian
+13 supplies Node.js 20. Users launch the tray from their applications menu.
+
+Desktops with StatusNotifierItem support show the icon. The status window
+covers desktops without a compatible tray. The Linux camera daemon is a
+separate portability milestone. [Facepalm service issue #37](https://github.com/mattyv/facepalm/issues/37)
+
+## 2026-11-20: Install the portable replay and MCP adapter separately
+
+-   **Decision:** use CMake's `BUILD_TESTING` switch and install the existing
+    replay CLI and MCP adapter with its lockfile under a relocatable prefix.
+-   **Why:** the portable tools can be built and installed without GoogleTest
+    or a camera backend, while normal test builds retain their existing suite.
+-   **Rejected:** installing a synthetic fixture as a daemon or presenting the
+    portable tools as a complete Linux camera application.
+-   **Cost:** the adapter needs Node.js and separately installed npm
+    dependencies and a separately provisioned compatible service. This does
+    not deliver a Linux camera backend, daemon, model, or live camera test.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37).
+
 ## 2026-11-20: Use an ELF export list for the Linux MediaPipe shim
 
 -   **Decision:** build a `.so` on Linux with the same six-function C ABI as
