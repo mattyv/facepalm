@@ -8,12 +8,14 @@ mutations that prove each one bites. The layout follows ai-pair's
 
 ## Tools
 
-TLC 1.8.0 runs on Java 21 or later. `scripts/download_tlc.sh` fetches its jar
-and accepts it only with the pinned SHA-256, the one ai-pair's CI uses:
+TLC 1.7.4 runs on Java 11 or later; CI uses 21. `scripts/download_tlc.sh`
+fetches its jar and accepts it only with the pinned SHA-256. It is the latest
+stable release: 1.8.0 is a pre-release whose jar is rebuilt in place, which
+broke the pin once (#48):
 
 ```shell
 bash scripts/download_tlc.sh build-tla/tla2tools.jar \
-  7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f
+  936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 bash specs/check.sh
 ```
 

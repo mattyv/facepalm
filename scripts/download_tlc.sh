@@ -12,12 +12,12 @@ readonly -a CURL_ARGS=(--fail --silent --show-error --location --retry 3
   -o "${OUTPUT}")
 mkdir -p "$(dirname "${OUTPUT}")"
 
-if curl "${CURL_ARGS[@]}" "${DIRECT}v1.8.0/tla2tools.jar" \
+if curl "${CURL_ARGS[@]}" "${DIRECT}v1.7.4/tla2tools.jar" \
   && echo "${SHA256}  ${OUTPUT}" | shasum -a 256 -c -; then
   exit 0
 fi
 rm -f "${OUTPUT}"
-if curl "${CURL_ARGS[@]}" "${API}749260120" \
+if curl "${CURL_ARGS[@]}" "${API}184694200" \
   && echo "${SHA256}  ${OUTPUT}" | shasum -a 256 -c -; then
   exit 0
 fi

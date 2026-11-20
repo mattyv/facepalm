@@ -70,6 +70,6 @@ jobs:
       - name: Download TLC
         run: |
           bash scripts/download_tlc.sh build-tla/tla2tools.jar \
-            7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f
+            936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
       - name: Check every spec
         run: bash specs/check.sh
