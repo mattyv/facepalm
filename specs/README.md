@@ -90,7 +90,11 @@ the frame a ticket, or refuses one when the camera is not open. The
 inference queue runs its tasks in order: create the model when the camera
 opens, detect on a ticketed frame, and destroy the model when the camera
 closes. Frames may arrive at any time, even just after closing, and loading
-the model and detecting can each fail.
+the model and detecting can each fail. In the code, the model is the list of
+frame analysers (#34): `FaceAnalyzer`, which runs the face model once a
+frame and gives the result to a `FaceReader` for each setting enabled (head
+pose, and Idiap's CCDbHG head-gesture model), made together, run in turn on
+each frame, and destroyed together.
 
 | Property | What it says | Test |
 |---|---|---|
@@ -128,12 +132,11 @@ tests that stand for the properties they break:
 
 | Mutation to `FramePipeline` | Fails |
 |---|---|
-| A frame is copied in while the slot is taken | `AtMostOneInFlightTest`, `NeverWrittenWhileReadTest` |
-| A refused ticket does not free the slot | `SlotFreedTest.AfterARefusedTicket` |
-| A failed detect does not free the slot | `SlotFreedTest.AfterAFailedDetect` |
-| A detect with no model skips without freeing the slot | `SlotFreedTest.WithNoModel` |
-| A detect runs with no model | `NoDetectWithoutModelTest`, on the null model |
-| Closing destroys the model at once, on the caller's thread | `ModelGoneAfterCloseTest.ClosingDestroysTheModel`, `NoDetectWithoutModelTest.ClosingWaitsForADetectAlreadyQueued` |
-| Closing never destroys the model | `ModelGoneAfterCloseTest.ClosingDestroysTheModel`, `NoDetectWithoutModelTest.DetectsNothingOnceClosed` |
-| A ticketed frame's detect is never queued | `CanDetectTest`, and six others |
+| A frame is copied in while the slot is taken | `AtMostOneInFlightTest` (both), `NeverWrittenWhileReadTest` |
+| A refused ticket does not free the slot | `SlotFreedTest.AfterARefusedTicket`, `PixelsWipedTest.AfterARefusedTicket` |
+| A failed analyse does not free the slot | `SlotFreedTest.AfterAFailedAnalyse`, `SlotFreedTest.AfterOneAnalyserFailsAndTheOthersRun` |
+| No analysers skips without freeing the slot | `SlotFreedTest.WithNoModel` |
+| Closing destroys the analysers at once, on the caller's thread | `NoDetectWithoutModelTest.ClosingWaitsForAnAnalyseAlreadyQueued` |
+| Closing never destroys the analysers | `ModelGoneAfterCloseTest.ClosingDestroysTheAnalysers`, `NoDetectWithoutModelTest.AnalysesNothingOnceClosed` |
+| A ticketed frame's analyse is never queued | `CanDetectTest` (all three), and ten others |
 | A frame's pixels are not wiped when its slot is freed | `PixelsWipedTest` (both; the spec does not model the wipe) |

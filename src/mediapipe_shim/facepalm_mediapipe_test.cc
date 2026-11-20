@@ -14,8 +14,10 @@
 
 #include "absl/status/statusor.h"
 #include "facepalm_shim/facepalm_mediapipe_internal.h"
+#include "mediapipe/framework/formats/detection.pb.h"
 #include "mediapipe/framework/formats/image.h"
 #include "mediapipe/framework/formats/image_frame.h"
+#include "mediapipe/framework/formats/location_data.pb.h"
 #include "mediapipe/framework/formats/matrix.h"
 #include "mediapipe/framework/port/gtest.h"
 #include "mediapipe/tasks/cc/components/containers/category.h"
@@ -267,6 +269,166 @@ TEST(FailTest, LeavesAnEmptyErrorBufferAlone) {
   char error[1] = {'x'};
   EXPECT_EQ(facepalm_shim::Fail(absl::InternalError("why"), error, 0), -1);
   EXPECT_EQ(error[0], 'x');
+}
+
+// MediaPipe's expected short-range detection for portrait.jpg (820x1024),
+// from mediapipe/tasks/testdata/vision/portrait_expected_detection.pbtxt,
+// and the margins face_detector_test.cc allows: 5 pixels for the box, 0.01
+// for key points.
+constexpr int kPortraitWidth = 820;
+constexpr int kPortraitHeight = 1024;
+constexpr std::array<float, 4> kPortraitBoxPixels = {283, 115, 234, 234};
+constexpr float kBoxMarginPixels = 5;
+constexpr std::array<std::array<float, 2>, FP_KEYPOINTS> kPortraitKeypoints = {
+    {{0.44416338F, 0.17643969F},
+     {0.55514044F, 0.17731678F},
+     {0.5046702F, 0.2265771F},
+     {0.50227845F, 0.2719954F},
+     {0.36063305F, 0.20143759F},
+     {0.6084143F, 0.20409837F}}};
+constexpr float kKeypointMargin = 0.01F;
+
+class FaceDetectorTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    ASSERT_EQ(fp_face_detector_create(
+                  Data("face_detection_short_range.tflite").c_str(), &detector_,
+                  error_, kErrorSize),
+              0)
+        << error_;
+  }
+  void TearDown() override { fp_face_detector_destroy(detector_); }
+
+  FpFaceDetector* detector_ = nullptr;
+  char error_[kErrorSize] = {};
+  FpDetection detection_ = {};
+};
+
+TEST_F(FaceDetectorTest, FindsThePortraitsFaceAsMediaPipeExpects) {
+  const Rgba portrait = Decode(Data("portrait.jpg"));
+  ASSERT_EQ(portrait.width, kPortraitWidth);
+  ASSERT_EQ(
+      fp_face_detector_detect(detector_, portrait.pixels.data(), portrait.width,
+                              portrait.height, &detection_, error_, kErrorSize),
+      1)
+      << error_;
+  const std::array<float, 4> sides = {kPortraitWidth, kPortraitHeight,
+                                      kPortraitWidth, kPortraitHeight};
+  for (int i = 0; i < 4; ++i) {
+    EXPECT_NEAR(detection_.box[i] * sides[i], kPortraitBoxPixels[i],
+                kBoxMarginPixels)
+        << "box value " << i;
+  }
+  for (int i = 0; i < FP_KEYPOINTS; ++i) {
+    EXPECT_NEAR(detection_.keypoints[i][0], kPortraitKeypoints[i][0],
+                kKeypointMargin)
+        << "key point " << i;
+    EXPECT_NEAR(detection_.keypoints[i][1], kPortraitKeypoints[i][1],
+                kKeypointMargin)
+        << "key point " << i;
+  }
+}
+
+TEST_F(FaceDetectorTest, FindsNoFaceInABlankFrame) {
+  const std::vector<uint8_t> black(640 * 480 * 4, 0);
+  EXPECT_EQ(fp_face_detector_detect(detector_, black.data(), 640, 480,
+                                    &detection_, error_, kErrorSize),
+            0)
+      << error_;
+}
+
+TEST_F(FaceDetectorTest, FailsOnAFrameWithNoPixels) {
+  const std::vector<uint8_t> none(4, 0);
+  EXPECT_EQ(fp_face_detector_detect(detector_, none.data(), 0, 0, &detection_,
+                                    error_, kErrorSize),
+            -1);
+  EXPECT_NE(std::strlen(error_), 0U);
+}
+
+TEST(FaceDetectorCreateTest, FailsWithAMissingModelAndSaysWhy) {
+  FpFaceDetector* detector = nullptr;
+  char error[kErrorSize] = {};
+  EXPECT_EQ(fp_face_detector_create("/nonexistent/detector.tflite", &detector,
+                                    error, kErrorSize),
+            -1);
+  EXPECT_EQ(detector, nullptr);
+  EXPECT_NE(std::string(error).find("detector.tflite"), std::string::npos)
+      << error;
+}
+
+TEST(FaceDetectorDestroyTest, AcceptsNoDetector) {
+  fp_face_detector_destroy(nullptr);
+}
+
+// A made-up detection list of `faces` faces, the first with `keypoints`
+// relative key points at distinct places and, when `box` is set, a relative
+// box at (-0.1, 0.2), 0.5 wide and 0.4 tall.
+std::vector<mediapipe::Detection> Detections(int faces, int keypoints,
+                                             bool box = true) {
+  std::vector<mediapipe::Detection> detections(faces);
+  for (auto& detection : detections) {
+    mediapipe::LocationData* location = detection.mutable_location_data();
+    if (box) {
+      auto* relative = location->mutable_relative_bounding_box();
+      relative->set_xmin(-0.1F);
+      relative->set_ymin(0.2F);
+      relative->set_width(0.5F);
+      relative->set_height(0.4F);
+    }
+    for (int i = 0; i < keypoints; ++i) {
+      auto* point = location->add_relative_keypoints();
+      point->set_x(i * 0.1F);
+      point->set_y(i * 0.2F);
+    }
+  }
+  return detections;
+}
+
+TEST(CopyDetectionTest, CopiesTheBoxClampedAtZeroAndTheKeyPoints) {
+  FpDetection detection = {};
+  char error[kErrorSize] = {};
+  ASSERT_EQ(facepalm_shim::CopyDetection(Detections(1, FP_KEYPOINTS), detection,
+                                         error, kErrorSize),
+            1);
+  EXPECT_FLOAT_EQ(detection.box[0], 0);
+  EXPECT_FLOAT_EQ(detection.box[1], 0.2F);
+  EXPECT_FLOAT_EQ(detection.box[2], 0.5F);
+  EXPECT_FLOAT_EQ(detection.box[3], 0.4F);
+  EXPECT_FLOAT_EQ(detection.keypoints[5][0], 0.5F);
+  EXPECT_FLOAT_EQ(detection.keypoints[5][1], 1.0F);
+}
+
+TEST(CopyDetectionTest, CountsEveryFace) {
+  FpDetection detection = {};
+  char error[kErrorSize] = {};
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(2, FP_KEYPOINTS), detection,
+                                         error, kErrorSize),
+            2);
+}
+
+TEST(CopyDetectionTest, FindsNoFaceInNoDetections) {
+  FpDetection detection = {};
+  char error[kErrorSize] = {};
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(0, FP_KEYPOINTS), detection,
+                                         error, kErrorSize),
+            0);
+}
+
+TEST(CopyDetectionTest, FailsWithoutARelativeBox) {
+  FpDetection detection = {};
+  char error[kErrorSize] = {};
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(1, FP_KEYPOINTS, false),
+                                         detection, error, kErrorSize),
+            -1);
+  EXPECT_NE(std::string(error).find("key points"), std::string::npos) << error;
+}
+
+TEST(CopyDetectionTest, FailsOnTheWrongNumberOfKeyPoints) {
+  FpDetection detection = {};
+  char error[kErrorSize] = {};
+  EXPECT_EQ(facepalm_shim::CopyDetection(Detections(1, 5), detection, error,
+                                         kErrorSize),
+            -1);
 }
 
 }  // namespace

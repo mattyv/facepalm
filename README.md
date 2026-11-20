@@ -12,9 +12,12 @@ Nothing works end to end yet. The design is on
 
 ## What exists
 
--   `src/mediapipe_shim`: MediaPipe's face landmarker as one self-contained
+-   `src/mediapipe_shim`: MediaPipe's face landmarker, as one self-contained
     library with a plain C interface, built by `tools/fixtures/build.sh`.
-    `tools/fixtures/test_shim.sh` tests it against the real model.
+    `tools/fixtures/test_shim.sh` tests it against the real model. Its
+    short-range face detector is unused since #34 replaced Nodding Pigeon
+    (below); it is still built and tested, since removing it needs a Bazel
+    build this environment could not run.
 -   `src/face_model`: `FaceModel`, how the frame pipeline will ask for the
     face in a frame, and `MediaPipeFaceModel`, which asks the shim. Its unit
     tests stand in for the shim's C functions at link time, so they need no
@@ -23,6 +26,19 @@ Nothing works end to end yet. The design is on
     frame at a time, across the capture, controller and inference queues,
     following `specs/FramePipeline.tla`. Each frame's pixels are wiped once
     it is done with.
+-   `src/frame_analyzer`, `src/face_analyzer`, `src/face_reader`: what the
+    pipeline runs on each frame. `FaceAnalyzer` runs the face model once a
+    frame and gives the face it found, or that there was none, to every
+    `FaceReader`.
+-   `src/head_pose_reader`: a `FaceReader` that reacts with the head's yaw,
+    pitch and roll.
+-   `src/gesture_reader`, `src/head_gesture_model`: a `FaceReader` that runs
+    Idiap's CCDbHG head-gesture model (#34, replacing Nodding Pigeon) and
+    reacts once to each nod, shake, tilt, turn or up/down. `head_gesture_model`
+    is the model itself, ported from
+    [idiap/ccdbhg-head-gesture-recognition](https://github.com/idiap/ccdbhg-head-gesture-recognition)
+    (GPL-3.0-only); see [Licence](#licence).
+-   `src/config`: the settings file, below.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
     to a tenth of a degree, as JSON text.
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
@@ -72,6 +88,25 @@ cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
 bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
 
+## Settings
+
+facepalm reads `~/.config/facepalm/facepalm.conf`, or
+`$XDG_CONFIG_HOME/facepalm/facepalm.conf` when that is set. Every setting has
+a default, so the file holds only what you change; with no file, all are
+defaults. A misspelt name, a bad value or a repeated setting stops facepalm
+with the line named.
+
+```text
+# The camera's frame rate: 15 by default, 30 for quicker gestures.
+camera.frames_per_second = 15
+# The head's yaw, pitch and roll on every frame.
+head_pose.enabled = true
+# Nods, shakes, tilts, turns and up/downs: how sure the model must be of
+# its most likely class before it is reported.
+gestures.enabled = true
+gestures.confidence_threshold = 0.5
+```
+
 ## Measuring the camera on macOS
 
 `camera_probe` opens the camera through the controller, converts each frame
@@ -84,18 +119,33 @@ for 15. The first run asks for camera permission for the app it runs in.
 build/camera_probe 30 15  # 30 seconds at 15 frames a second.
 ```
 
-Every frame goes through the frame pipeline. Built with
+Every frame goes through the frame pipeline, with the settings above; a
+frame rate given on the command line wins. Built with
 `FACEPALM_MEDIAPIPE_DYLIB` (see below) and given the face landmarker's
-`.task` bundle as a third argument, it also runs the face model on every
-frame, prints each frame's reaction as a line such as
-`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, and reports how long each
-detect took, how many frames had a face, the thread count and peak memory.
-Given a directory as a fourth argument, it saves every frame there as a PNG,
-with each frame's capture time in `timestamps.txt`, for
-`face_landmarker_fixtures` to replay. Those frames are images of whoever sat
-at the camera: keep them out of the repository.
+`.task` bundle as a third argument, it runs the face model once a frame and
+reacts with each setting enabled: the head's angles as
+`reaction {"yaw":2.4,"pitch":-3.2,"roll":-0.5}`, and each nod, shake, tilt,
+turn or up/down as `reaction {"gesture":"nod"}`, once the model has held
+that class continuously for 200ms; it then stays silent, whatever the model
+says next, until the model has held still (`none`) continuously for 750ms,
+so one physical movement is one reaction even where the model's per-frame
+answer flickers between two related classes or to `none` and back (#34).
+It reports how long each detect took, how many frames had a face, the
+thread count and peak memory. Given a directory as a fourth argument, it
+saves every frame there as a PNG, with each frame's capture time in
+`timestamps.txt`, for `face_landmarker_fixtures` to replay. Those frames
+are images of whoever sat at the camera: keep them out of the repository.
+Every frame with a face also prints its gesture channels as
+`gesture_raw <timestamp_ms> <18 values>` (head_gesture::RawFrame, the model's
+own input), and once that frame's window is ready, its class probabilities
+as `gesture_probs <timestamp_ms> <6 values>` (none, nod, shake, tilt, turn,
+up/down), whether or not `gestures.enabled` is set, so a recording always
+has what a replay needs.
 `face_model_check <model> <image> <frames>` times the model on one image run
 as that many frames, for a face held still in front of the camera.
+`face_model_check --gesture <model> <frame.png>...` runs the head-gesture
+model over those images as frames of one video, 33 ms apart, and prints the
+last window's gesture and probabilities.
 
 For energy, run `powermetrics` alongside it in another terminal, and read
 `camera_probe`'s line:
@@ -142,4 +192,6 @@ what changed.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+GPL-3.0-only. See [LICENSE](LICENSE). facepalm was MIT before #34 ported
+Idiap's CCDbHG head-gesture model, which is GPL-3.0-only; see
+[THIRDPARTY.md](THIRDPARTY.md) for the model's own notice.
