@@ -7,14 +7,14 @@
 // 33 ms apart, so the model tracks the face as it would on the camera, and
 // reports what each frame cost (#18).
 //
-// With --gesture, it runs Nodding Pigeon instead (#34): each image is a
-// frame of a video, through MediaPipeFaceDetector and the C++ model, as
-// Nodding Pigeon's predict_video does with VideoSegment.LAST: frames with
-// exactly one face, consecutive duplicates dropped, the last 60, a short run
-// padded with its last frame. It prints the gesture and the probabilities.
+// With --gesture, it runs Idiap's CCDbHG head-gesture model instead (#34):
+// each image is a frame of a video, through the same face model, 33 ms
+// apart, as face_model_check's own Time mode simulates; a frame without a
+// face drops the window, as GestureReader's OnNoFace does. It prints the
+// last window's gesture and probabilities.
 //
 // Usage: face_model_check <model.task> <image> [frames]
-//        face_model_check --gesture <detector.tflite> <frame.png>...
+//        face_model_check --gesture <model.task> <frame.png>...
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreGraphics/CoreGraphics.h>
@@ -35,9 +35,8 @@
 #include <system_error>
 #include <vector>
 
-#include "src/face_detector.h"
 #include "src/face_model.h"
-#include "src/nodding_pigeon.h"
+#include "src/head_gesture_model.h"
 
 namespace {
 
@@ -155,49 +154,55 @@ int Time(facepalm::FaceModel& model, const Image& image, int frames) {
   return 0;
 }
 
-// Runs Nodding Pigeon over `paths`, frames of one video, and prints its
-// gesture and probabilities. Returns 0, or 1 when a frame cannot be read.
-int Gesture(const char* detector_path, std::span<char* const> paths) {
-  namespace np = facepalm::nodding_pigeon;
-  std::string error;
-  auto detector = facepalm::MediaPipeFaceDetector::Create(detector_path, error);
-  if (detector == nullptr) {
-    std::fprintf(stderr, "face_model_check: %s\n", error.c_str());
-    return 1;
-  }
-  np::Window window;
+// Runs the head-gesture model over `paths`, frames of one video 33 ms
+// apart, through `model`, and prints the last window's gesture and
+// probabilities. A frame without a face drops the window in progress, as
+// GestureReader's OnNoFace does. Returns 0, or 1 when a frame cannot be
+// read or the model fails.
+int Gesture(facepalm::FaceModel& model, std::span<char* const> paths) {
+  namespace hg = facepalm::head_gesture;
+  constexpr std::int64_t kFrameMilliseconds = 33;
+  constexpr float kConfidenceThreshold = 0.5F;  // Config's default.
+  hg::Window window;
+  std::optional<std::array<hg::RawFrame, hg::kWindowFrames>> frames;
+  int timestamp = 0;
   for (const char* path : paths) {
     const std::optional<Image> image = Decode(path);
     if (!image) {
       std::fprintf(stderr, "face_model_check: cannot decode %s\n", path);
       return 1;
     }
-    facepalm::Detection detection{};
-    const std::optional<int> faces = detector->Detect(
-        image->rgba, image->width, image->height, detection, error);
-    if (!faces) {
+    facepalm::Face face{};
+    std::string error;
+    const auto result = model.Detect(image->rgba, image->width, image->height,
+                                     timestamp, face, error);
+    timestamp += kFrameMilliseconds;
+    if (result == facepalm::FaceModel::Result::kFailed) {
       std::fprintf(stderr, "face_model_check: %s\n", error.c_str());
       return 1;
     }
-    if (*faces == 1) {
-      static_cast<void>(window.Add(np::RawFrameFrom(detection)));
+    if (result == facepalm::FaceModel::Result::kNoFace) {
+      window.Reset();
+      continue;
     }
+    frames = window.Add(hg::RawFrameFrom(face, image->width, image->height),
+                        timestamp);
   }
-  const auto frames = window.Padded();
   if (!frames) {
-    std::printf("gesture undefined\n");
+    std::printf("gesture none\n");
     return 0;
   }
-  constexpr float kMotionThreshold = 0.5F;  // predict_video's defaults.
-  constexpr float kGestureThreshold = 0.9F;
-  const np::Prediction prediction = np::Predict(*frames);
-  constexpr std::array<const char*, 4> kNames = {"stationary", "nodding",
-                                                 "turning", "undefined"};
-  std::printf("gesture %s\nhas_motion %.6f\nnodding %.6f\nturning %.6f\n",
-              kNames.at(static_cast<std::size_t>(np::Classify(
-                  prediction, kMotionThreshold, kGestureThreshold))),
-              prediction.has_motion, prediction.gestures[0],
-              prediction.gestures[1]);
+  const hg::Prediction prediction = hg::Predict(*frames);
+  constexpr std::array<const char*, hg::kClasses> kNames = {
+      "none", "nod", "shake", "tilt", "turn", "up_down"};
+  std::printf(
+      "gesture %s\n"
+      "none %.6f\nnod %.6f\nshake %.6f\ntilt %.6f\nturn %.6f\nup_down %.6f\n",
+      kNames.at(static_cast<std::size_t>(
+          hg::Classify(prediction, kConfidenceThreshold))),
+      prediction.probabilities[0], prediction.probabilities[1],
+      prediction.probabilities[2], prediction.probabilities[3],
+      prediction.probabilities[4], prediction.probabilities[5]);
   return 0;
 }
 
@@ -208,7 +213,13 @@ int Gesture(const char* detector_path, std::span<char* const> paths) {
 // NOLINTNEXTLINE(misc-const-correctness,bugprone-exception-escape)
 int main(int argc, char** argv) {
   if (argc >= 4 && std::string_view(argv[1]) == "--gesture") {
-    return Gesture(argv[2], std::span<char* const>(argv + 3, argc - 3));
+    std::string error;
+    auto model = facepalm::MediaPipeFaceModel::Create(argv[2], error);
+    if (model == nullptr) {
+      std::fprintf(stderr, "face_model_check: %s\n", error.c_str());
+      return 1;
+    }
+    return Gesture(*model, std::span<char* const>(argv + 3, argc - 3));
   }
   int frames = 0;
   if (argc == 4) {

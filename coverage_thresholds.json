@@ -48,13 +48,6 @@
       "functions": 100
     }
   },
-  "src/nodding_pigeon.cc": {
-    "unit": {
-      "lines": 100,
-      "branches": 100,
-      "functions": 100
-    }
-  },
   "src/head_gesture_model.cc": {
     "unit": {
       "lines": 100,
@@ -62,21 +55,21 @@
       "functions": 100
     }
   },
-  "src/face_detector.cc": {
+  "src/face_analyzer.cc": {
     "unit": {
       "lines": 100,
       "branches": 100,
       "functions": 100
     }
   },
-  "src/gesture_analyzer.cc": {
+  "src/gesture_reader.cc": {
     "unit": {
       "lines": 100,
       "branches": 100,
       "functions": 100
     }
   },
-  "src/head_pose_analyzer.cc": {
+  "src/head_pose_reader.cc": {
     "unit": {
       "lines": 100,
       "branches": 100,

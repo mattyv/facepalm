@@ -21,8 +21,7 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_THAT(config.frames_per_second, Eq(15));
   EXPECT_TRUE(config.head_pose_enabled);
   EXPECT_TRUE(config.gestures_enabled);
-  EXPECT_THAT(config.motion_threshold, FloatEq(0.5F));
-  EXPECT_THAT(config.gesture_threshold, FloatEq(0.9F));
+  EXPECT_THAT(config.gesture_confidence_threshold, FloatEq(0.5F));
 }
 
 TEST(ParseConfigTest, ReadsEverySetting) {
@@ -31,8 +30,7 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "camera.frames_per_second = 30\n"
       "head_pose.enabled = false\n"
       "gestures.enabled=false\n"
-      "  gestures.motion_threshold =\t0.25  \n"
-      "gestures.gesture_threshold = 1",
+      "  gestures.confidence_threshold =\t0.25  \n",
       error);
   ASSERT_TRUE(parsed.has_value()) << error;
   const Config config = parsed.value_or(Config{});
@@ -40,8 +38,7 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_THAT(config.frames_per_second, Eq(30));
   EXPECT_FALSE(config.head_pose_enabled);
   EXPECT_FALSE(config.gestures_enabled);
-  EXPECT_THAT(config.motion_threshold, FloatEq(0.25F));
-  EXPECT_THAT(config.gesture_threshold, FloatEq(1));
+  EXPECT_THAT(config.gesture_confidence_threshold, FloatEq(0.25F));
 }
 
 TEST(ParseConfigTest, SkipsCommentsAndBlankLines) {
@@ -94,16 +91,16 @@ TEST(ParseConfigTest, RefusesASwitchOtherThanTrueOrFalse) {
 }
 
 TEST(ParseConfigTest, RefusesAThresholdOutsideZeroToOne) {
-  EXPECT_THAT(ErrorFor("gestures.motion_threshold = -0.1"),
+  EXPECT_THAT(ErrorFor("gestures.confidence_threshold = -0.1"),
               Eq("line 1: expected a number from 0 to 1"));
-  EXPECT_THAT(ErrorFor("gestures.gesture_threshold = 1.5"),
+  EXPECT_THAT(ErrorFor("gestures.confidence_threshold = 1.5"),
               Eq("line 1: expected a number from 0 to 1"));
-  EXPECT_THAT(ErrorFor("gestures.gesture_threshold = high"),
+  EXPECT_THAT(ErrorFor("gestures.confidence_threshold = high"),
               Eq("line 1: expected a number from 0 to 1"));
-  EXPECT_THAT(ErrorFor("gestures.gesture_threshold = 0.9x"),
+  EXPECT_THAT(ErrorFor("gestures.confidence_threshold = 0.9x"),
               Eq("line 1: expected a number from 0 to 1"));
   // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
-  EXPECT_THAT(ErrorFor("gestures.motion_threshold = nan"),
+  EXPECT_THAT(ErrorFor("gestures.confidence_threshold = nan"),
               Eq("line 1: expected a number from 0 to 1"));
 }
 
