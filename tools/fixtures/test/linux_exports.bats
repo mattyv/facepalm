@@ -33,7 +33,7 @@ teardown() {
   "${ELF_LD}" -shared \
     --version-script="${BATS_TEST_DIRNAME}/../../../src/mediapipe_shim/exports_linux.map" \
     -o "${WORK}/shim.so" "${WORK}/symbols.o"
-  "${ELF_NM}" --dynamic --defined-only --just-symbol-name \
+  "${ELF_NM}" --dynamic --defined-only -j \
     "${WORK}/shim.so" >"${WORK}/symbols"
   LC_ALL=C sort "${WORK}/symbols" >"${WORK}/actual"
   cat >"${WORK}/expected" <<'SYMBOLS'
