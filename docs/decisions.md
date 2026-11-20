@@ -98,6 +98,18 @@ The rating rejection in this entry is replaced by the feedback decision above.
     evidence of return. A head turn does not establish gaze or attention.
 -   **Evidence:** [#34](https://github.com/mattyv/facepalm/issues/34).
 
+## 2026-11-20: Run native tests under Clang sanitizers
+
+-   **Decision:** run the native CTest suite on Linux with AddressSanitizer and
+    UndefinedBehaviorSanitizer together, failing on the first finding.
+-   **Why:** coverage and clang-tidy do not detect all exercised memory errors
+    and undefined behavior at runtime.
+-   **Rejected:** replacing the existing coverage or clang-tidy checks; each
+    finds different problems.
+-   **Cost:** this checks exercised Linux CMake code only. It does not cover the
+    macOS camera, the separately built MediaPipe shim, or unexecuted paths.
+-   **Evidence:** the user's request for sanitizer checks in CI.
+
 ## 2026-11-20: Replay recorded head gestures without a camera
 
 -   **Decision:** replay the probe's raw gesture frames through the live window,
