@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Builds face_landmarker_fixtures and libfacepalm_mediapipe.dylib, the shim
+# Builds face_landmarker_fixtures and the platform shim library, which
 # facepalm runs the face model through, from MediaPipe's own C++ source,
 # pinned to a release, and fetches MediaPipe's test model and portrait image.
 # Everything lands in build-mediapipe/, which git ignores.
@@ -58,6 +58,15 @@ fetch() {
 }
 
 main() {
+  local shim
+  case "$(uname -s)" in
+    Darwin) shim=libfacepalm_mediapipe.dylib ;;
+    Linux) shim=libfacepalm_mediapipe.so ;;
+    *)
+      echo "unsupported operating system" >&2
+      return 1
+      ;;
+  esac
   checkout
   fetch face_landmarker_v2_with_blendshapes.task 1782184688504388 \
     b261925d4aad812b47a0e8d58c1baa1223270a5d1f663d78338bc881c003879d
@@ -79,7 +88,7 @@ main() {
   "${BAZEL}" --bazelrc="${HERE}/mediapipe.bazelrc" build \
     ${env_flags[@]+"${env_flags[@]}"} \
     //facepalm_fixtures:face_landmarker_fixtures \
-    //facepalm_shim:libfacepalm_mediapipe.dylib
+    //facepalm_shim:"${shim}"
 }
 
 main "$@"

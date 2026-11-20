@@ -6,13 +6,30 @@
 # cannot clash with another copy in the same process. MediaPipe's own
 # mediapipe/tasks/c/vision/face_landmarker:libface_landmarker.dylib is the
 # reference.
+SHIM_SRCS = [
+    "facepalm_mediapipe.cc",
+    "facepalm_mediapipe.h",
+    "facepalm_mediapipe_internal.h",
+]
+
+SHIM_DEPS = [
+    "//mediapipe/framework:calculator_framework",
+    "//mediapipe/framework/formats:detection_cc_proto",
+    "//mediapipe/framework/formats:image_format_cc_proto",
+    "//mediapipe/framework/formats:image_frame",
+    "//mediapipe/framework/formats:location_data_cc_proto",
+    "//mediapipe/modules/face_detection:face_detection_cc_proto",
+    "//mediapipe/tasks/cc/vision/core:running_mode",
+    "//mediapipe/modules/face_detection:face_detection_short_range_cpu",
+    "//mediapipe/tasks/cc/vision/face_landmarker",
+    "//mediapipe/tasks/cc/vision/utils:image_utils",
+    "@com_google_absl//absl/status",
+    "@com_google_absl//absl/status:statusor",
+]
+
 cc_binary(
     name = "libfacepalm_mediapipe.dylib",
-    srcs = [
-        "facepalm_mediapipe.cc",
-        "facepalm_mediapipe.h",
-        "facepalm_mediapipe_internal.h",
-    ],
+    srcs = SHIM_SRCS,
     additional_linker_inputs = ["exported_symbols.txt"],
     linkopts = [
         "-Wl,-install_name,@rpath/libfacepalm_mediapipe.dylib",
@@ -20,20 +37,20 @@ cc_binary(
         "-Wl,-dead_strip",
     ],
     linkshared = True,
-    deps = [
-        "//mediapipe/framework:calculator_framework",
-        "//mediapipe/framework/formats:detection_cc_proto",
-        "//mediapipe/framework/formats:image_format_cc_proto",
-        "//mediapipe/framework/formats:image_frame",
-        "//mediapipe/framework/formats:location_data_cc_proto",
-        "//mediapipe/modules/face_detection:face_detection_cc_proto",
-        "//mediapipe/tasks/cc/vision/core:running_mode",
-        "//mediapipe/modules/face_detection:face_detection_short_range_cpu",
-        "//mediapipe/tasks/cc/vision/face_landmarker",
-        "//mediapipe/tasks/cc/vision/utils:image_utils",
-        "@com_google_absl//absl/status",
-        "@com_google_absl//absl/status:statusor",
+    deps = SHIM_DEPS,
+)
+
+cc_binary(
+    name = "libfacepalm_mediapipe.so",
+    target_compatible_with = ["@platforms//os:linux"],
+    srcs = SHIM_SRCS,
+    additional_linker_inputs = ["exports_linux.map"],
+    linkopts = [
+        "-Wl,-soname,libfacepalm_mediapipe.so",
+        "-Wl,--version-script=$(location exports_linux.map)",
     ],
+    linkshared = True,
+    deps = SHIM_DEPS,
 )
 
 # The shim against the real face landmarker. FACEPALM_DATA names the folder

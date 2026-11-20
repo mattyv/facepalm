@@ -10,7 +10,12 @@ setup() {
   mkdir -p "${WORK}/repo/tools/fixtures" "${WORK}/bin"
   cp "${BATS_TEST_DIRNAME}/../build.sh" "${WORK}/repo/tools/fixtures/"
   export LOG="${WORK}/log" FAKE_HEAD="${PINNED}" FAKE_SHASUM=0
+  export FAKE_UNAME=Darwin
   # Logs each call; a clone makes its directory, and rev-parse prints HEAD.
+  cat >"${WORK}/bin/uname" <<'EOF'
+#!/bin/bash
+printf '%s\n' "${FAKE_UNAME}"
+EOF
   cat >"${WORK}/bin/git" <<'EOF'
 #!/bin/bash
 echo "git $*" >>"${LOG}"
@@ -99,4 +104,19 @@ teardown() {
   [[ "${status}" -eq 0 ]] || false
   log="$(cat "${LOG}")"
   [[ "${log}" == *'--disk_cache=/tmp/bazel-disk'* ]] || false
+}
+
+@test "builds the ELF shim on Linux" {
+  FAKE_UNAME=Linux run bash "${WORK}/repo/tools/fixtures/build.sh"
+  [[ "${status}" -eq 0 ]] || false
+  log="$(cat "${LOG}")"
+  [[ "${log}" == *'//facepalm_shim:libfacepalm_mediapipe.so'* ]] || false
+  [[ "${log}" != *'//facepalm_shim:libfacepalm_mediapipe.dylib'* ]] || false
+}
+
+@test "rejects unsupported systems before fetching or building" {
+  FAKE_UNAME=FreeBSD run bash "${WORK}/repo/tools/fixtures/build.sh"
+  [[ "${status}" -ne 0 ]] || false
+  [[ "${output}" == *'unsupported operating system'* ]] || false
+  [[ ! -e "${LOG}" ]] || false
 }

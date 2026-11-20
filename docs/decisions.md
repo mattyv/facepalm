@@ -5,6 +5,17 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Use an ELF export list for the Linux MediaPipe shim
+
+-   **Decision:** build a `.so` on Linux with the same six-function C ABI as
+    the macOS dylib, hiding all other symbols with an ELF version script.
+-   **Why:** MediaPipe's internal symbols must not collide with another copy.
+-   **Rejected:** exporting all symbols or passing Mach-O flags to Linux.
+-   **Cost:** the ELF boundary was cross-linked with synthetic symbols; the
+    full MediaPipe build and runtime have not yet been verified on Linux. This
+    does not supply a Linux camera backend or a runnable Linux daemon.
+-   **Evidence:** [#3](https://github.com/mattyv/facepalm/issues/3).
+
 ## 2026-11-20: Store feedback only when explicitly requested
 
 -   **Decision:** `--ratings-file` enables a private, single-writer versioned
