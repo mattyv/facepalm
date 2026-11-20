@@ -1,8 +1,10 @@
 #include "src/gesture_reader.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <numbers>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -45,11 +47,41 @@ constexpr std::int64_t kConfirmMs = 200;
 // episode mid-movement, so still_ms is 750ms, with margin over the longest
 // gap actually seen.
 constexpr std::int64_t kStillMs = 750;
+// The recorded subject returned within ten degrees of the starting pose (#34).
+constexpr double kTurnReturnRadians = 10 * std::numbers::pi / 180;
 
 }  // namespace
 
+bool GestureReportGate::SuppressTurn(Gesture gesture, std::int64_t timestamp_ms,
+                                     TurnPose pose) {
+  if (!turn_latched_) {
+    return false;
+  }
+  const bool near =
+      std::abs(std::remainder(pose.yaw - turn_origin_, 2 * std::numbers::pi)) <=
+      kTurnReturnRadians;
+  if (near && gesture == Gesture::kNone) {
+    if (!turn_settling_) {
+      turn_settling_ = true;
+      turn_settling_ms_ = timestamp_ms;
+    } else if (timestamp_ms - turn_settling_ms_ >= kStillMs) {
+      turn_latched_ = false;
+      turn_settling_ = false;
+    }
+  } else {
+    turn_settling_ = false;
+  }
+  return turn_latched_ && gesture == Gesture::kTurn;
+}
+
 head_gesture::Gesture GestureReportGate::Update(head_gesture::Gesture gesture,
-                                                std::int64_t timestamp_ms) {
+                                                std::int64_t timestamp_ms,
+                                                TurnPose pose) {
+  if (SuppressTurn(gesture, timestamp_ms, pose)) {
+    is_still_ = false;
+    has_candidate_ = false;
+    return Gesture::kNone;
+  }
   if (gesture == Gesture::kNone) {
     has_candidate_ = false;
     if (episode_open_) {
@@ -72,6 +104,10 @@ head_gesture::Gesture GestureReportGate::Update(head_gesture::Gesture gesture,
   if (has_candidate_ && candidate_ == gesture) {
     if (timestamp_ms - candidate_start_ms_ >= kConfirmMs) {
       episode_open_ = true;
+      if (gesture == Gesture::kTurn) {
+        turn_latched_ = true;
+        turn_origin_ = candidate_origin_;
+      }
       has_candidate_ = false;
       return gesture;
     }
@@ -80,6 +116,7 @@ head_gesture::Gesture GestureReportGate::Update(head_gesture::Gesture gesture,
 
   has_candidate_ = true;
   candidate_ = gesture;
+  candidate_origin_ = pose.window_start_yaw;
   candidate_start_ms_ = timestamp_ms;
   return Gesture::kNone;
 }
@@ -88,6 +125,8 @@ void GestureReportGate::Reset() {
   episode_open_ = false;
   has_candidate_ = false;
   is_still_ = false;
+  turn_latched_ = false;
+  turn_settling_ = false;
 }
 
 GestureReader::GestureReader(float confidence_threshold)
@@ -108,7 +147,9 @@ void GestureReader::OnFace(const Face& face, int width, int height,
   }
   const Gesture gesture = head_gesture::Classify(head_gesture::Predict(*window),
                                                  confidence_threshold_);
-  const Gesture to_report = gate_.Update(gesture, timestamp_ms);
+  const Gesture to_report = gate_.Update(
+      gesture, timestamp_ms,
+      {.yaw = raw.at(15), .window_start_yaw = window->front().at(15)});
   if (to_report != Gesture::kNone) {
     reactions.emplace_back(ReactionFor(to_report));
   }

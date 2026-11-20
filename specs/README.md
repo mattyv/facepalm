@@ -32,6 +32,15 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
 | `Service.cfg` | three connections, two client names | holds | 396 |
 
+## `TurnExcursion`: suppress repeated turns until return
+
+The bounded model abstracts yaw as near or away and the elapsed settling time
+as one action. TLC checks six distinct states with no fairness assumption.
+`NoRearmAway` and `NoRepeat` hold. Setting `GuardReturn` or `GuardRepeat` to
+false violates the corresponding invariant. Tests in `gesture_reader_test`
+cover elapsed time, interruption, tracking loss, angle wrap and the general
+gesture gate. The model does not prove pose accuracy or model classification.
+
 ## `CameraLifecycle`: when the camera may be on
 
 Models consent, client subscriptions, the camera device, frames in flight,

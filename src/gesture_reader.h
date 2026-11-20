@@ -27,17 +27,36 @@ namespace facepalm {
 // every flip and reset on one kNone frame, did not).
 class GestureReportGate {
  public:
+  struct TurnPose {
+    double yaw = 0;
+    double window_start_yaw = 0;
+  };
   // Feeds one classified frame's answer at `timestamp_ms` (must increase
   // from call to call), and returns the gesture to report, or
-  // head_gesture::Gesture::kNone when nothing should be reported now.
+  // head_gesture::Gesture::kNone when nothing should be reported now. Yaw
+  // and the yaw at the start of the model window are radians. A turn is
+  // suppressed until the face returns within ten degrees of the estimated
+  // pre-turn yaw and the model reads none for 750 ms (#34).
   head_gesture::Gesture Update(head_gesture::Gesture gesture,
-                               std::int64_t timestamp_ms);
+                               std::int64_t timestamp_ms, TurnPose pose);
+  head_gesture::Gesture Update(head_gesture::Gesture gesture,
+                               std::int64_t timestamp_ms) {
+    return Update(gesture, timestamp_ms, TurnPose{});
+  }
 
   // Drops any candidate in progress and closes any open episode: with no
   // face, neither can be trusted to continue.
   void Reset();
 
  private:
+  bool SuppressTurn(head_gesture::Gesture gesture, std::int64_t timestamp_ms,
+                    TurnPose pose);
+
+  bool turn_latched_ = false;
+  bool turn_settling_ = false;
+  std::int64_t turn_settling_ms_ = 0;
+  double turn_origin_ = 0;
+  double candidate_origin_ = 0;
   bool episode_open_ = false;
   bool has_candidate_ = false;
   head_gesture::Gesture candidate_ = head_gesture::Gesture::kNone;

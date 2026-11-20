@@ -314,6 +314,123 @@ TEST(GestureReportGateTest,
   EXPECT_EQ(gate.Update(Gesture::kShake, 250), Gesture::kShake);
 }
 
+TEST(GestureReportGateTest, TurnWaitsForReturnAndStillnessBeforeRearming) {
+  GestureReportGate gate;
+  using head_gesture::Gesture;
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 1000, {.yaw = 0.3, .window_start_yaw = 0.0}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 1200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  EXPECT_EQ(
+      gate.Update(Gesture::kNone, 2000, {.yaw = 0.4, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kNone, 3000, {.yaw = 0.4, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 3100, {.yaw = 0.4, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kNone, 4000, {.yaw = 0.05, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 4300, {.yaw = 0.05, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kNone, 4400, {.yaw = 0.05, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kNone, 5200, {.yaw = 0.05, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 5300, {.yaw = 0.3, .window_start_yaw = 0.05}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 5500, {.yaw = 0.4, .window_start_yaw = 0.05}),
+      Gesture::kTurn);
+}
+
+TEST(GestureReportGateTest,
+     TurnLatchDoesNotSuppressOtherGesturesAndResetClearsIt) {
+  GestureReportGate gate;
+  using head_gesture::Gesture;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 1100, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNod, 1200, {.yaw = 0.4, .window_start_yaw = 0.4});
+  EXPECT_EQ(
+      gate.Update(Gesture::kNod, 1400, {.yaw = 0.4, .window_start_yaw = 0.4}),
+      Gesture::kNod);
+  gate.Reset();
+  gate.Update(Gesture::kTurn, 1500, {.yaw = 0.4, .window_start_yaw = 0.4});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 1700, {.yaw = 0.5, .window_start_yaw = 0.4}),
+      Gesture::kTurn);
+}
+
+TEST(GestureReportGateTest, SuppressedTurnsDoNotMakeTheGeneralGateStill) {
+  GestureReportGate gate;
+  using head_gesture::Gesture;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kTurn, 300, {.yaw = 0.4, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kTurn, 1100, {.yaw = 0.4, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kNod, 1200, {.yaw = 0.4, .window_start_yaw = 0.0});
+  EXPECT_EQ(
+      gate.Update(Gesture::kNod, 1400, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kNone);
+}
+
+TEST(GestureReportGateTest, ReturnMustRemainNearForTheFullStillTime) {
+  GestureReportGate gate;
+  using head_gesture::Gesture;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.0, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kNone, 1049, {.yaw = 0.0, .window_start_yaw = 0.0});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 1050, {.yaw = 0.3, .window_start_yaw = 0.0}),
+      Gesture::kNone);
+  gate.Update(Gesture::kNone, 1100, {.yaw = 0.0, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kNone, 1500, {.yaw = 0.3, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kNone, 1600, {.yaw = 0.0, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kNone, 1900, {.yaw = 0.0, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kTurn, 2000, {.yaw = 0.3, .window_start_yaw = 0.0});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 2200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kNone);
+  gate.Update(Gesture::kNone, 2300, {.yaw = 0.0, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kNone, 3050, {.yaw = 0.0, .window_start_yaw = 0.0});
+  gate.Update(Gesture::kTurn, 3100, {.yaw = 0.3, .window_start_yaw = 0.0});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 3300, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+}
+
+TEST(GestureReportGateTest, ReturnDistanceWrapsAroundPi) {
+  GestureReportGate gate;
+  using head_gesture::Gesture;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 2.8, .window_start_yaw = 3.13});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 2.8, .window_start_yaw = 3.13}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = -3.13, .window_start_yaw = -3.13});
+  gate.Update(Gesture::kNone, 1100, {.yaw = -3.13, .window_start_yaw = -3.13});
+  gate.Update(Gesture::kTurn, 1200, {.yaw = 2.8, .window_start_yaw = -3.13});
+  EXPECT_EQ(gate.Update(Gesture::kTurn, 1400,
+                        {.yaw = 2.8, .window_start_yaw = -3.13}),
+            Gesture::kTurn);
+}
+
 TEST(GestureReportGateTest, ResetClearsAPendingCandidate) {
   GestureReportGate gate;
   ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);

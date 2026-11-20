@@ -55,7 +55,9 @@ bool ReplayGestures(std::istream& input, std::ostream& output) {
       }
       const auto classified = head_gesture::Classify(
           prediction, Config::kDefaultGestureConfidenceThreshold);
-      const auto reported = gate.Update(classified, timestamp);
+      const auto reported = gate.Update(
+          classified, timestamp,
+          {.yaw = frame.at(15), .window_start_yaw = frames->front().at(15)});
       output << "gesture_probs " << timestamp;
       for (const float probability : prediction.probabilities) {
         output << ' ' << probability;
