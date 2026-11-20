@@ -5,6 +5,18 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Replay recorded head gestures without a camera
+
+-   **Decision:** replay the probe's raw gesture frames through the live window,
+    model and reporting gate; new recordings mark each loss of a face.
+-   **Why:** recorded frames make gesture classification and tracking gaps
+    inspectable without another camera session.
+-   **Rejected:** treating a timestamp gap as lost tracking: dropped frames and
+    no-face callbacks cannot be distinguished by elapsed time alone.
+-   **Cost:** older logs lack no-face markers, so their replay cannot reliably
+    reproduce tracking resets. Replay uses the default confidence threshold.
+-   **Evidence:** [#34](https://github.com/mattyv/facepalm/issues/34).
+
 ## 2026-11-20: Expression reading pauses while the head moves
 
 -   **Decision:** while the head is away from its resting pose, or has just
