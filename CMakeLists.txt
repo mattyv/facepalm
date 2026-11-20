@@ -37,6 +37,11 @@ function(facepalm_unit name)
       "LLVM_PROFILE_FILE=${CMAKE_BINARY_DIR}/profiles/${name}-%p.profraw")
 endfunction()
 
+facepalm_unit(approved_feed)
+facepalm_unit(settings_document)
+target_link_libraries(settings_document PUBLIC config)
+facepalm_unit(client_token)
+facepalm_unit(daemon_control)
 facepalm_unit(camera_controller)
 facepalm_unit(config)
 facepalm_unit(expressions)
@@ -57,6 +62,8 @@ facepalm_unit(head_gesture_model)
 target_link_libraries(head_gesture_model PUBLIC head_pose)
 facepalm_unit(reaction)
 facepalm_unit(reaction_feed)
+facepalm_unit(rating_log)
+target_link_libraries(rating_log PUBLIC protocol)
 facepalm_unit(protocol)
 facepalm_unit(service)
 # The protocol is pure computation, so the service's tests run it for real.
@@ -86,6 +93,15 @@ target_link_libraries(gesture_replay_cli PRIVATE gesture_replay)
 # SessionCamera, the logic around them, is unit-tested.
 if(APPLE)
   enable_language(OBJCXX)
+  add_executable(facepalm_menu tools/menu/main.mm)
+  set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
+  target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
+  target_link_libraries(facepalm_menu PRIVATE settings_document "-framework AppKit")
+  add_executable(menu_store_checks test/menu_store_check.mm)
+  target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
+  target_link_libraries(menu_store_checks PRIVATE settings_document GTest::gtest_main "-framework AppKit")
+  add_test(NAME menu_store_checks COMMAND menu_store_checks)
+
   add_library(avfoundation_session src/macos/avfoundation_session.mm)
   target_compile_options(avfoundation_session PRIVATE -fobjc-arc)
   target_include_directories(avfoundation_session PUBLIC ${PROJECT_SOURCE_DIR})
@@ -111,6 +127,13 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   set_target_properties(facepalm_mediapipe PROPERTIES
     IMPORTED_LOCATION ${FACEPALM_MEDIAPIPE_DYLIB}
     IMPORTED_SONAME "@rpath/libfacepalm_mediapipe.dylib")
+  add_executable(facepalm_daemon tools/daemon/main.cc)
+  set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
+    INSTALL_RPATH "@executable_path/../Frameworks")
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
+    avfoundation_session camera_controller config frame_pipeline face_analyzer
+    expression_reader gesture_reader reaction_feed rating_log service unix_socket face_model
+    facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model head_gesture_model
     facepalm_mediapipe
@@ -131,6 +154,8 @@ file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
   ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.cc ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.h
+  ${PROJECT_SOURCE_DIR}/tools/menu/*.mm
+  ${PROJECT_SOURCE_DIR}/tools/daemon/*.cc
   ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc
   ${PROJECT_SOURCE_DIR}/tools/face_model_check/*.cc
   ${PROJECT_SOURCE_DIR}/tools/fixtures/*.cc)
@@ -145,3 +170,8 @@ else()
     COMMAND ${CMAKE_COMMAND} -E echo "clang-format not found at configure time"
     COMMAND ${CMAKE_COMMAND} -E false)
 endif()
+
+# Test-only service for the cross-process MCP integration test.
+add_executable(mcp_service_fixture EXCLUDE_FROM_ALL
+  test/fixtures/mcp_service_fixture.cc)
+target_link_libraries(mcp_service_fixture PRIVATE service reaction_feed rating_log unix_socket)

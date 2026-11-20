@@ -1,0 +1,6 @@
+{
+  "name": "facepalm",
+  "version": "0.1.0",
+  "description": "Check Facepalm reactions through its MCP server.",
+  "license": "GPL-3.0-only"
+}

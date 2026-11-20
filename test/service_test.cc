@@ -268,7 +268,7 @@ TEST_F(UniqueNamesTest, ANameAlreadyConnectedIsRefused) {
   second->Send("hello agent");
 
   EXPECT_THAT(second->Replies(1),
-              ElementsAre(R"({"error":"agent is already connected"})"));
+              ElementsAre(R"({"error":"client not accepted"})"));
   testing::Mock::VerifyAndClearExpectations(&feed_);
   service_.Stop();
 }

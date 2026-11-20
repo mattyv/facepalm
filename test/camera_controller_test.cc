@@ -128,6 +128,19 @@ TEST_F(OpenOnlyWhenSubscribedTest, LeavingWhenNotSubscribedChangesNothing) {
   EXPECT_EQ(controller.CurrentState(), State::kOpen);
 }
 
+TEST_F(OpenOnlyWhenSubscribedTest,
+       LastLeaveInvalidatesTicketsBeforeAReconnect) {
+  CameraController controller(camera_, clients_, /*consent=*/false);
+  OpenWithClient(controller);
+  const std::uint64_t ticket = CaptureTicket(controller);
+  controller.Leave("a");
+  controller.Subscribe("b");
+  controller.OnClosed();
+  controller.OnOpened();
+  EXPECT_CALL(clients_, Deliver(_, _)).Times(0);
+  controller.OnReaction(ticket, "nod");
+}
+
 class NoEventWithoutConsentTest : public CameraControllerTest {};
 
 TEST_F(NoEventWithoutConsentTest, RevokingDiscardsAFrameInFlight) {

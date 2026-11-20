@@ -105,13 +105,17 @@ TEST(ParseTest, RefusesABadRate) {
 
 TEST(JsonTest, WritesADelivery) {
   const Feed::Delivery delivery{
-      .readings = {{.id = 3, .summary = "nod", .detail = R"({"g":1})"},
+      .readings = {{.id = 3,
+                    .summary = "nod",
+                    .detail = R"({"g":1})",
+                    .published_at_ms = 1763658000123},
                    {.id = 4, .summary = "frown", .detail = "{}"}},
       .missed = 2};
 
-  EXPECT_THAT(DeliveryJson(delivery),
-              Eq(R"({"readings":[{"id":3,"summary":"nod","detail":{"g":1}},)"
-                 R"({"id":4,"summary":"frown","detail":{}}],"missed":2})"));
+  EXPECT_THAT(
+      DeliveryJson(delivery),
+      Eq(R"({"readings":[{"id":3,"summary":"nod","detail":{"g":1},"published_at_ms":1763658000123},)"
+         R"({"id":4,"summary":"frown","detail":{}}],"missed":2})"));
 }
 
 TEST(JsonTest, WritesAnEmptyDelivery) {

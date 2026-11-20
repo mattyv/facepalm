@@ -38,8 +38,12 @@ std::optional<Request> Parse(std::string_view line, std::string& error);
 
 // {"readings":[{"id":..,"summary":"..","detail":{..}}],"missed":n}. A
 // reading's detail is JSON facepalm wrote, so it goes in as it is.
+// Live readings also carry published_at_ms as Unix epoch milliseconds.
 // The reply to a request that worked and has nothing to return.
 inline constexpr std::string_view kOkJson = R"({"ok":true})";
+
+// Encodes a JSON string, including quotes and control-character escapes.
+std::string Quoted(std::string_view text);
 
 std::string DeliveryJson(const Feed::Delivery& delivery);
 std::string ErrorJson(std::string_view message);

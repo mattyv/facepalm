@@ -5,6 +5,74 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-20: Store feedback only when explicitly requested
+
+-   **Decision:** `--ratings-file` enables a private, single-writer versioned
+    JSONL feedback file capped at 10 MiB. A rating succeeds only after its
+    record is appended and synced. It records the delivered interpretation,
+    reading ID, publication and rating times, and score.
+-   **Why:** explicit local feedback can support future investigation without
+    storing frames, model inputs, credentials or client identity.
+-   **Rejected:** silently discarding ratings or automatically tuning from
+    them. No rating is accepted without a configured feedback sink.
+-   **Cost:** a partial write or sync failure disables the sink for that run;
+    a failed sync may nevertheless leave an unacknowledged record. Incomplete
+    files need manual recovery. Existing files are capped, never truncated.
+-   **Replaces:** the earlier daemon decision to reject all ratings.
+-   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
+
+## 2026-11-20: Use a native menu and next-start settings on macOS
+
+-   **Decision:** use an AppKit menu-bar host and native settings window. It
+    edits the daemon's existing config format, including gesture and expression
+    tuning, preserving comments and other settings. It saves atomically after
+    checking the file snapshot.
+-   **Why:** the current daemon has no status or settings control API; the
+    native host provides the requested controls without inventing live state.
+-   **Rejected:** implying the camera is running, or starting the daemon from
+    the menu before there is a reviewed consent and lifecycle interface.
+-   **Cost:** settings apply only when a daemon is started with `--config` and
+    the shown path. Camera status is unavailable. Snapshot checking detects
+    prior external edits but is not a cross-process compare-and-swap; a writer
+    racing the final save can still be overwritten. The host does not stop a
+    separately running daemon when it quits.
+-   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
+
+## 2026-11-20: Gate the foreground daemon by consent and a private token
+
+The rating rejection in this entry is replaced by the feedback decision above.
+
+-   **Decision:** the daemon starts only with explicit launch consent, a
+    readable model, and a user-private token file. One connection presenting
+    that token admits the camera; disconnect revokes its subscription. Each
+    connection gets a distinct internal identity and no credentials enter the
+    feed. Stop waits for camera closure and model retirement.
+-   **Why:** a same-user socket connection or a self-asserted name alone is not
+    proof that the user approved a client.
+-   **Rejected:** opening the camera at login or treating installation as
+    consent. The token must be provisioned by an explicit approval step.
+-   **Cost:** one approved connection at a time; no approval UI or feedback
+    storage exists in this slice, so daemon ratings are rejected. Consent is
+    launch-scoped and stopping the process revokes it. Only a supplied
+    `--config` file is loaded. This has not been exercised on a live camera.
+-   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
+
+## 2026-11-20: Expose the reaction feed through a stdio MCP adapter
+
+-   **Decision:** each MCP process owns one uniquely named socket session and
+    forwards bounded waits and ratings to the existing feed. The adapter uses
+    the official Node MCP SDK as a maintained production adapter; it does not
+    own or start the camera.
+-   **Why:** an agent can use the same interpreted feed and rating rules as
+    other clients without a second cursor or a new wire protocol.
+-   **Rejected:** silently reconnecting after cancellation: a native wait may
+    already have consumed a reading, and a new session has a different cursor.
+-   **Cost:** cancelling an active request closes the session and can lose an
+    unseen delivery; the native wait may run until its timeout. The feed records
+    delivery to MCP, not confirmation that the host displayed the summary.
+    Socket hello names are self-asserted, not client authentication.
+-   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
+
 ## 2026-11-20: Replay recorded head gestures without a camera
 
 -   **Decision:** replay the probe's raw gesture frames through the live window,

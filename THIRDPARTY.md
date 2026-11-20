@@ -1,6 +1,6 @@
 # Third-party notices
 
-facepalm ships one third-party model, ported to C++ for #34.
+facepalm uses a third-party model and dependencies listed below.
 
 ## Idiap's CCDbHG head-gesture model
 
@@ -28,3 +28,13 @@ Citation:
 This is the `cnn_lmk_hp` checkpoint, not `cnn_lmk_hp_gaze`, which that
 repository licenses CC-BY-NC-SA for non-commercial use only and which
 facepalm does not use.
+
+## MCP adapter dependencies
+
+The MCP adapter uses the [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+(Copyright 2024 Anthropic, PBC) and [Zod](https://github.com/colinhacks/zod)
+(Copyright 2025 Colin McDonnell), both MIT licensed. Their license texts and
+those of their transitive dependencies are included in the installed npm
+packages; `mcp/package-lock.json` records the exact dependency versions.
+The adapter follows the structure of ai-pair's MIT-licensed relay without
+copying its source.

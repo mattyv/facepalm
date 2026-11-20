@@ -38,6 +38,7 @@ void CameraController::Leave(const ClientId& client) {
     return;
   }
   if (subscribers_.empty()) {
+    ++consent_epoch_;
     StartClosing();
   }
 }

@@ -86,8 +86,7 @@ std::optional<std::string> Service::Greet(Connection& connection) {
     return std::nullopt;
   }
   if (!feed_.Connect(hello->name)) {
-    stream.WriteLine(
-        protocol::ErrorJson(hello->name + " is already connected"));
+    stream.WriteLine(protocol::ErrorJson("client not accepted"));
     return std::nullopt;
   }
   if (!Name(connection, hello->name)) {

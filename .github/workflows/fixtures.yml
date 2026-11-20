@@ -12,7 +12,12 @@ on:
     paths:
       - src/mediapipe_shim/**
       - src/face_model.*
+      - src/approved_feed.*
+      - src/client_token.*
+      - src/daemon_control.*
+      - CMakeLists.txt
       - tools/face_model_check/**
+      - tools/daemon/**
       - tools/fixtures/**
       - .github/workflows/fixtures.yml
   push:
@@ -20,7 +25,12 @@ on:
     paths:
       - src/mediapipe_shim/**
       - src/face_model.*
+      - src/approved_feed.*
+      - src/client_token.*
+      - src/daemon_control.*
+      - CMakeLists.txt
       - tools/face_model_check/**
+      - tools/daemon/**
       - tools/fixtures/**
       - .github/workflows/fixtures.yml
   workflow_dispatch:
@@ -57,5 +67,10 @@ jobs:
           shim="${PWD}/build-mediapipe/mediapipe/bazel-bin/facepalm_shim"
           cmake -S . -B build -G Ninja \
             -DFACEPALM_MEDIAPIPE_DYLIB="${shim}/libfacepalm_mediapipe.dylib"
-          cmake --build build --target face_model_check
+          cmake --build build --target face_model_check facepalm_daemon
           bash tools/fixtures/check_face_model.sh build/face_model_check
+      - name: Check the daemon rejects an invalid invocation
+        run: |
+          status=0
+          build/facepalm-daemon || status=$?
+          test "$status" -eq 2

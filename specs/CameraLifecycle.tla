@@ -28,6 +28,7 @@ CONSTANTS
     GuardOpenNeedsConsent,  \* Opening the camera requires consent.
     GuardRevokeCloses,      \* Revoking consent starts closing the camera.
     GuardRevokeDiscards,    \* Revoking consent drops a ticketed frame.
+    GuardLastLeaveDiscards, \* Last leave invalidates the previous client's frame.
     GuardLastLeaveCloses,   \* The last client leaving starts closing it.
     GuardEmitToSubscribers, \* An event goes only to a subscribed client.
     GuardRestartRechecks,   \* A restarted helper starts with it closed.
@@ -116,8 +117,11 @@ Leave(c) ==
     /\ subscribers' = subscribers \ {c}
     /\ IF GuardLastLeaveCloses /\ subscribers' = {} /\ camera \in Live
           THEN Closing ELSE UNCHANGED <<camera, starts, frameEnded>>
+    /\ frame' = IF GuardLastLeaveDiscards /\ subscribers' = {} /\ frame = "ticketed"
+                   THEN "none" ELSE frame
+    /\ frameOld' = (frameOld \/ (subscribers' = {} /\ frame # "none"))
     /\ UNCHANGED <<consent, capturing, device, usable, selected, helper,
-                   restarts, wasOpen, everOpened, frame, frameOld,
+                   restarts, wasOpen, everOpened,
                    strayEvent, unconsented, stale>>
 
 \* The controller asks the session to open: a new attempt, whose start task

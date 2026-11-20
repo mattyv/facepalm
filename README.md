@@ -114,6 +114,17 @@ cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
 bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
 
+See [local macOS app staging](docs/local-app.md) for the development installer.
+
+The MCP integration test uses a synthetic feed and the real local socket; it
+requires Node.js 22 and the MCP adapter dependencies, but no camera:
+
+```shell
+(cd mcp && npm ci)
+cmake --build build --target mcp_service_fixture
+node --test test/integration/*.test.mjs
+```
+
 ## Settings
 
 facepalm reads `~/.config/facepalm/facepalm.conf`, or

@@ -56,7 +56,8 @@ bool IsName(std::string_view word) {
   });
 }
 
-// `text` as a JSON string, quotes included.
+}  // namespace
+
 std::string Quoted(std::string_view text) {
   std::string quoted = "\"";
   for (const char c : text) {
@@ -77,8 +78,6 @@ std::string Quoted(std::string_view text) {
   }
   return quoted + "\"";
 }
-
-}  // namespace
 
 std::optional<Request> Parse(std::string_view line, std::string& error) {
   if (line.ends_with('\r')) {
@@ -128,7 +127,12 @@ std::string DeliveryJson(const Feed::Delivery& delivery) {
       json += ',';
     }
     json += R"({"id":)" + std::to_string(reading.id) + R"(,"summary":)" +
-            Quoted(reading.summary) + R"(,"detail":)" + reading.detail + "}";
+            Quoted(reading.summary) + R"(,"detail":)" + reading.detail;
+    if (reading.published_at_ms) {
+      json +=
+          R"(,"published_at_ms":)" + std::to_string(*reading.published_at_ms);
+    }
+    json += '}';
   }
   return json + R"(],"missed":)" + std::to_string(delivery.missed) + "}";
 }

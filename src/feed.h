@@ -16,7 +16,8 @@ class Feed {
   struct Reading {
     std::int64_t id;
     std::string summary;  // The one line the person sees and rates.
-    std::string detail;   // The full context the agent gets, as JSON.
+    std::string detail;   // The full interpreted context, as JSON.
+    std::optional<std::int64_t> published_at_ms = std::nullopt;
   };
 
   struct Delivery {

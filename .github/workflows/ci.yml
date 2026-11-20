@@ -29,6 +29,7 @@ jobs:
           cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
             -DCMAKE_CXX_COMPILER=/usr/bin/clang++
           cmake --build build-tidy
+          cmake --build build-tidy --target mcp_service_fixture
       - name: Shell
         run: |
           shellcheck scripts/*.sh scripts/test/*.bats \
@@ -55,6 +56,17 @@ jobs:
             bats clang jq libgmock-dev libgtest-dev llvm ninja-build
       - name: Tests and coverage
         run: bash scripts/coverage.sh
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: MCP tests
+        run: |
+          npm ci --prefix mcp
+          npm test --prefix mcp
+          node --test integrations/claude-code/test/*.test.mjs
+          bats integrations/claude-code/test
+          cmake --build build-coverage --target mcp_service_fixture
+          MCP_FIXTURE="$PWD/build-coverage/mcp_service_fixture" node --test test/integration/*.test.mjs
       - name: Script tests
         run: bats scripts/test specs/test tools/fixtures/test
 

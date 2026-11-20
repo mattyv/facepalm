@@ -7,6 +7,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -28,9 +29,11 @@ class ReactionFeed : public Feed {
     std::string client;
     std::int64_t id;
     int score;
+    std::string summary;
+    std::optional<std::int64_t> published_at_ms;
   };
 
-  using OnRating = std::function<void(const Rating&)>;
+  using OnRating = std::function<bool(const Rating&)>;
 
   using Clock = std::function<std::chrono::steady_clock::time_point()>;
 
@@ -44,7 +47,9 @@ class ReactionFeed : public Feed {
   void Disconnect(const std::string& client) override;
   // React: adds a reading, drops the oldest past capacity, and answers every
   // waiting client. Returns the reading's id.
-  std::int64_t React(std::string summary, std::string detail);
+  std::int64_t React(
+      std::string summary, std::string detail,
+      std::optional<std::int64_t> published_at_ms = std::nullopt);
   // Read: what came since the client last looked; nullopt when it is not
   // connected or is waiting.
   std::optional<Delivery> Read(const std::string& client) override;
@@ -54,6 +59,9 @@ class ReactionFeed : public Feed {
   std::optional<Delivery> Wait(const std::string& client,
                                std::chrono::milliseconds timeout) override;
   [[nodiscard]] bool Waiting(const std::string& client);
+  // Disconnects an ephemeral identity and removes its history. An older
+  // wait holds its own cancellation token and returns no delivery.
+  void DisconnectAndForget(const std::string& client);
   // How long after a reading is shown it can be rated.
   static constexpr std::chrono::minutes kRatingWindow{5};
 
@@ -65,13 +73,22 @@ class ReactionFeed : public Feed {
  private:
   struct Client {
     bool connected = false;
+    std::shared_ptr<bool> wait_canceled;
     bool waiting = false;
     std::int64_t cursor = 0;  // The first id not yet told about.
     // When each reading was shown, while it can still be rated; kept across
     // reconnects.
-    std::map<std::int64_t, std::chrono::steady_clock::time_point> rateable;
+    struct Rateable {
+      std::chrono::steady_clock::time_point shown_at;
+      std::string summary;
+      std::optional<std::int64_t> published_at_ms;
+    };
+    std::map<std::int64_t, Rateable> rateable;
   };
 
+  // Captures authorized rating metadata under the feed lock.
+  std::optional<Rating> PrepareRating(const std::string& client,
+                                      std::int64_t id, int score);
   // The client, if it is connected and not waiting.
   Client* Ready(const std::string& name);
   // Tell: the readings since the client's cursor, the dropped ones counted

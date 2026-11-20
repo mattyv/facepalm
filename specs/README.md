@@ -32,6 +32,49 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
 | `Service.cfg` | three connections, two client names | holds | 396 |
 
+## `McpSocket`: an MCP session owns one socket
+
+The model has one session and up to two abstract requests. TLC checks four
+reachable states with no fairness assumption. `NoSendAfterClose` and
+`OneRequest` hold; setting `GuardClosed` or `GuardSingle` false violates the
+respective invariant. Cancellation closes the local socket while the native
+wait may still be running. Socket session tests cover serialization, active
+and queued cancellation, terminal failure and bounded requests. The model does
+not prove the remote service has retired or that a host displayed a delivery.
+
+## `RatingPersistence`: acknowledge only synced feedback
+
+The bounded model checks six states, with one serialized append and no fairness
+assumptions. `OnlyAckSynced` and `NoWriteAfterFailure` hold; disabling
+`GuardSync` or `GuardPoison` violates the respective invariant. The log tests
+exercise partial writes, sync failures and the disabled sink. The model does
+not prove filesystem crash recovery; a failed sync can leave an unacknowledged
+record.
+
+## `DaemonAdmission`: consent, approval and retirement
+
+The bounded model checks 26 states with one client and no fairness assumptions.
+`OpenHasConsent`, `OpenHasApproval` and `StoppedAfterRetirement` hold; each
+corresponding disabled guard violates its invariant. It abstracts physical
+camera closure and model retirement as separate actions. The controller,
+approved-feed and daemon-control tests cover the integration; the model does
+not prove OS camera behavior or the secrecy of a token file.
+
+## `FeedWaitRetirement`: canceled wait ownership
+
+The bounded model checks eight states, with one old wait and one successor,
+without fairness assumptions. `NoStaleAccess` and `NoStaleAnswer` hold;
+disabling `GuardLifetime` and `GuardGeneration` respectively violates them.
+A wait holds a cancellation token after its client record is erased; ordinary
+disconnect also cancels that wait before the identity can reconnect.
+`reaction_feed_test` checks disconnect, forget and waiting; the model abstracts
+away the condition variable and operating-system scheduling.
+
+`CameraLifecycle` also invalidates in-flight tickets when the last subscriber
+leaves. With `GuardLastLeaveDiscards` false, TLC violates `NoStaleEvent`; the
+controller test `LastLeaveInvalidatesTicketsBeforeAReconnect` exercises it.
+The updated model checks 1,588 distinct states under the existing bounds.
+
 ## `CameraLifecycle`: when the camera may be on
 
 Models consent, client subscriptions, the camera device, frames in flight,
@@ -295,3 +338,12 @@ properties they break:
 
 Each test that waits on another thread gives up after 5 seconds, so a
 mutation fails it rather than hanging it.
+
+## `HookBroker`: action hooks share an MCP session
+
+`HookBroker.cfg` checks one hook peer and one native request over 20 states.
+A canceled peer cannot send queued work (`GuardPeer`), a closed broker cannot
+send (`GuardOwner`), and shutdown cannot abandon a dispatched native read
+(`GuardRetire`). Each disabled guard violates its corresponding invariant.
+The socket and integration tests cover busy sessions, unacknowledged deliveries,
+disconnects, and the shared cursor. The model covers safety ordering only.

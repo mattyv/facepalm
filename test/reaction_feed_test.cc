@@ -57,7 +57,10 @@ std::vector<std::string> Summaries(const ReactionFeed::Delivery& delivery) {
 
 class ReactionFeedTest : public ::testing::Test {
  protected:
-  MockFunction<void(const ReactionFeed::Rating&)> on_rating_;
+  void SetUp() override {
+    ON_CALL(on_rating_, Call).WillByDefault(testing::Return(true));
+  }
+  MockFunction<bool(const ReactionFeed::Rating&)> on_rating_;
   std::chrono::steady_clock::time_point now_;
   ReactionFeed feed_{/*capacity=*/2, on_rating_.AsStdFunction(),
                      [this] { return now_; }};
@@ -111,6 +114,44 @@ TEST_F(NoRepeatTest, AReconnectingClientStartsWithNoBacklog) {
   EXPECT_THAT(Summaries(Got(feed_.Read("agent"))), IsEmpty());
 }
 
+TEST_F(ReactionFeedTest, ForgetEndsAWaitAndRetiresItsRatingHistory) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const auto id = feed_.React("nod", "{}");
+  ASSERT_TRUE(feed_.Read("agent"));
+  auto waited = std::async(std::launch::async,
+                           [this] { return feed_.Wait("agent", kLong); });
+  while (!feed_.Waiting("agent")) {
+    std::this_thread::yield();
+  }
+  feed_.DisconnectAndForget("agent");
+  EXPECT_FALSE(Answered(waited));
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_FALSE(feed_.Rate("agent", id, 5));
+}
+
+TEST_F(ReactionFeedTest, ForgetAfterDisconnectWaitsForTheOldWaiter) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto waited = std::async(std::launch::async,
+                           [this] { return feed_.Wait("agent", kLong); });
+  while (!feed_.Waiting("agent")) {
+    std::this_thread::yield();
+  }
+  feed_.Disconnect("agent");
+  feed_.DisconnectAndForget("agent");
+  EXPECT_FALSE(Answered(waited));
+  ASSERT_TRUE(feed_.Connect("agent"));
+}
+
+TEST_F(ReactionFeedTest, ForgetRetiresAnIdleOrUnknownClient) {
+  feed_.DisconnectAndForget("unknown");
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const auto id = feed_.React("nod", "{}");
+  ASSERT_TRUE(feed_.Read("agent"));
+  feed_.DisconnectAndForget("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_FALSE(feed_.Rate("agent", id, 5));
+}
+
 using NoSilentGapTest = ReactionFeedTest;
 
 TEST_F(NoSilentGapTest, DroppedReadingsAreCountedAsMissed) {
@@ -161,6 +202,48 @@ TEST_F(RateOnlyShownTest, AShownReadingIsRated) {
                          Field(&ReactionFeed::Rating::id, Eq(id)),
                          Field(&ReactionFeed::Rating::score, Eq(4)))));
   EXPECT_TRUE(feed_.Rate("agent", id, 4));
+}
+
+TEST_F(RateOnlyShownTest, AFailedFeedbackSinkIsNotReportedAsSuccess) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = feed_.React("Gesture: nod", "{}", 1234);
+  ASSERT_TRUE(feed_.Read("agent"));
+  EXPECT_CALL(
+      on_rating_,
+      Call(AllOf(Field(&ReactionFeed::Rating::summary, Eq("Gesture: nod")),
+                 Field(&ReactionFeed::Rating::published_at_ms,
+                       Eq(std::optional<std::int64_t>(1234))))))
+      .WillOnce(testing::Return(false));
+  EXPECT_FALSE(feed_.Rate("agent", id, 4));
+}
+
+TEST_F(RateOnlyShownTest, KeepsRatedMetadataAfterTimelineEviction) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = feed_.React("Gesture: nod", "{}", 1234);
+  ASSERT_TRUE(feed_.Read("agent"));
+  feed_.React("later", "{}", 2345);
+  feed_.React("newest", "{}", 3456);
+  EXPECT_CALL(
+      on_rating_,
+      Call(AllOf(Field(&ReactionFeed::Rating::summary, Eq("Gesture: nod")),
+                 Field(&ReactionFeed::Rating::published_at_ms,
+                       Eq(std::optional<std::int64_t>(1234))))))
+      .WillOnce(testing::Return(true));
+  EXPECT_TRUE(feed_.Rate("agent", id, 4));
+}
+
+TEST(ReactionFeedCallbackTest, SinkCanForgetSessionWithoutDeadlock) {
+  ReactionFeed* active = nullptr;
+  ReactionFeed feed(2, [&](const ReactionFeed::Rating& rating) {
+    active->DisconnectAndForget(rating.client);
+    return true;
+  });
+  active = &feed;
+  ASSERT_TRUE(feed.Connect("agent"));
+  const auto id = feed.React("Gesture: nod", "{}", 1234);
+  ASSERT_TRUE(feed.Read("agent"));
+  EXPECT_TRUE(feed.Rate("agent", id, 5));
+  EXPECT_FALSE(feed.Read("agent"));
 }
 
 TEST_F(RateOnlyShownTest, AReadingNotShownToTheClientIsNot) {

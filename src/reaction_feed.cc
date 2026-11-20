@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <iterator>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -38,7 +39,10 @@ ReactionFeed::Delivery ReactionFeed::Tell(Client& client) {
   for (const Reading& reading : timeline_) {
     if (reading.id >= client.cursor) {
       delivery.readings.push_back(reading);
-      client.rateable[reading.id] = now;
+      client.rateable[reading.id] = {
+          .shown_at = now,
+          .summary = reading.summary,
+          .published_at_ms = reading.published_at_ms};
     }
   }
   client.cursor = next_;
@@ -63,15 +67,34 @@ void ReactionFeed::Disconnect(const std::string& client) {
   Client& entry = clients_[client];
   entry.connected = false;
   entry.waiting = false;
+  if (entry.wait_canceled) {
+    *entry.wait_canceled = true;
+  }
+  changed_.notify_all();
+}
+
+void ReactionFeed::DisconnectAndForget(const std::string& client) {
+  const std::scoped_lock lock(mutex_);
+  const auto found = clients_.find(client);
+  if (found == clients_.end()) {
+    return;
+  }
+  if (found->second.wait_canceled) {
+    *found->second.wait_canceled = true;
+  }
+  clients_.erase(found);
   changed_.notify_all();
 }
 
 // ReactionFeed!React.
-std::int64_t ReactionFeed::React(std::string summary, std::string detail) {
+std::int64_t ReactionFeed::React(std::string summary, std::string detail,
+                                 std::optional<std::int64_t> published_at_ms) {
   const std::scoped_lock lock(mutex_);
   const std::int64_t id = next_++;
-  timeline_.push_back(
-      {.id = id, .summary = std::move(summary), .detail = std::move(detail)});
+  timeline_.push_back({.id = id,
+                       .summary = std::move(summary),
+                       .detail = std::move(detail),
+                       .published_at_ms = published_at_ms});
   if (std::ssize(timeline_) > capacity_) {
     timeline_.pop_front();
   }
@@ -99,22 +122,22 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Wait(
     return std::nullopt;
   }
   entry->waiting = true;
+  const auto canceled = std::make_shared<bool>(false);
+  entry->wait_canceled = canceled;
   changed_.wait_for(lock, timeout,
-                    [&] { return !entry->waiting || entry->cursor < next_; });
-  // Only Disconnect clears `waiting` from outside, so this also holds when
-  // the name has already connected again: the ended wait answers nothing,
-  // and leaves the new connection's place alone.
-  if (!entry->waiting) {
+                    [&] { return *canceled || entry->cursor < next_; });
+  if (*canceled) {
     return std::nullopt;
   }
   entry->waiting = false;
+  entry->wait_canceled.reset();
   return Tell(*entry);
 }
 
 void ReactionFeed::Expire(Client& client) {
   const auto now = clock_();
   std::erase_if(client.rateable, [&](const auto& entry) {
-    return now - entry.second > kRatingWindow;
+    return now - entry.second.shown_at > kRatingWindow;
   });
 }
 
@@ -126,21 +149,28 @@ bool ReactionFeed::Waiting(const std::string& client) {
 
 // ReactionFeed!Rate.
 bool ReactionFeed::Rate(const std::string& client, std::int64_t id, int score) {
-  {
-    const std::scoped_lock lock(mutex_);
-    const auto found = clients_.find(client);
-    if (found == clients_.end() || !found->second.connected) {
-      return false;
-    }
-    // With GuardRateOnlyShown and GuardRateOnlyRecent.
-    Expire(found->second);
-    if (!found->second.rateable.contains(id) || score < kLowestScore ||
-        score > kHighestScore) {
-      return false;
-    }
+  const auto rating = PrepareRating(client, id, score);
+  return rating.has_value() && on_rating_(*rating);
+}
+
+std::optional<ReactionFeed::Rating> ReactionFeed::PrepareRating(
+    const std::string& client, std::int64_t id, int score) {
+  const std::scoped_lock lock(mutex_);
+  const auto found = clients_.find(client);
+  if (found == clients_.end() || !found->second.connected) {
+    return std::nullopt;
   }
-  on_rating_({.client = client, .id = id, .score = score});
-  return true;
+  Expire(found->second);
+  const auto item = found->second.rateable.find(id);
+  if (item == found->second.rateable.end() || score < kLowestScore ||
+      score > kHighestScore) {
+    return std::nullopt;
+  }
+  return Rating{.client = client,
+                .id = id,
+                .score = score,
+                .summary = item->second.summary,
+                .published_at_ms = item->second.published_at_ms};
 }
 
 }  // namespace facepalm

@@ -101,7 +101,8 @@ class CameraController : public CameraReports, public FrameTickets {
   // The current open attempt; opening starts one and closing ends it.
   std::uint64_t attempt_ = 0;
   State state_ = State::kClosed;
-  // Bumped when consent is revoked, which voids every ticket given before.
+  // Bumped when consent is revoked or the last subscriber leaves, voiding
+  // tickets from the preceding authorized session.
   std::uint64_t consent_epoch_ = 0;
 };
 

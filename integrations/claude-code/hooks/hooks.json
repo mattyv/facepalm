@@ -1,0 +1,8 @@
+{
+  "description": "Optional local Facepalm action correlation",
+  "hooks": {
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/action.mjs"], "timeout": 3}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/action.mjs"], "timeout": 3}]}],
+    "PostToolUseFailure": [{"hooks": [{"type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/action.mjs"], "timeout": 3}]}]
+  }
+}
