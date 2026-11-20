@@ -33,7 +33,62 @@ std::string_view ReactionFor(Gesture gesture) {
   return kReactionJson.at(static_cast<std::size_t>(gesture));
 }
 
+// Idiap's src/utils_metrics.py get_events drops any event of 6 frames or
+// fewer at its 30 fps training rate: 6 * (1000 / 30) ms. A class must hold
+// this long, continuously, before GestureReportGate::Update reports it
+// (#34).
+constexpr std::int64_t kConfirmMs = 200;
+
+// Longer than every gap between flips seen in the live recording that
+// opened #34 (60-730ms, shake/turn seven times in 1.9 seconds): 600ms would
+// read the longest gap, 730ms, as the head going still and close the
+// episode mid-movement, so still_ms is 750ms, with margin over the longest
+// gap actually seen.
+constexpr std::int64_t kStillMs = 750;
+
 }  // namespace
+
+head_gesture::Gesture GestureReportGate::Update(head_gesture::Gesture gesture,
+                                                std::int64_t timestamp_ms) {
+  if (gesture == Gesture::kNone) {
+    has_candidate_ = false;
+    if (episode_open_) {
+      if (!is_still_) {
+        is_still_ = true;
+        still_start_ms_ = timestamp_ms;
+      } else if (timestamp_ms - still_start_ms_ >= kStillMs) {
+        episode_open_ = false;
+        is_still_ = false;
+      }
+    }
+    return Gesture::kNone;
+  }
+
+  is_still_ = false;
+  if (episode_open_) {
+    return Gesture::kNone;
+  }
+
+  if (has_candidate_ && candidate_ == gesture) {
+    if (timestamp_ms - candidate_start_ms_ >= kConfirmMs) {
+      episode_open_ = true;
+      has_candidate_ = false;
+      return gesture;
+    }
+    return Gesture::kNone;
+  }
+
+  has_candidate_ = true;
+  candidate_ = gesture;
+  candidate_start_ms_ = timestamp_ms;
+  return Gesture::kNone;
+}
+
+void GestureReportGate::Reset() {
+  episode_open_ = false;
+  has_candidate_ = false;
+  is_still_ = false;
+}
 
 GestureReader::GestureReader(float confidence_threshold)
     : confidence_threshold_(confidence_threshold) {}
@@ -53,20 +108,15 @@ void GestureReader::OnFace(const Face& face, int width, int height,
   }
   const Gesture gesture = head_gesture::Classify(head_gesture::Predict(*window),
                                                  confidence_threshold_);
-  // A gesture is reported once, and again only after a still head or the
-  // other gesture: the model can flicker to kNone mid-gesture (#34, carried
-  // over from Nodding Pigeon's own GestureAnalyzer, 5ad22cb).
-  if (gesture == Gesture::kNone) {
-    reported_ = gesture;
-  } else if (gesture != reported_) {
-    reactions.emplace_back(ReactionFor(gesture));
-    reported_ = gesture;
+  const Gesture to_report = gate_.Update(gesture, timestamp_ms);
+  if (to_report != Gesture::kNone) {
+    reactions.emplace_back(ReactionFor(to_report));
   }
 }
 
 void GestureReader::OnNoFace() {
   window_.Reset();
-  reported_ = Gesture::kNone;
+  gate_.Reset();
 }
 
 }  // namespace facepalm

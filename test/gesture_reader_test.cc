@@ -125,25 +125,38 @@ Face FaceAt(double yaw, double roll, double pitch) {
   return face;
 }
 
-// Feeds `reader` a 50-frame, 15 fps track at the given (yaw, roll, pitch)
-// function of time, and returns the reactions from the last frame only
-// (every earlier one is "not ready yet", per head_gesture::Window).
+// A 15 fps track long enough that, once the window is ready at
+// head_gesture::kMinTrackFrames, a class the model holds continuously still
+// has time to clear GestureReportGate's confirm_ms before the track ends
+// (#34): kFeedFrames - kMinTrackFrames frames at ~66.67ms apart is about
+// 667ms, well over confirm_ms (200ms, gesture_reader.cc's kConfirmMs).
+constexpr int kFeedFrames = 60;
+
+// The timestamp FeedTrack gives frame `i` of a track starting at `start_ms`.
+std::int64_t FeedTimestampMs(std::int64_t start_ms, int i) {
+  return start_ms + static_cast<std::int64_t>(i * 1000.0 / 15.0);
+}
+
+// Feeds `reader` a kFeedFrames-frame, 15 fps track at the given (yaw, roll,
+// pitch) function of time, and returns every reaction from the whole track,
+// in order (the frames before head_gesture::kMinTrackFrames are all "not
+// ready yet", per head_gesture::Window, and so never add one).
 std::vector<Reaction> FeedTrack(
     GestureReader& reader,
     const std::function<std::array<double, 3>(double)>& angles_at,
     std::int64_t start_ms = 0) {
-  constexpr int kFrames = 50;
   constexpr double kFrameSeconds = 1.0 / 15.0;
+  std::vector<Reaction> all;
   std::vector<Reaction> reactions;
-  for (int i = 0; i < kFrames; ++i) {
+  for (int i = 0; i < kFeedFrames; ++i) {
     const double t = i * kFrameSeconds;
     const std::array<double, 3> angles = angles_at(t);
     reactions.clear();
     reader.OnFace(FaceAt(angles[0], angles[1], angles[2]), 224, 224,
-                  start_ms + static_cast<std::int64_t>(i * 1000.0 / 15.0),
-                  reactions);
+                  FeedTimestampMs(start_ms, i), reactions);
+    all.insert(all.end(), reactions.begin(), reactions.end());
   }
-  return reactions;
+  return all;
 }
 
 constexpr double kDegree = std::numbers::pi / 180.0;
@@ -170,14 +183,14 @@ TEST(GestureReaderTest, MakesNoReactionUntilTheWindowIsReady) {
 
 TEST(GestureReaderTest, ReactsToATiltOnceItStarts) {
   GestureReader reader(0.5F);
-  const std::vector<Reaction> first = FeedTrack(reader, Tilt);
-  EXPECT_THAT(first, ElementsAre(R"({"gesture":"tilt"})"));
+  const std::vector<Reaction> reactions = FeedTrack(reader, Tilt);
+  EXPECT_THAT(reactions, ElementsAre(R"({"gesture":"tilt"})"));
 
-  // Still tilting: already reported, so no second reaction.
+  // Still tilting: the episode from the one report above is still open, so
+  // no second reaction.
   std::vector<Reaction> again;
   reader.OnFace(FaceAt(0, 5 * kDegree, 0), 224, 224,
-                (head_gesture::kMinTrackFrames * kFrameGapMs) + kFrameGapMs,
-                again);
+                FeedTimestampMs(0, kFeedFrames), again);
   EXPECT_THAT(again, IsEmpty());
 }
 
@@ -187,8 +200,9 @@ TEST(GestureReaderTest, OnNoFaceDropsTheWindowAndTheReportedGesture) {
 
   reader.OnNoFace();
 
-  // The window is gone, so the next 49 frames are "not ready yet" again,
-  // and the 50th reports afresh rather than staying silent.
+  // The window and the gate are both gone, so the next kMinTrackFrames - 1
+  // frames are "not ready yet" again, and the track reports tilt afresh
+  // rather than staying silent (the old episode cannot still be open).
   const std::vector<Reaction> after = FeedTrack(reader, Tilt, 1'000'000);
   EXPECT_THAT(after, ElementsAre(R"({"gesture":"tilt"})"));
 }
@@ -199,6 +213,150 @@ TEST(GestureReaderTest, AStationaryFaceNeverReacts) {
     return {0.0, 0.0, 0.0};
   };
   EXPECT_THAT(FeedTrack(reader, still), IsEmpty());
+}
+
+// GestureReportGate, directly, on chosen class sequences: the episode rule
+// (#34) separated from the model so it can be pinned without needing the
+// real model to produce a particular run of classes. gesture_reader.cc's
+// kConfirmMs (200) and kStillMs (750) are repeated here as literals, since
+// the rule being tested is specifically that those durations are honoured.
+using head_gesture::Gesture;
+
+TEST(GestureReportGateTest,
+     AlternatingClassesInsideOneMovementGiveExactlyOneReport) {
+  GestureReportGate gate;
+  std::vector<Gesture> reported;
+  const auto feed = [&](Gesture gesture, std::int64_t timestamp_ms) {
+    const Gesture result = gate.Update(gesture, timestamp_ms);
+    if (result != Gesture::kNone) {
+      reported.push_back(result);
+    }
+  };
+
+  // Confirms shake over 200ms, opening an episode.
+  feed(Gesture::kShake, 0);
+  feed(Gesture::kShake, 200);
+  // Flips between shake and turn seven times, as the live recording did,
+  // 60-730ms apart: the episode stays open, so none of these report.
+  feed(Gesture::kTurn, 260);
+  feed(Gesture::kShake, 350);
+  feed(Gesture::kTurn, 450);
+  feed(Gesture::kShake, 700);
+  feed(Gesture::kTurn, 900);
+  feed(Gesture::kShake, 1000);
+  feed(Gesture::kTurn, 1070);
+
+  EXPECT_THAT(reported, ElementsAre(Gesture::kShake));
+}
+
+TEST(GestureReportGateTest,
+     ASingleNoneFrameInsideAGestureDoesNotEndTheEpisode) {
+  GestureReportGate gate;
+  ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);
+  ASSERT_EQ(gate.Update(Gesture::kNod, 200), Gesture::kNod);  // Reported.
+
+  // One stray kNone frame, far short of still_ms.
+  EXPECT_EQ(gate.Update(Gesture::kNone, 210), Gesture::kNone);
+
+  // The episode is still open, so nod does not get reported a second time
+  // even once it would otherwise have held long enough to confirm again;
+  // if the kNone frame above had wrongly ended the episode, this would
+  // report.
+  EXPECT_EQ(gate.Update(Gesture::kNod, 220), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kNod, 420), Gesture::kNone);
+}
+
+TEST(GestureReportGateTest, AStillHeadShortOfStillMsDoesNotEndTheEpisode) {
+  GestureReportGate gate;
+  ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);
+  ASSERT_EQ(gate.Update(Gesture::kNod, 200), Gesture::kNod);  // Reported.
+
+  // One ms short of still_ms at the last kNone frame (749ms from the
+  // first), and the head moves again at the 750ms mark itself: only a
+  // kNone frame can close the episode, so it stays open, and even a
+  // gesture that would otherwise confirm right after is not reported.
+  EXPECT_EQ(gate.Update(Gesture::kNone, 300), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kNone, 1049), Gesture::kNone);  // 749ms.
+  EXPECT_EQ(gate.Update(Gesture::kShake, 1050), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kShake, 1250), Gesture::kNone);  // 200ms.
+}
+
+TEST(GestureReportGateTest,
+     AStillHeadForStillMsEndsTheEpisodeAndTheNextGestureIsReported) {
+  GestureReportGate gate;
+  ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);
+  ASSERT_EQ(gate.Update(Gesture::kNod, 200), Gesture::kNod);  // Reported.
+
+  // still_ms (750ms, from the first kNone) closes the episode.
+  EXPECT_EQ(gate.Update(Gesture::kNone, 300), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kNone, 1050), Gesture::kNone);  // 750ms.
+
+  // The episode is closed, so a new gesture confirms and reports again.
+  EXPECT_EQ(gate.Update(Gesture::kShake, 1100), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kShake, 1300), Gesture::kShake);  // 200ms.
+}
+
+TEST(GestureReportGateTest, AClassThatDoesNotHoldForConfirmMsIsNotReported) {
+  GestureReportGate gate;
+  // One frame of nod among none: never holds long enough to confirm.
+  EXPECT_EQ(gate.Update(Gesture::kNone, 0), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kNod, 100), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kNone, 150), Gesture::kNone);
+}
+
+TEST(GestureReportGateTest,
+     ACandidateThatChangesClassBeforeConfirmMsStartsAgainForTheNewClass) {
+  GestureReportGate gate;
+  EXPECT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);
+  // Changes before nod's 200ms is up: the count restarts for shake.
+  EXPECT_EQ(gate.Update(Gesture::kShake, 50), Gesture::kNone);
+  // 250 - 50 = 200ms of shake: reports shake, not nod.
+  EXPECT_EQ(gate.Update(Gesture::kShake, 250), Gesture::kShake);
+}
+
+TEST(GestureReportGateTest, ResetClearsAPendingCandidate) {
+  GestureReportGate gate;
+  ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);
+
+  gate.Reset();
+
+  // Had the candidate survived, 300 - 0 = 300ms would have confirmed it
+  // immediately; instead this starts a fresh candidate.
+  EXPECT_EQ(gate.Update(Gesture::kNod, 300), Gesture::kNone);
+}
+
+TEST(GestureReportGateTest, ResetClosesAnOpenEpisode) {
+  GestureReportGate gate;
+  ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);
+  ASSERT_EQ(gate.Update(Gesture::kNod, 200), Gesture::kNod);  // Reported.
+
+  gate.Reset();
+
+  // Had the episode stayed open, nothing here would ever report again; with
+  // no still_ms of kNone, that is only possible once Reset has closed it.
+  EXPECT_EQ(gate.Update(Gesture::kNod, 1000), Gesture::kNone);
+  EXPECT_EQ(gate.Update(Gesture::kNod, 1200), Gesture::kNod);  // 200ms.
+}
+
+TEST(GestureReportGateTest, TheRuleHoldsByElapsedTimeNotByFrameCount) {
+  // 1 frame per second: confirms in a single extra call.
+  GestureReportGate one_fps;
+  EXPECT_EQ(one_fps.Update(Gesture::kNod, 0), Gesture::kNone);
+  EXPECT_EQ(one_fps.Update(Gesture::kNod, 1000), Gesture::kNod);
+
+  // 60 frames per second (~16.667ms apart): takes many more calls to reach
+  // the same 200ms, proving the gate counts milliseconds, not calls.
+  GestureReportGate sixty_fps;
+  constexpr double kFrameMs = 1000.0 / 60.0;
+  Gesture last = Gesture::kNone;
+  int calls = 0;
+  for (int i = 0; last == Gesture::kNone && i < 100; ++i) {
+    last = sixty_fps.Update(Gesture::kNod,
+                            static_cast<std::int64_t>(i * kFrameMs));
+    ++calls;
+  }
+  EXPECT_EQ(last, Gesture::kNod);
+  EXPECT_GT(calls, 10);  // Far more than the 2 calls 1 fps needed.
 }
 
 }  // namespace
