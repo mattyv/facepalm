@@ -262,6 +262,31 @@ TEST(WindowTest, ResetDropsBufferedFrames) {
   }
 }
 
+TEST(WindowTest, BecomesReadyAtSixtyFramesPerSecondOnceASecondIsSpanned) {
+  // kMinTrackFrames frames at 60 fps span ~817 ms, less than
+  // kWindowDurationMs, so Add must buffer more than kMinTrackFrames frames
+  // and become ready once one frame is older than the window; capping the
+  // buffer at kMinTrackFrames would leave gestures silently dead at 50 fps
+  // and above (#34).
+  Window window;
+  const RawFrame frame{};
+  constexpr std::int64_t kSixtyFpsGapMs = 17;
+  // The first index whose oldest buffered frame is more than
+  // kWindowDurationMs old: 59 * 17 > 999.99.
+  constexpr int kReadyIndex = 59;
+  for (int i = 0; i < kReadyIndex; ++i) {
+    EXPECT_FALSE(
+        window.Add(frame, static_cast<std::int64_t>(i) * kSixtyFpsGapMs)
+            .has_value())
+        << "frame " << i;
+  }
+  for (int i = kReadyIndex; i < kReadyIndex + 12; ++i) {
+    EXPECT_TRUE(window.Add(frame, static_cast<std::int64_t>(i) * kSixtyFpsGapMs)
+                    .has_value())
+        << "frame " << i;
+  }
+}
+
 TEST(WindowTest, NotReadyWhenTheBufferedFramesDoNotSpanLongEnough) {
   // At a high enough configured frame rate, kMinTrackFrames frames can span
   // less than kWindowDurationMs; Idiap's own time_interpolation would raise

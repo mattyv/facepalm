@@ -103,10 +103,13 @@ Gesture Classify(const Prediction& prediction, float confidence_threshold);
 // spanning more than kWindowDurationMs, same as their own two gates
 // (`len_track < min_track_len` and time_interpolation's span check).
 //
-// Idiap's own time_interpolation raises when a full kMinTrackFrames does not
-// yet span long enough (possible at a configured frame rate above roughly
-// 49 fps, where 50 frames span under a second); Add treats that as "not
-// ready yet" instead of failing, which Idiap's live demo cannot do (#34).
+// Idiap's live demo reads only the newest kMinTrackFrames frames, whose
+// span falls under kWindowDurationMs from 50 fps up, where its own
+// time_interpolation raises; Add instead keeps buffering older frames until
+// the span is reached, reporting "not ready yet" meanwhile, so gestures
+// still work at the configured ceiling of 60 fps (#34). At 49 fps and below
+// the buffer trims to the newest kMinTrackFrames, exactly their demo's
+// track.
 class Window {
  public:
   // Adds `frame` at `timestamp_ms` (must increase from call to call), and

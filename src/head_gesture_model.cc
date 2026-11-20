@@ -461,7 +461,15 @@ Gesture Classify(const Prediction& prediction, float confidence_threshold) {
 std::optional<std::array<RawFrame, kWindowFrames>> Window::Add(
     const RawFrame& frame, std::int64_t timestamp_ms) {
   track_.push_back({.timestamp_ms = timestamp_ms, .frame = frame});
-  if (track_.size() > kMinTrackFrames) {
+  // Keep the newest kMinTrackFrames frames, as Idiap's live demo reads its
+  // track, but hold on to older ones while they are still needed to span
+  // kWindowDurationMs: from 50 fps up, kMinTrackFrames frames span less than
+  // the window, where their time_interpolation would raise (#34 design
+  // note). The front frame is unneeded once the one behind it is itself
+  // older than the window.
+  while (track_.size() > kMinTrackFrames &&
+         static_cast<double>(track_.back().timestamp_ms -
+                             track_.at(1).timestamp_ms) > kWindowDurationMs) {
     track_.pop_front();
   }
   if (track_.size() < kMinTrackFrames) {
