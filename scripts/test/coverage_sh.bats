@@ -86,3 +86,12 @@ summary() {
   [[ "${output}" == *'src/head_pose.cc: has floors but no test executable'* ]] \
     || false
 }
+
+@test "leaves a file whose floors are for another measure to that measure" {
+  floors '"src/head_pose.cc":
+    {"unit": {"lines": 100, "branches": 100, "functions": 100}},
+    "scripts/coverage.sh": {"shell": {"lines": 100}}'
+  summary 10 100 4 100 2 100
+  run bash "${WORK}/repo/scripts/coverage.sh"
+  [[ "${status}" -eq 0 ]] || false
+}

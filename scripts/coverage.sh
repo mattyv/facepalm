@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Builds facepalm with coverage, runs every unit's tests, and holds each
-# source file to its floors in coverage_thresholds.json from its own tests.
+# source file to its unit floors in coverage_thresholds.json from its tests.
 
 set -euo pipefail
 
@@ -84,7 +84,7 @@ main() {
     measure "${unit}"
     check_unit "${unit}" >>"${shortfalls}"
   done
-  listed_files="$(jq -r 'keys[]' "${THRESHOLDS}")"
+  listed_files="$(jq -r 'map_values(.unit // empty) | keys[]' "${THRESHOLDS}")"
   while read -r listed; do
     unit="${listed#src/}"
     if [[ -n "${listed}" && "${units}" != *" ${unit%.cc} "* ]]; then
