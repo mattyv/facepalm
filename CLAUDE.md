@@ -71,6 +71,10 @@ tools. The design and its decisions are on
 -   **A test file covers its source file 100 percent by itself:** lines,
     branches and functions. `scripts/coverage.sh` measures each source from
     its own executable only, against `coverage_thresholds.json`.
+-   **JavaScript is held to the same 100 percent** (set by the user on
+    2026-11-21, #67): each file in `mcp/` and `integrations/claude-code/`
+    is covered for lines, branches and functions by its own test file,
+    `x.js` by `test/x.test.js`, with its collaborators mocked.
 -   **A coverage floor is never lowered.** A run below one gets the test cases
     that bring it back up.
 -   **Every test is idempotent and cleans up after itself.**
