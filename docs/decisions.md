@@ -5,6 +5,33 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Read a reaction as a feeling when a client marks a beat
+
+A client that has just asked a question or made a proposal sends
+`beat question|proposal <milliseconds>`. The service waits out that window
+(1 to 10000 ms) and replies with the readings since the client last looked
+and one `interpretation`: an ID, the beat's kind, and one of six feelings.
+`src/feelings.h` is the only list of them: agreement, disagreement,
+engagement, annoyance, confused and unknown; the MCP adapter checks only that
+a feeling is a name. The generic rule reads only the readings made during the
+window: nods as agreement, shakes as disagreement, brows down or narrowed
+eyes (which the expression reader reports only once held) as confused. No
+cue, cues of different feelings, or a window with a reading dropped before it
+ended read as unknown; so does a reaction that comes after the window, which
+goes to the next read instead. No generic rule gives engagement or annoyance
+yet: they exist so a correction (#35, item 4 of #61) can name them. The
+window opens when the service gets the line, so a reaction made while the
+person was still reading the question is missed. `specs/FeelingBeat.tla`
+models it. `rate_reaction` and the ratings file stay until item 5 replaces
+them.
+
+Rejected: reading the beat in the MCP adapter, as Codex's draft did
+(`groundedWait`), because feelings and their tuning belong to the service, so
+every client feeds the same corrections (#61); and its
+`tentative_agreement` names, for the six feelings the user chose. Evidence:
+[#70](https://github.com/mattyv/facepalm/issues/70),
+[#61](https://github.com/mattyv/facepalm/issues/61).
+
 ## 2026-11-21: A turn's suppression ends once the head settles anywhere
 
 -   **Decision:** after a turn, later turns stay suppressed until the model

@@ -56,12 +56,23 @@ made since, each with its reason, are in the
     timeline of interpreted reactions, each with the summary line the person
     sees and the detail the agent gets. A client reads what came since it
     last looked, or waits for the next reading, and the person can rate a
-    reading 1 to 5. It follows `specs/ReactionFeed.tla`.
+    reading 1 to 5. It follows `specs/ReactionFeed.tla`. A client that has
+    just asked a question or made a proposal can instead mark a beat: the
+    feed waits out the beat's window and answers with the readings and one
+    interpretation of them, a feeling, following `specs/FeelingBeat.tla`
+    (#70).
+-   `src/feelings`: the six feelings a reaction is read as, and the only list
+    of them: agreement, disagreement, engagement, annoyance, confused and
+    unknown. Its generic rule reads a beat's nods as agreement, its shakes
+    as disagreement, and brows down or narrowed eyes, held, as confused;
+    no cue, cues of different feelings, or a window missing a dropped
+    reading read as unknown. No rule gives engagement or annoyance yet; they
+    are there for corrections to name (#35).
 -   `src/service`: the background service's connections (#37), following
     `specs/Service.tla`. Each connection names its client, then reads,
-    waits for a reading, or rates one, in the protocol of `src/protocol`:
-    a request is a line of text, and each reply a line of JSON. Stopping
-    ends every connection, even one waiting.
+    waits for a reading, marks a beat, or rates a reading, in the protocol
+    of `src/protocol`: a request is a line of text, and each reply a line of
+    JSON. Stopping ends every connection, even one waiting.
 -   `src/unix_socket`: the service's connections over a Unix domain socket
     that only its user can open, on macOS and Linux; tested on real
     sockets.
@@ -185,6 +196,13 @@ The MCP adapter needs Node.js 22 or newer and the lockfile dependencies.
 CMake installs the source and lockfile without `node_modules`. With the default
 relative install paths, the installed tree can be moved as a unit. Provision
 a compatible service and any required private token separately.
+
+The adapter's `wait_for_reaction` tool returns the readings since the session
+last looked. Right after the agent asks the person something, it can pass
+`beat` (`question` or `proposal`): the service then watches the next
+`timeout_ms` (1500 by default, at most 10000) and adds `interpretation`, with
+an ID and the feeling the reaction was read as, which is `unknown` when it
+cannot tell. The feeling is advisory, never an answer.
 
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the

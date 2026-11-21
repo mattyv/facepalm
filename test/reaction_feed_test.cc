@@ -10,6 +10,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/feelings.h"
 
 // Each test stands for the specs/ReactionFeed.tla property it is named for.
 
@@ -435,6 +436,224 @@ TEST_F(WaitEndsTest, ConnectingANameAlreadyConnectedIsRefused) {
 
   EXPECT_FALSE(feed_.Connect("agent"));
   EXPECT_THAT(Summaries(Got(feed_.Read("agent"))), ElementsAre("nod"));
+}
+
+// The beat tests below stand for the specs/FeelingBeat.tla properties they
+// are named for.
+
+constexpr auto kNodText = R"({"gesture":"nod"})";
+constexpr auto kShakeText = R"({"gesture":"shake"})";
+constexpr auto kFrownText = R"({"expression":"brows_down"})";
+// Long enough that a reading made once the beat is seen open lands in it.
+constexpr auto kBeat = std::chrono::milliseconds(500);
+
+class BeatTest : public ReactionFeedTest {
+ protected:
+  // Starts a beat for "agent", returning once it is open, or with a failure
+  // once the beat has ended without being seen open.
+  std::future<std::optional<ReactionFeed::Delivery>> Mark(
+      BeatKind kind = BeatKind::kQuestion) {
+    auto beat = std::async(std::launch::async, [this, kind] {
+      return feed_.Beat("agent", kind, kBeat);
+    });
+    while (!feed_.Waiting("agent")) {
+      if (beat.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        ADD_FAILURE() << "the beat ended before it was seen open";
+        break;
+      }
+      std::this_thread::yield();
+    }
+    return beat;
+  }
+
+  // The beat's feeling, or a failure and kUnknown when it has none.
+  static Feeling FeelingOf(const ReactionFeed::Delivery& delivery) {
+    if (!delivery.interpretation) {
+      ADD_FAILURE() << "no interpretation";
+      return Feeling::kUnknown;
+    }
+    return delivery.interpretation->feeling;
+  }
+};
+
+using CanAgreeTest = BeatTest;
+
+TEST_F(CanAgreeTest, ANodDuringTheBeatIsAgreement) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+  feed_.React("Gesture: nod", kNodText);
+
+  const auto delivery = Got(Answered(beat));
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kAgreement));
+  EXPECT_THAT(Summaries(delivery), ElementsAre("Gesture: nod"));
+  EXPECT_FALSE(feed_.Waiting("agent"));
+}
+
+using ReadsOnlyTheBeatTest = BeatTest;
+
+TEST_F(ReadsOnlyTheBeatTest, AShakeDuringTheBeatIsDisagreement) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark(BeatKind::kProposal);
+  feed_.React("Gesture: shake", kShakeText);
+
+  const auto delivery = Got(Answered(beat));
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kDisagreement));
+  EXPECT_THAT(delivery.interpretation,
+              Optional(Field(&ReactionFeed::Interpretation::beat,
+                             Eq(BeatKind::kProposal))));
+}
+
+TEST_F(ReadsOnlyTheBeatTest, AFrownDuringTheBeatIsConfused) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+  feed_.React("Expression: brows_down", kFrownText);
+
+  EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kConfused));
+}
+
+// The nod came before the beat began: it is told, as a read would tell it
+// (NoSilentGap), but it is not read as a feeling about the question.
+TEST_F(ReadsOnlyTheBeatTest, AReadingBeforeTheBeatIsToldButNotRead) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  feed_.React("Gesture: nod", kNodText);
+  auto beat = Mark();
+  feed_.React("Gesture: shake", kShakeText);
+
+  const auto delivery = Got(Answered(beat));
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kDisagreement));
+  EXPECT_THAT(Summaries(delivery),
+              ElementsAre("Gesture: nod", "Gesture: shake"));
+}
+
+TEST_F(ReadsOnlyTheBeatTest, AReadingAfterTheBeatGoesToTheNextRead) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const auto delivery = Got(feed_.Beat("agent", BeatKind::kQuestion, kShort));
+  feed_.React("Gesture: nod", kNodText);
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kUnknown));
+  EXPECT_THAT(Summaries(Got(feed_.Read("agent"))), ElementsAre("Gesture: nod"));
+}
+
+using UnknownWhenUnclearTest = BeatTest;
+
+TEST_F(UnknownWhenUnclearTest, NothingDuringTheBeatIsUnknown) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const auto delivery = Got(feed_.Beat("agent", BeatKind::kQuestion, kShort));
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kUnknown));
+  EXPECT_THAT(delivery.readings, IsEmpty());
+}
+
+TEST_F(UnknownWhenUnclearTest, ANodAndAShakeAreUnknown) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+  feed_.React("Gesture: nod", kNodText);
+  feed_.React("Gesture: shake", kShakeText);
+
+  EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kUnknown));
+}
+
+using UnknownWhenIncompleteTest = BeatTest;
+
+// The feed keeps two readings: the first nod of the beat is dropped before
+// it ends, and might as well have been a shake.
+TEST_F(UnknownWhenIncompleteTest, ADroppedReadingMakesTheBeatUnknown) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+  feed_.React("Gesture: nod", kNodText);
+  feed_.React("Gesture: nod", kNodText);
+  feed_.React("Gesture: nod", kNodText);
+
+  const auto delivery = Got(Answered(beat));
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kUnknown));
+  EXPECT_THAT(delivery.missed, Eq(1));
+}
+
+// A reading dropped before the beat began leaves the beat's own window
+// whole.
+TEST_F(UnknownWhenIncompleteTest, AReadingDroppedBeforeTheBeatDoesNot) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  feed_.React("a", "{}");
+  feed_.React("b", "{}");
+  feed_.React("c", "{}");
+  auto beat = Mark();
+  feed_.React("Gesture: nod", kNodText);
+
+  const auto delivery = Got(Answered(beat));
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kAgreement));
+  EXPECT_THAT(delivery.missed, Eq(2));
+}
+
+using OneAnswerPerBeatTest = BeatTest;
+
+TEST_F(OneAnswerPerBeatTest, EachBeatHasItsOwnInterpretation) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  ASSERT_TRUE(feed_.Connect("ai-pair"));
+  const auto first = Got(feed_.Beat("agent", BeatKind::kQuestion, kShort));
+  const auto second = Got(feed_.Beat("ai-pair", BeatKind::kQuestion, kShort));
+
+  const auto id = [](const ReactionFeed::Delivery& delivery) {
+    return delivery.interpretation.value_or(ReactionFeed::Interpretation{
+        .id = 0, .feeling = Feeling::kUnknown, .beat = BeatKind::kProposal});
+  };
+  EXPECT_THAT(id(first).beat, Eq(BeatKind::kQuestion));
+  EXPECT_THAT(id(first).id, testing::Gt(0));
+  EXPECT_THAT(id(second).id, Eq(id(first).id + 1));
+}
+
+TEST_F(OneAnswerPerBeatTest, ABeatIsRefusedWhileTheClientWaits) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+
+  EXPECT_THAT(feed_.Beat("agent", BeatKind::kQuestion, kShort),
+              Eq(std::nullopt));
+  EXPECT_THAT(feed_.Wait("agent", kShort), Eq(std::nullopt));
+  EXPECT_THAT(feed_.Read("agent"), Eq(std::nullopt));
+  EXPECT_TRUE(Answered(beat));
+}
+
+TEST_F(OneAnswerPerBeatTest, AClientNotConnectedCannotMarkABeat) {
+  EXPECT_THAT(feed_.Beat("stranger", BeatKind::kQuestion, kShort),
+              Eq(std::nullopt));
+}
+
+TEST_F(OneAnswerPerBeatTest, DisconnectingEndsTheBeatUnanswered) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+  feed_.React("Gesture: nod", kNodText);
+
+  feed_.Disconnect("agent");
+  ASSERT_TRUE(feed_.Connect("agent"));
+
+  EXPECT_THAT(Answered(beat), Eq(std::nullopt));
+  EXPECT_FALSE(feed_.Waiting("agent"));
+}
+
+TEST_F(OneAnswerPerBeatTest, ForgettingEndsTheBeatUnanswered) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+
+  feed_.DisconnectAndForget("agent");
+
+  EXPECT_THAT(Answered(beat), Eq(std::nullopt));
+}
+
+using BeatEndsTest = BeatTest;
+
+TEST_F(BeatEndsTest, ABeatEndsWhenItsWindowDoes) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const auto began = std::chrono::steady_clock::now();
+  auto beat = Mark();
+  // A reading wakes the feed, but the beat waits out its window.
+  feed_.React("Gesture: nod", kNodText);
+
+  ASSERT_TRUE(Answered(beat));
+  EXPECT_GE(std::chrono::steady_clock::now() - began, kBeat);
 }
 
 }  // namespace
