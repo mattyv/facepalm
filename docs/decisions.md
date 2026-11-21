@@ -5,6 +5,45 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Approve clients by name, and let several in at once
+
+-   **Decision:** an approved client is a token file named for it in a
+    directory private to the user: `clients/` under
+    `~/Library/Application Support/Facepalm` on macOS and
+    `~/.local/state/facepalm` on Linux, beside the service's socket,
+    `service.sock`. `facepalm-daemon approve NAME` makes the file with a new
+    random token, keeping one already there, and `revoke NAME` removes it.
+    A client's first line is `hello <name> <token>`: the service lets it in
+    when any client's file holds the token, read at each hello, and several
+    connections may show the same token, each under its own name. Every
+    client shares one camera subscription, taken when the first joins and
+    given up when the last leaves, and every client reads the same readings.
+    The MCP adapter, given no arguments, uses the socket and the `mcp` token
+    from those places. A client that hangs up during a wait or a beat is
+    disconnected at once by a watcher on its socket, so it gives up its
+    session, and the camera, without waiting out the window.
+    `specs/DaemonAdmission.tla` and `specs/Service.tla` model it, with
+    liveness.
+-   **Why:** #37 asks for tokens provisioned on approval, with no
+    hand-run `openssl`, found by the MCP adapter and AI Pair in a fixed
+    per-user place, and for two clients, such as Claude Desktop and Claude
+    Code, to get the same nod. One token per app with a name per connection
+    lets two sessions of one app run at once. One subscription for every
+    client keeps a reaction one reading, where a subscription per client
+    would add it once for each.
+-   **Rejected:** one connection per token, the design before, which turns
+    away a second session of the same app (`ApprovedAdmitted` fails it); a
+    camera subscription per client, which delivers each reaction to the
+    shared feed once per client; and paths from `XDG_RUNTIME_DIR` or
+    `XDG_STATE_HOME`, which the service manager and an MCP host may not
+    share with the person's shell.
+-   **Cost:** any program running as the user can read the token files, as
+    it could the one token file before; the socket and the files are
+    private to the user, and that is the boundary. A file that is not a
+    valid token is skipped, not repaired.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37),
+    [#63](https://github.com/mattyv/facepalm/issues/63).
+
 ## 2026-11-21: Build and test the Linux camera's sources in CI
 
 -   **Decision:** CI's `linux` and both sanitizer jobs fetch MediaPipe's C

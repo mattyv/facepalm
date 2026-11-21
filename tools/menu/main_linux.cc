@@ -49,13 +49,9 @@ QString SocketPath() {
   if (!override_path.isEmpty()) {
     return override_path;
   }
-  const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
-  const QString state = qEnvironmentVariable("XDG_STATE_HOME");
-  const QString base =
-      !runtime.isEmpty()
-          ? runtime
-          : (state.isEmpty() ? QDir::homePath() + "/.local/state" : state);
-  return QDir(base).filePath(QStringLiteral("facepalm/service.sock"));
+  // The daemon's fixed per-user socket (src/user_paths.h).
+  return QDir::homePath() +
+         QStringLiteral("/.local/state/facepalm/service.sock");
 }
 
 bool ServiceReady(const QString& path) {

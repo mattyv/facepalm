@@ -1,5 +1,6 @@
 #include "src/service.h"
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -14,8 +15,9 @@
 
 namespace facepalm {
 
-Service::Service(std::unique_ptr<Listener> listener, Feed& feed)
-    : listener_(std::move(listener)), feed_(feed) {}
+Service::Service(std::unique_ptr<Listener> listener, Feed& feed,
+                 Approvals& approvals)
+    : listener_(std::move(listener)), feed_(feed), approvals_(approvals) {}
 
 Service::~Service() { Stop(); }
 
@@ -66,7 +68,8 @@ void Service::Serve(Connection& connection) {
   connection.done = true;
 }
 
-// Service!Hello: refuses a name already connected (GuardUniqueNames).
+// Service!Hello: refuses a token not approved (GuardApproval), then a name
+// already connected (GuardUniqueNames).
 std::optional<std::string> Service::Greet(Connection& connection) {
   Stream& stream = *connection.stream;
   const std::optional<std::string> line = stream.ReadLine();
@@ -83,6 +86,10 @@ std::optional<std::string> Service::Greet(Connection& connection) {
   const auto* hello = std::get_if<protocol::Hello>(&*request);
   if (hello == nullptr) {
     stream.WriteLine(protocol::ErrorJson("say hello first"));
+    return std::nullopt;
+  }
+  if (!approvals_.Approved(hello->token)) {
+    stream.WriteLine(protocol::ErrorJson("client not approved"));
     return std::nullopt;
   }
   if (!feed_.Connect(hello->name)) {
@@ -152,9 +159,12 @@ bool Service::Answer(const std::string& name, std::string_view line,
   // (specs/FeelingBeat.tla), or a read.
   std::optional<Feed::Delivery> delivery;
   if (const auto* beat = std::get_if<protocol::BeatRequest>(&*request)) {
-    delivery = feed_.Beat(name, beat->kind, beat->window);
+    delivery = Watched(name, stream, [&] {
+      return feed_.Beat(name, beat->kind, beat->window);
+    });
   } else if (const auto* wait = std::get_if<protocol::WaitRequest>(&*request)) {
-    delivery = feed_.Wait(name, wait->timeout);
+    delivery =
+        Watched(name, stream, [&] { return feed_.Wait(name, wait->timeout); });
   } else {
     delivery = feed_.Read(name);
   }
@@ -165,6 +175,23 @@ bool Service::Answer(const std::string& name, std::string_view line,
   }
   stream.WriteLine(protocol::DeliveryJson(*delivery));
   return true;
+}
+
+// Service!Noticed: while the connection's thread waits, and so reads
+// nothing, a watcher disconnects the client when the peer hangs up, which
+// ends the wait at once (GuardHangUpWakes).
+std::optional<Feed::Delivery> Service::Watched(
+    const std::string& name, Stream& stream,
+    const std::function<std::optional<Feed::Delivery>()>& wait) {
+  std::thread watcher([&] {
+    if (stream.AwaitHangUp()) {
+      feed_.Disconnect(name);
+    }
+  });
+  std::optional<Feed::Delivery> delivery = wait();
+  stream.EndAwaitHangUp();
+  watcher.join();
+  return delivery;
 }
 
 // Service!Stop: refuses new connections (GuardRefuseWhenStopping), shuts
