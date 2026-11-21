@@ -33,7 +33,7 @@ constexpr int kProbedNodes = 4;
 // to land on. "platform:" names one wired directly to the board, as
 // opposed to "usb-..." for one plugged in (#13).
 bool IsBuiltIn(const std::string& bus_info) {
-  return bus_info.rfind("platform:", 0) == 0;
+  return bus_info.starts_with("platform:");
 }
 
 // Queries `fd`'s capabilities as a CameraDevice, or nothing when the ioctl

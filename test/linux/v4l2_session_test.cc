@@ -273,10 +273,12 @@ TEST_F(V4l2SessionTest, ConfigureGivesNothingWhenNoNodeMatchesTheChoice) {
       "usb-0000:00:14.0-1", [](const Frame&) {}, [] {});
   // The remaining three nodes (kProbedNodes in v4l2_session.cc) do not
   // open at all; declared first, so the more specific expectation below
-  // matches the first call instead (GoogleMock tries the most recently
-  // declared expectation first).
+  // matches the first call. Without RetiresOnSaturation, GoogleMock
+  // never falls through to this one once the other is satisfied: a
+  // saturated expectation with no explicit retirement stays active, and
+  // a further matching call over-saturates it instead.
   EXPECT_CALL(mock_, Open(_, _)).Times(3).WillRepeatedly(Return(-1));
-  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd)).RetiresOnSaturation();
   EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(BuiltInCapability());
   EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
 
@@ -364,11 +366,13 @@ TEST_F(V4l2SessionTest, ListsNothingWhenNoNodeOpens) {
 
 TEST_F(V4l2SessionTest, ListSkipsANodeThatDoesNotQuery) {
   // Declared first (see ConfigureGivesNothingWhenNoNodeMatchesTheChoice),
-  // so the sequenced block below matches the first call.
+  // so the sequenced block below matches the first call, then retires
+  // rather than over-saturating on the later calls this one should
+  // handle.
   EXPECT_CALL(mock_, Open(_, _)).Times(3).WillRepeatedly(Return(-1));
   {
     InSequence order;
-    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd)).RetiresOnSaturation();
     EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(Return(-1));
     EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
   }

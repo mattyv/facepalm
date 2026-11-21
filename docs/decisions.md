@@ -88,12 +88,22 @@ a line saying which entry replaced it.
     failed open (`specs/DaemonAdmission.tla`'s `GuardOpenFailStops`, "a
     choice, not a protection"), it now only does that for `kNoDevice`;
     the other two causes are left to run their retry inside the same
-    process instead. `DaemonAdmission.tla` itself is not re-specified for
-    this narrower rule: it already treats every open failure
-    abstractly, with no cause to tell apart, and `daemon_control_test.cc`
-    (`ADeniedPermissionDoesNotStopTheDaemon`,
-    `AFailedStartDoesNotStopTheDaemon`) covers the refinement directly.
-    This is a known, named gap, not a silent one.
+    process instead. `specs/DaemonAdmission.tla` is re-specified for this
+    too: `reports` splits `openFailed` from a new `openBlocked`, `ctl`
+    gets `blocked`, and a new `Retry` (`GuardRetries`) mirrors
+    `CameraLifecycle.tla`'s; `JoinOpens` moves from a plain `~>` to that
+    spec's `[](<>[]P => <>Q)` shape, over a new `canStart` standing for
+    `permitted /\ startWorks`, since the old shape's escape for a cause
+    that never clears on its own (`~ctl.device`) cannot stand in for one
+    the controller clears itself. Proving `Retry` correct this way found
+    a real gap the addition itself opened: unlike `OnDeviceBack`, which
+    is `DaemonControl`'s own method and checks `~dc.stopping` directly,
+    `Retry` is `CameraController`'s own (scheduled by
+    `schedule_retry_`, never routed through `DaemonControl`), so it has
+    no such flag and depends entirely on `OpenIf`'s consent check;
+    `GuardStopRevokes = FALSE` now also breaks `ReopenAfterRetire`,
+    `Retry` reopening a camera a stop left standing, which the spec's own
+    table records.
 -   **Rejected:** keeping `GuardDiscoverAnyCamera`'s old reach (any camera
     counts once none is picked) as the default's fallback when no
     built-in camera exists at all, so facepalm would still open on a Mac
@@ -106,13 +116,7 @@ a line saying which entry replaced it.
     can stand in for, unlike the libv4l2 calls V4l2SessionTest already
     replaces at link time; a bounded probe of a fixed, small range of
     node numbers is the same tradeoff the project already made for
-    `camera_probe`'s own diagnostics. Re-modeling
-    `specs/DaemonAdmission.tla`'s stop decision in full, rejected for
-    this change given its existing abstraction already covers the one
-    cause (`kNoDevice`) whose behavior did not change, and the other two
-    causes' correctness is proved one level down, in
-    `specs/CameraLifecycle.tla`, where the task asked the retry to be
-    specified. Evidence:
+    `camera_probe`'s own diagnostics. Evidence:
     [#13](https://github.com/mattyv/facepalm/issues/13),
     [#43](https://github.com/mattyv/facepalm/issues/43),
     [#52](https://github.com/mattyv/facepalm/issues/52),

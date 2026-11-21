@@ -72,7 +72,7 @@ constexpr std::chrono::seconds kRetryInterval{5};
 // its own: the portable way to delay a task when the queue underneath
 // (dispatch on macOS, the SerialQueue above on Linux) has no delay of its
 // own to ask for.
-CameraController::RetrySchedule RetryAfter(Post control) {
+CameraController::RetrySchedule RetryAfter(const Post& control) {
   return [control](std::function<void()> retry) {
     std::thread([control, retry = std::move(retry)] {
       std::this_thread::sleep_for(kRetryInterval);
@@ -148,7 +148,7 @@ class Engine : public DaemonController, public DaemonPipeline {
   // item 12): main() loads it, if one was saved, before either Engine or
   // its caller's event loop can return.
   Engine(std::unique_ptr<Listener> listener, Approvals& approvals,
-         std::string model, Config config,
+         std::string model, const Config& config,
          std::unique_ptr<FeelingStore> feelings,
          const CalibrationProfile* calibration_profile, Post control,
          Post camera, Post inference, std::string status_path = {})

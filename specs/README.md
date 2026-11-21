@@ -30,7 +30,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `Calibration.cfg` | six steps, one camera outage | holds | 30 |
 | `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,864 |
 | `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
-| `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 7,908 |
+| `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none | holds | 3,815,485 |
 | `FeelingFeedback.cfg` | two clients, two interpretations, two feelings, one reset, one restart | holds | 264,176 |
@@ -68,16 +68,26 @@ readings from `ReactionFeed`, so two clients get the same nod.
 Four serial queues run the work, as in the daemon. The control queue owns
 `DaemonControl` and `CameraController`, so each of its tasks is one atomic
 action; it takes subscription changes from `ApprovedFeed`, reports from the
-camera session (opened, open failed, closed, device lost, device back), and
-the frame pipeline's word that a face model was destroyed. The session queue
-opens and closes the camera, and the inference queue creates and destroys
-the face model. Each queue is FIFO, and the order between the control
-queue's three sources is left free, which allows more interleavings than the
-code has. The model covers stopping, a retirement under way, a device coming
-back during one, a failed open, a lost device, and a `Stop` re-entered from
-a failed open. Opening may succeed or fail each time. The queues are weakly
-fair; the person, the clients and the OS are not. `MaxQueue = 2` bounds what
-the clients and the OS may queue, so the state space is finite.
+camera session (opened, open failed, open blocked, closed, device lost,
+device back), and the frame pipeline's word that a face model was
+destroyed. The session queue opens and closes the camera, and the inference
+queue creates and destroys the face model. Each queue is FIFO, and the order
+between the control queue's three sources is left free, which allows more
+interleavings than the code has. The model covers stopping, a retirement
+under way, a device coming back during one, an open that found no device,
+one that was blocked some other way and retried, a lost device, and a
+`Stop` re-entered from a failed open. The queues are weakly fair, and so is
+a pending retry; the person, the clients and the OS are not. `MaxQueue = 2`
+bounds what the clients and the OS may queue, so the state space is finite.
+
+Item 10 of #61 (#52) splits "the open failed" into two reports: no device
+to use (`openFailed`, unchanged: `GuardOpenFailStops` still decides whether
+that stops the daemon) and everything else Start can fail at, such as a
+denied permission or a configuration race (`openBlocked`), which never
+stops the daemon and is retried instead, fairly, through the new `Retry`
+(`GuardRetries`). `canStart` stands for whatever Start needs that is not
+the device (`specs/CameraLifecycle.tla`'s `permitted /\ startWorks`); while
+it is false, an open attempt can only come back blocked.
 
 | Property | What it says | Test |
 |---|---|---|
@@ -89,7 +99,7 @@ the clients and the OS may queue, so the state space is finite.
 | `ExitClean` | The daemon exits only with the camera closed and stopped, and every face model destroyed. | `ExitCleanTest` |
 | `StopEnds` | Liveness: stopping, by the person, a signal, a failed model or a failed open, always ends with the daemon exiting. | `StopEndsTest` |
 | `LastLeaveCloses` | Liveness: with no client left, the camera closes, unless one joins. | `SubscriptionMatchesTest.OnlyTheFirstJoinAndTheLastLeaveCount`; `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` in `test/camera_controller_test.cc` |
-| `JoinOpens` | Liveness, and something must happen: a connected client gets the camera open, unless every client leaves, the daemon stops, or the device is gone. | `JoinOpensTest`, `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`; `WantedOpensTest` in `test/camera_controller_test.cc` |
+| `JoinOpens` | Liveness, and something must happen: from every point, a connected client, the device and whatever else Start needs, all held, lead to the camera being open (#52). | `JoinOpensTest`, `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`; `WantedOpensTest`, `RetriesTest` in `test/camera_controller_test.cc`; `ADeniedPermissionDoesNotStopTheDaemon`, `AFailedStartDoesNotStopTheDaemon` in `test/daemon_control_test.cc` |
 
 `CHECK_DEADLOCK FALSE` stays only because an exited daemon does nothing;
 the liveness properties are what say that stopping and closing finish.
@@ -98,19 +108,20 @@ Each mutation, and what TLC found (counts are the counterexample's states):
 | Mutation | Broke |
 |---|---|
 | `GuardApproval = FALSE`: a client not approved joins | `ApprovedOnly`, 2 states |
-| `GuardFirstLast = FALSE`: every join and leave changes the subscription, the one-client design | `SubscriptionMatches`, 7 states: one client leaving takes the camera from another |
-| `GuardConsent = FALSE`: the camera opens without consent | `OpenHasConsent`, 10 states: a retirement after stopping reopens it |
-| `GuardStopRevokes = FALSE`: stopping leaves consent | `ExitClean`, 14 states; with it left out, `StopEnds` and `LastLeaveCloses` |
+| `GuardFirstLast = FALSE`: every join and leave changes the subscription, the one-client design | `SubscriptionMatches` |
+| `GuardConsent = FALSE`: the camera opens without consent | `OpenHasConsent`: a retirement after stopping reopens it |
+| `GuardStopRevokes = FALSE`: stopping leaves consent | `ReopenAfterRetire`: `Retry` (#52) reopens the camera after a stop that left consent standing, since `Retry` is `CameraController`'s own method and, like `Subscribe` or `Leave`, has no `stopping` flag of its own to check — it relies on this one; `ExitClean` also fails the same way, checked alone |
 | `GuardStopRetires = FALSE`: stopping with the camera closed retires nothing | `StopEnds` |
-| `GuardRetireOnce = FALSE`: two retirements at once | `ExitClean`, 6 states: the daemon exits with a face model still to destroy |
-| `GuardAckAfterRetire = FALSE`: a closed camera counts as closed before its model is destroyed | `ReopenAfterRetire`, 11 states |
-| `GuardDeferDeviceBack = FALSE`: a device coming back is let in during a retirement | `ReopenAfterRetire`, 7 states |
+| `GuardRetireOnce = FALSE`: two retirements at once | `ExitClean`: the daemon exits with a face model still to destroy |
+| `GuardAckAfterRetire = FALSE`: a closed camera counts as closed before its model is destroyed | `ReopenAfterRetire` |
+| `GuardDeferDeviceBack = FALSE`: a device coming back is let in during a retirement | `ReopenAfterRetire` |
 | `GuardOpenOnce = FALSE`: an `Opened` after closing began creates a model | Nothing: the model is destroyed behind it on the same FIFO inference queue, so the guard only saves loading a model no frame will reach |
-| `GuardOpenFailStops = FALSE`: a failed open leaves the daemon running | Nothing: stopping on a failed open is a choice, not a protection; without it the camera waits for the device to come back, which `JoinOpens` allows |
+| `GuardOpenFailStops = FALSE`: a camera with no device to use leaves the daemon running | Nothing: stopping for that cause is a choice, not a protection; without it the camera waits for the device to come back, which `JoinOpens` allows |
+| `GuardRetries = FALSE`: a denied permission or a failed start never clears | `JoinOpens` (#52): `ctl.blocked` latches forever, so a session that stays joined, with the device and everything else Start needs, never reopens |
 | `OpenIf` never opens | `JoinOpens` |
 | `Leave` does not close | `LastLeaveCloses` |
 | `Retired` never exits | `StopEnds` |
-| No fairness on `Report`, `SessionTask`, `InferenceTask` or `Retired` | `StopEnds`, `LastLeaveCloses` and `JoinOpens` |
+| No fairness on `Report`, `SessionTask`, `InferenceTask`, `Retried` or `Retry` | `StopEnds`, `LastLeaveCloses` and `JoinOpens` |
 | No fairness on `Subscription` | `LastLeaveCloses` and `JoinOpens` |
 | `InferenceTask` writes a model outside the type | `TypeOK`, 6 states |
 
@@ -121,17 +132,23 @@ revokes consent and a camera that began closing reports `Closed`, so that
 code was removed. The failed open's stop moved from the daemon's `main.cc`
 into `DaemonControl`, where the spec's `OnOpenFailed` has it.
 
-Item 10 of #61 narrows `GuardOpenFailStops` in the code, not the model
-(#52): `OnOpenFailed` here still treats every failed open alike, which
-remains a sound picture of the one cause that still stops the daemon
-(`OpenFailure::kNoDevice`); `DaemonControl::OnOpenFailed` now only calls
-`Fail` for that cause, leaving a denied permission or a failed start to
-`CameraController`'s own retry, specified and proved one level down in
-`specs/CameraLifecycle.tla`, where the task asked this retry to be
-modeled. This is a known gap in this spec's own coverage, not a silent
-one: `daemon_control_test.cc`'s `ADeniedPermissionDoesNotStopTheDaemon`
-and `AFailedStartDoesNotStopTheDaemon` hold the refinement to the code
-directly, outside the model.
+Finding `GuardStopRevokes = FALSE` now also breaking `ReopenAfterRetire`
+(item 10 of #61, #52) answers a question `Retry`'s own addition raised:
+`OnDeviceBack` guards its own reopen with `~dc.stopping` because
+`DaemonControl` (which it belongs to) knows the daemon is stopping, but
+`Retry` is `CameraController`'s own method, scheduled by itself
+(`src/camera_controller.cc`'s `schedule_retry_`) rather than routed
+through `DaemonControl`, so it has no such flag to check and depends
+entirely on `OpenIf`'s existing consent check — exactly the one
+`GuardStopRevokes` protects. The model was briefly, mistakenly given
+`Retry` an `~dc.stopping` guard of its own to "fix" this, which `CHECK_DEADLOCK
+FALSE`'s sibling rule for every other action (none may fire once
+`dc.exited`) then caught as the real miss: `Retry` and `ToggleCanStart`
+had no `~dc.exited` guard at all, so `ExitClean` failed even with every
+other guard on, once `Retry` fired after the daemon had already exited.
+Both omissions are fixed; the surviving, correct finding is that
+`Retry`'s safety after a stop rests on `GuardStopRevokes` alone, which the
+table above now says.
 
 The same mutations, made to the code, fail the tests that stand for the
 properties they break:
@@ -145,9 +162,11 @@ properties they break:
 | `OnClosed` counts the camera closed before the retirement | `ReopenAfterRetireTest.AClosedCameraCountsOnlyOnceTheModelIsGone`, and two others |
 | A device coming back is not deferred | `ReopenAfterRetireTest.ADeviceComingBackWaitsForTheRetirement` |
 | Every `Opened` creates a model | `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`, and two others |
-| A failed open does not stop the daemon | `StopEndsTest.ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
+| A camera with no device to use does not stop the daemon | `StopEndsTest.ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
 | A failure exits as a success | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure`, `ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
 | Every join or every leave changes the subscription (`ApprovedFeed`) | `SubscriptionMatchesTest.OnlyTheFirstJoinAndTheLastLeaveCount` |
+| A denied permission or a failed start stops the daemon (#52) | `StopEndsTest.ADeniedPermissionDoesNotStopTheDaemon`, `AFailedStartDoesNotStopTheDaemon` |
+| `CameraController::OnOpenFailed` treats every reason as `kNoDevice`, or `Retry` does not clear `blocked_` | `RetriesTest` in `test/camera_controller_test.cc` (the same rows `CameraLifecycle`'s own table lists) |
 
 The model does not cover the OS camera itself, which `CameraLifecycle`
 models, nor the secrecy of the token files, which only file permissions
