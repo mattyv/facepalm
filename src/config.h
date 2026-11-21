@@ -37,6 +37,10 @@ struct Config {
   static constexpr float kDefaultScreenContextOtherScreenDegrees = 7.5F;
 
   int frames_per_second = kDefaultFramesPerSecond;
+  // The chosen camera's stable ID (CameraDevice::id), or empty for the
+  // default: the built-in camera, never a Continuity Camera or other
+  // external device chosen silently (item 10 of #61, #13).
+  std::string camera_device_id;
   bool head_pose_enabled = true;
   bool gestures_enabled = true;
   float gesture_confidence_threshold = kDefaultGestureConfidenceThreshold;
@@ -61,14 +65,15 @@ struct Config {
 
 // Reads a config file's text: one `name = value` a line, blank lines, and
 // `#` comments. Names are camera.frames_per_second (1 to 60),
-// head_pose.enabled, gestures.enabled, expressions.enabled and
-// looking_away.enabled (true or false), gestures.confidence_threshold (0 to
-// 1), expressions.smallest_rise (0 to 1), expressions.spreads (0 to 100),
-// expressions.hold_ms (a whole number from 0 to 5000),
-// expressions.pose_degrees (0 to 180), expressions.pose_range (0 to 180),
-// expressions.settle_ms (a whole number from 0 to 5000),
-// looking_away.degrees (0 to 180), looking_away.hold_ms (a whole number
-// from 0 to 10000), screen_context.enabled,
+// camera.device_id (any text, the chosen camera's stable ID from the
+// `cameras` protocol line, or blank for the default), head_pose.enabled,
+// gestures.enabled, expressions.enabled and looking_away.enabled (true or
+// false), gestures.confidence_threshold (0 to 1), expressions.smallest_rise
+// (0 to 1), expressions.spreads (0 to 100), expressions.hold_ms (a whole
+// number from 0 to 5000), expressions.pose_degrees (0 to 180),
+// expressions.pose_range (0 to 180), expressions.settle_ms (a whole number
+// from 0 to 5000), looking_away.degrees (0 to 180), looking_away.hold_ms (a
+// whole number from 0 to 10000), screen_context.enabled,
 // screen_context.window_titles_enabled (true or false), and
 // screen_context.other_screen_degrees (0 to 180). Returns the config, or
 // nothing with `error` naming the line, for an unknown name, a bad value, a

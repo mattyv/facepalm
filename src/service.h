@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "src/calibration.h"
+#include "src/camera_directory.h"
 #include "src/feed.h"
 #include "src/protocol.h"
 
@@ -60,11 +61,14 @@ class Approvals {
 // "calibrate" request (specs/Calibration.tla, item 12 of #61) goes to
 // `calibration` instead, when the service is given one: a nullptr refuses
 // every calibrate request, which lets every existing caller build a
-// Service unchanged.
+// Service unchanged. Likewise, a "cameras" request (item 10 of #61, #13)
+// goes to `cameras` when given one, independent of the camera queue
+// (CameraDirectory's own contract), answered with no cameras when not.
 class Service {
  public:
   Service(std::unique_ptr<Listener> listener, Feed& feed, Approvals& approvals,
-          CalibrationController* calibration = nullptr);
+          CalibrationController* calibration = nullptr,
+          CameraDirectory* cameras = nullptr);
   ~Service();
   Service(const Service&) = delete;
   Service& operator=(const Service&) = delete;
@@ -105,6 +109,7 @@ class Service {
   Feed& feed_;
   Approvals& approvals_;
   CalibrationController* calibration_;
+  CameraDirectory* cameras_;
   std::mutex mutex_;
   bool stopping_ = false;
   std::list<Connection> connections_;

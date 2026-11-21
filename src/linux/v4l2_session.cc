@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,37 @@ constexpr int kHeight = 480;
 constexpr int kMaxDimension = 4096;
 constexpr std::size_t kMaxImage = std::size_t{64} * 1024 * 1024;
 constexpr std::uint8_t kOpaqueAlpha = 255;
+// /dev/video0 through /dev/video3 (item 10 of #61): most systems put each
+// camera on a low-numbered node, and opendir has no seam for a test to
+// replace, as v4l2_open, v4l2_ioctl and v4l2_close do, so this probes a
+// bounded range of names instead of listing the directory.
+constexpr int kProbedNodes = 4;
+
+// A v4l2_capability's own bus_info identifies the physical device: it
+// stays the same across a reboot, unlike the node number a camera happens
+// to land on. "platform:" names one wired directly to the board, as
+// opposed to "usb-..." for one plugged in (#13).
+bool IsBuiltIn(const std::string& bus_info) {
+  return bus_info.rfind("platform:", 0) == 0;
+}
+
+// Queries `fd`'s capabilities as a CameraDevice, or nothing when the ioctl
+// fails.
+std::optional<CameraDevice> Queried(int fd) {
+  v4l2_capability cap{};
+  if (v4l2_ioctl(fd, VIDIOC_QUERYCAP, &cap) != 0) {
+    return std::nullopt;
+  }
+  const std::string bus_info(reinterpret_cast<const char*>(cap.bus_info));
+  return CameraDevice{
+      .id = bus_info,
+      .name = std::string(reinterpret_cast<const char*>(cap.card)),
+      .built_in = IsBuiltIn(bus_info),
+  };
+}
+
+// The path of the node at `index`, from 0 to kProbedNodes - 1.
+std::string NodePath(int index) { return "/dev/video" + std::to_string(index); }
 
 void CopyBgra(const v4l2_pix_format& format, const std::uint8_t* rgb,
               std::uint8_t* bgra) {
@@ -37,10 +69,10 @@ void CopyBgra(const v4l2_pix_format& format, const std::uint8_t* rgb,
 
 }  // namespace
 
-V4l2Session::V4l2Session(std::string device,
+V4l2Session::V4l2Session(std::string device_id,
                          std::function<void(const Frame&)> on_frame,
                          std::function<void()> on_session_failed)
-    : device_(std::move(device)),
+    : device_id_(std::move(device_id)),
       on_frame_(std::move(on_frame)),
       on_session_failed_(std::move(on_session_failed)) {}
 
@@ -55,13 +87,52 @@ void V4l2Session::RequestPermission(std::function<void(bool)> done) {
   done(true);
 }
 
+// Probes each node in turn (item 10 of #61), keeping the first one open
+// whose capabilities match the configured choice: the first built-in
+// camera found, with none chosen, or the one whose id equals device_id_.
+// A node that opens but does not match, or does not query, is closed
+// before the next is tried.
 std::optional<std::string> V4l2Session::Configure() {
   Stop();
-  fd_ = v4l2_open(device_.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
-  return fd_ >= 0 ? std::optional(device_) : std::nullopt;
+  for (int index = 0; index < kProbedNodes; ++index) {
+    const int fd =
+        v4l2_open(NodePath(index).c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+      continue;
+    }
+    const std::optional<CameraDevice> device = Queried(fd);
+    const bool matches =
+        device.has_value() &&
+        (device_id_.empty() ? device->built_in : device->id == device_id_);
+    if (matches) {
+      fd_ = fd;
+      return device->id;
+    }
+    v4l2_close(fd);
+  }
+  return std::nullopt;
 }
 
 CaptureSession::FrameRates V4l2Session::SupportedFrameRates() { return {}; }
+
+// Every camera V4l2Session can discover right now (item 10 of #61),
+// independent of which one is configured; safe to call from any thread, as
+// CameraDirectory documents.
+std::vector<CameraDevice> V4l2Session::List() {
+  std::vector<CameraDevice> devices;
+  for (int index = 0; index < kProbedNodes; ++index) {
+    const int fd =
+        v4l2_open(NodePath(index).c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+      continue;
+    }
+    if (const std::optional<CameraDevice> device = Queried(fd)) {
+      devices.push_back(*device);
+    }
+    v4l2_close(fd);
+  }
+  return devices;
+}
 
 // CaptureSession::Start's own signature, shared with the macOS session.
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)

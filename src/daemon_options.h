@@ -18,11 +18,16 @@ namespace facepalm {
 //       [--status PATH]
 //   facepalm-daemon approve NAME [--clients DIRECTORY]
 //   facepalm-daemon revoke NAME [--clients DIRECTORY]
+//   facepalm-daemon cameras
 //
 // The socket, the clients directory and the status file default to the
-// person's UserPaths.
+// person's UserPaths. `cameras` (item 10 of #61, #13) takes no options: it
+// lists the cameras available right now, one a line (id, name, built in,
+// tab-separated), needing no running daemon or approval, so Settings can
+// offer a picker whether or not Facepalm is on. An approved client asks
+// the same of a running daemon with the protocol's `cameras` line.
 struct DaemonOptions {
-  enum class Command : std::uint8_t { kRun, kApprove, kRevoke };
+  enum class Command : std::uint8_t { kRun, kApprove, kRevoke, kCameras };
   Command command = Command::kRun;
   std::string client;  // The client to approve or revoke.
   bool consent = false;
@@ -41,7 +46,8 @@ inline constexpr std::string_view kDaemonUsage =
     "         [--clients DIRECTORY] [--config PATH] [--feelings-file PATH]\n"
     "         [--status PATH]\n"
     "       facepalm-daemon approve NAME [--clients DIRECTORY]\n"
-    "       facepalm-daemon revoke NAME [--clients DIRECTORY]\n";
+    "       facepalm-daemon revoke NAME [--clients DIRECTORY]\n"
+    "       facepalm-daemon cameras\n";
 
 // The options `arguments` give, after the program's name, or nullopt when
 // they are not one of kDaemonUsage's forms. `defaults` are the person's

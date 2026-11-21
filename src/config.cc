@@ -71,6 +71,17 @@ std::optional<std::string> SetFramesPerSecond(std::string_view value,
   return std::nullopt;
 }
 
+// Sets camera.device_id from `value` (item 10 of #61, #13): any text, a
+// stable ID some CaptureSession may one day report, which this file does
+// not know the shape of; blank, the default, chooses the built-in camera.
+// Settings (`UpdateSettingsDocument`) writes every setting it manages,
+// including this one when the default is chosen, so blank has to parse.
+std::optional<std::string> SetCameraDeviceId(std::string_view value,
+                                             Config& config) {
+  config.camera_device_id = std::string(value);
+  return std::nullopt;
+}
+
 // Sets the on/off setting `setting.name` names from `setting.value`, or
 // returns why it cannot. `setting.name` is one of head_pose.enabled,
 // gestures.enabled, expressions.enabled, looking_away.enabled,
@@ -228,6 +239,9 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   const std::string_view value = setting.value;
   if (name == "camera.frames_per_second") {
     return SetFramesPerSecond(value, config);
+  }
+  if (name == "camera.device_id") {
+    return SetCameraDeviceId(value, config);
   }
   if (name == "head_pose.enabled" || name == "gestures.enabled" ||
       name == "expressions.enabled" || name == "looking_away.enabled" ||

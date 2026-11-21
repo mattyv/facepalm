@@ -15,6 +15,7 @@ TEST(SettingsDocumentTest, PreservesOtherSettingsAndComments) {
       "# Personal settings\n camera.frames_per_second = 12 # camera\n"
       "gestures.enabled = false # hands off\nexpressions.spreads = 5\n",
       {.frames_per_second = 20,
+       .camera_device_id = "",
        .gestures_enabled = true,
        .expressions_enabled = false,
        .expression_spreads = "5"},
@@ -38,6 +39,7 @@ TEST(SettingsDocumentTest, ReplacesUncommentedSettings) {
       "head_pose.enabled = false\ngestures.enabled = true\nexpressions.enabled "
       "= false\n",
       {.frames_per_second = 15,
+       .camera_device_id = "",
        .gestures_enabled = false,
        .expressions_enabled = true},
       error);
@@ -84,6 +86,27 @@ TEST(SettingsDocumentTest, LookingAwayAndScreenContextDefaultOn) {
   EXPECT_FALSE(config.value().screen_context_window_titles_enabled);
 }
 
+// item 10 of #61, #13.
+TEST(SettingsDocumentTest, UpdatesTheChosenCamera) {
+  std::string error;
+  MenuSettings settings;
+  settings.camera_device_id = "usb-0000:00:14.0-1";
+  const auto updated = UpdateSettingsDocument("# camera\n", settings, error);
+  ASSERT_TRUE(updated.has_value());
+  const auto config = ParseConfig(updated.value(), error);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config.value().camera_device_id, "usb-0000:00:14.0-1");
+}
+
+TEST(SettingsDocumentTest, TheChosenCameraDefaultsToBlank) {
+  std::string error;
+  const auto updated = UpdateSettingsDocument("", {}, error);
+  ASSERT_TRUE(updated.has_value());
+  const auto config = ParseConfig(updated.value(), error);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_EQ(config.value().camera_device_id, "");
+}
+
 TEST(SettingsDocumentTest, UpdatesAndValidatesAdvancedTuning) {
   std::string error;
   MenuSettings settings;
@@ -115,8 +138,10 @@ TEST(SettingsDocumentTest, RejectsInvalidExistingDocumentAndFrameRate) {
   std::string error;
   EXPECT_FALSE(UpdateSettingsDocument("unknown.setting = true\n", {}, error));
   EXPECT_FALSE(error.empty());
-  EXPECT_FALSE(UpdateSettingsDocument("", {.frames_per_second = 0}, error));
-  EXPECT_FALSE(UpdateSettingsDocument("", {.frames_per_second = 61}, error));
+  EXPECT_FALSE(UpdateSettingsDocument(
+      "", {.frames_per_second = 0, .camera_device_id = ""}, error));
+  EXPECT_FALSE(UpdateSettingsDocument(
+      "", {.frames_per_second = 61, .camera_device_id = ""}, error));
 }
 
 TEST(SettingsDocumentTest, RejectsEmbeddedNulWithoutDroppingTrailingContent) {

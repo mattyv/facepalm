@@ -4,11 +4,11 @@
 #include <condition_variable>
 #include <mutex>
 #include <queue>
-#include <thread>
 #else
 #include <dispatch/dispatch.h>
 #endif
 
+#include <chrono>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -21,6 +21,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "src/approved_feed.h"
@@ -59,6 +60,26 @@
 namespace facepalm {
 namespace {
 constexpr int kFeedCapacity = 100;
+// How long to wait before retrying a denied permission or a failed start
+// (#52, item 10 of #61): a fixed interval, decided over a backoff that
+// grows, since the usual cause (the person has not yet answered a System
+// Settings prompt, or opened it) does not get more likely to clear
+// sooner the fewer times it is checked, and a fixed interval is simpler
+// to explain and to test.
+constexpr std::chrono::seconds kRetryInterval{5};
+
+// Schedules a retry on `control`, `kRetryInterval` later, on a thread of
+// its own: the portable way to delay a task when the queue underneath
+// (dispatch on macOS, the SerialQueue above on Linux) has no delay of its
+// own to ask for.
+CameraController::RetrySchedule RetryAfter(Post control) {
+  return [control](std::function<void()> retry) {
+    std::thread([control, retry = std::move(retry)] {
+      std::this_thread::sleep_for(kRetryInterval);
+      control(retry);
+    }).detach();
+  };
+}
 #ifdef __linux__
 // The queue processes effects serially just like the macOS dispatch queues.
 class SerialQueue {
@@ -130,8 +151,7 @@ class Engine : public DaemonController, public DaemonPipeline {
          std::string model, Config config,
          std::unique_ptr<FeelingStore> feelings,
          const CalibrationProfile* calibration_profile, Post control,
-         Post camera, Post inference, [[maybe_unused]] std::string device = {},
-         std::string status_path = {})
+         Post camera, Post inference, std::string status_path = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
@@ -181,7 +201,8 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
             }),
-        service_(std::move(listener), approved_, approvals),
+        service_(std::move(listener), approved_, approvals,
+                 /*calibration=*/nullptr, &capture_),
         control_(
             *this, *this, [this] { service_.Stop(); },
             [](bool failed) {
@@ -193,11 +214,12 @@ class Engine : public DaemonController, public DaemonPipeline {
             }),
 #ifdef __linux__
         capture_(
-            std::move(device),
+            config_.camera_device_id,
             [this](const Frame& frame) { pipeline_.OnFrame(frame); },
             [this] { camera_.OnSessionFailed(); }),
 #else
         capture_(
+            config_.camera_device_id,
             [this](const Frame& frame) { pipeline_.OnFrame(frame); },
             [this] { camera_.OnSessionFailed(); },
             [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
@@ -205,7 +227,7 @@ class Engine : public DaemonController, public DaemonPipeline {
 #endif
         camera_(capture_, control_, std::move(camera), control_queue_,
                 config.frames_per_second),
-        controller_(camera_, clients_, true),
+        controller_(camera_, clients_, true, RetryAfter(control_queue_)),
         pipeline_(
             controller_, control_queue_, std::move(inference),
             FramePipeline::Callbacks{
@@ -233,7 +255,9 @@ class Engine : public DaemonController, public DaemonPipeline {
   void Leave() override { controller_.Leave("approved"); }
   void Revoke() override { controller_.RevokeConsent(); }
   void Opened() override { controller_.OnOpened(); }
-  void OpenFailed() override { controller_.OnOpenFailed(); }
+  void OpenFailed(OpenFailure reason) override {
+    controller_.OnOpenFailed(reason);
+  }
   void Closed() override { controller_.OnClosed(); }
   void DeviceLost() override { controller_.OnDeviceLost(); }
   void DeviceBack() override { controller_.OnDeviceBack(); }
@@ -322,6 +346,29 @@ int ChangeApproval(const DaemonOptions& options) {
   return 0;
 }
 
+// Lists the cameras available now, for the cameras command (item 10 of
+// #61, #13): a throwaway capture session, just for CaptureSession::List,
+// which needs no running daemon, socket or approval, so Settings can
+// offer a picker whether or not Facepalm is on. One line a camera: its
+// id, name and whether it is built in, tab-separated, so the menu apps
+// parse it with a plain split rather than a JSON reader this codebase
+// otherwise has no reason to carry.
+int ListCameras() {
+#ifdef __linux__
+  V4l2Session capture(
+      /*device_id=*/{}, [](const Frame&) {}, [] {});
+#else
+  AvFoundationSession capture(
+      /*device_id=*/{}, [](const Frame&) {}, [] {}, [](const std::string&) {},
+      [](const std::string&) {});
+#endif
+  for (const CameraDevice& device : capture.List()) {
+    std::printf("%s\t%s\t%d\n", device.id.c_str(), device.name.c_str(),
+                device.built_in ? 1 : 0);
+  }
+  return 0;
+}
+
 }  // namespace
 }  // namespace facepalm
 
@@ -336,6 +383,9 @@ int main(int argc, char** argv) {
     std::fwrite(facepalm::kDaemonUsage.data(), 1, facepalm::kDaemonUsage.size(),
                 stderr);
     return 2;
+  }
+  if (options->command == facepalm::DaemonOptions::Command::kCameras) {
+    return facepalm::ListCameras();
   }
   if (options->command != facepalm::DaemonOptions::Command::kRun) {
     return facepalm::ChangeApproval(*options);
@@ -417,12 +467,13 @@ int main(int argc, char** argv) {
   facepalm::SerialQueue control;
   facepalm::SerialQueue camera;
   facepalm::SerialQueue inference;
-  const char* device = std::getenv("FACEPALM_CAMERA_DEVICE");
+  // The chosen camera (item 10 of #61, #13) comes from Config's
+  // camera.device_id, not an environment variable: FACEPALM_CAMERA_DEVICE
+  // is retired.
   facepalm::Engine engine(std::move(listener), approvals, options->model,
                           config, std::move(feelings),
                           calibration_profile ? &*calibration_profile : nullptr,
                           control.Poster(), camera.Poster(), inference.Poster(),
-                          device != nullptr ? device : "/dev/video0",
                           options->status);
   engine.Start();
   int signal_number = 0;
@@ -448,7 +499,7 @@ int main(int argc, char** argv) {
           dispatch_queue_create("facepalm.camera", DISPATCH_QUEUE_SERIAL)),
       facepalm::OnQueue(
           dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)),
-      /*device=*/{}, options->status);
+      options->status);
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
     dispatch_source_t source =

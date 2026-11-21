@@ -197,6 +197,9 @@ std::optional<Request> Parse(std::string_view line, std::string& error) {
   if (verb == "calibrate") {
     return ParseCalibrate(words, error);
   }
+  if (verb == "cameras" && words.size() == 1) {
+    return CamerasRequest{};
+  }
   error = "unknown request";
   return std::nullopt;
 }
@@ -237,6 +240,19 @@ std::string DeliveryJson(const Feed::Delivery& delivery) {
 
 std::string ErrorJson(std::string_view message) {
   return R"({"error":)" + Quoted(message) + "}";
+}
+
+std::string CamerasJson(const std::vector<CameraDevice>& devices) {
+  std::string json = R"({"ok":true,"cameras":[)";
+  for (const CameraDevice& device : devices) {
+    if (json.back() != '[') {
+      json += ',';
+    }
+    json += R"({"id":)" + Quoted(device.id) + R"(,"name":)" +
+            Quoted(device.name) + R"(,"built_in":)" +
+            (device.built_in ? "true" : "false") + '}';
+  }
+  return json + "]}";
 }
 
 std::string CalibrationStatusJson(const CalibrationController::Status& status) {

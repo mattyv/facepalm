@@ -1,10 +1,17 @@
 # Linux camera daemon development build
 
 Facepalm uses the existing consent, camera, analysis, and MCP service code
-with a single-plane Video4Linux device on Linux. The default camera is
-`/dev/video0`. Set `FACEPALM_CAMERA_DEVICE` to select another device. The
-Debian desktop package contains the tray app and gesture replay. Build the
-camera service separately using the native MediaPipe dependencies below.
+with a single-plane Video4Linux device on Linux. The chosen camera is
+`Config`'s `camera.device_id` (item 10 of #61, #13), in
+`~/.config/facepalm/facepalm.conf`: blank for the default, the first
+built-in camera found by probing `/dev/video0` through `/dev/video3`
+(`V4l2Session::List`, and the protocol's `cameras` line); a chosen id is
+matched by the device's own `v4l2_capability.bus_info`, which stays the
+same across a reboot, unlike the node it happens to land on.
+`FACEPALM_CAMERA_DEVICE`, which named a device path directly, is retired.
+The Debian desktop package contains the tray app and gesture replay. Build
+the camera service separately using the native MediaPipe dependencies
+below.
 
 ## Build
 

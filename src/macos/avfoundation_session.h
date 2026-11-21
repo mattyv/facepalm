@@ -6,7 +6,9 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "src/camera_directory.h"
 #include "src/frame.h"
 #include "src/session_camera.h"
 
@@ -20,9 +22,18 @@ namespace facepalm {
 // Frames go to `on_frame` on a capture queue of its own. A runtime error calls
 // `on_session_failed`, and any camera disconnecting or connecting calls
 // `on_disconnected` or `on_connected` with its unique ID, on any thread.
+//
+// `device_id` is the person's choice (item 10 of #61, #13): empty for the
+// default, which Configure resolves to the built-in camera specifically,
+// by its AVCaptureDeviceTypeBuiltInWideAngleCamera device type, never a
+// Continuity Camera or other external device that
+// `+defaultDeviceWithMediaType:` might otherwise hand back. A non-empty
+// `device_id` is matched by AVCaptureDevice's own uniqueID, built-in or
+// not, across every discoverable type.
 class AvFoundationSession : public CaptureSession {
  public:
-  AvFoundationSession(std::function<void(const Frame&)> on_frame,
+  AvFoundationSession(std::string device_id,
+                      std::function<void(const Frame&)> on_frame,
                       std::function<void()> on_session_failed,
                       std::function<void(const std::string&)> on_disconnected,
                       std::function<void(const std::string&)> on_connected);
@@ -36,9 +47,11 @@ class AvFoundationSession : public CaptureSession {
   FrameRates SupportedFrameRates() override;
   bool Start(int frames_per_second, std::uint64_t attempt) override;
   void Stop() override;
+  std::vector<CameraDevice> List() override;
 
  private:
   struct Impl;
+  std::string device_id_;
   std::unique_ptr<Impl> impl_;
 };
 
