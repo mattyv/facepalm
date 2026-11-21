@@ -50,7 +50,9 @@ made since, each with its reason, are in the
     in `src/expressions`, is the mapping from MediaPipe's blendshape scores
     to expressions, judged against the person's own resting face. Its
     defaults were tuned on one person's 80-second recording; the frown
-    (brows down) was the weakest of the five to read reliably.
+    (brows down) was the weakest of the five to read reliably. A face whose
+    pose is degenerate is skipped, as a frame with no face, so that it
+    cannot spoil the resting pose that gates out head movement (#79).
 -   `src/look_away_reader`, `src/look_away`: a `FaceReader` that reacts
     `{"gesture":"looking_away"}` once each time the head stays away from its
     resting pose (#35): yaw or pitch more than 15 degrees from it for a
