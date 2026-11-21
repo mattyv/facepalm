@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace facepalm {
 namespace {
@@ -60,16 +61,22 @@ std::unique_ptr<UnixListener> UnixListener::Create(const std::string& path,
     error = "facepalm is already running at " + path;
     return nullptr;
   }
+  struct stat existing{};
+  if (lstat(path.c_str(), &existing) == 0 && !S_ISSOCK(existing.st_mode)) {
+    error = path + " is not a socket, so facepalm leaves it alone";
+    return nullptr;
+  }
   unlink(path.c_str());  // A socket file left by a facepalm that is gone.
   const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
   std::array<int, 2> wake{-1, -1};
+  struct stat bound{};
   // Every step runs, and one check covers them all: none of the later ones
   // fails on a socket path that bound, and a test cannot make them fail.
   // Each returns 0, or -1 on failure.
   const int status =
       bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) +
-      chmod(path.c_str(), kOwnerOnly) + listen(fd, kBacklog) +
-      pipe(wake.data());
+      chmod(path.c_str(), kOwnerOnly) + lstat(path.c_str(), &bound) +
+      listen(fd, kBacklog) + pipe(wake.data());
   if (status != 0) {
     error = "cannot listen at " + path + ": " + std::strerror(errno);
     close(fd);
@@ -77,11 +84,14 @@ std::unique_ptr<UnixListener> UnixListener::Create(const std::string& path,
     close(wake[1]);
     return nullptr;
   }
-  return std::unique_ptr<UnixListener>(new UnixListener(path, fd, wake));
+  return std::unique_ptr<UnixListener>(new UnixListener(path, fd, wake, bound));
 }
 
-UnixListener::UnixListener(std::string path, int fd, std::array<int, 2> wake)
+UnixListener::UnixListener(std::string path, int fd, std::array<int, 2> wake,
+                           const struct stat& bound)
     : path_(std::move(path)),
+      device_(bound.st_dev),
+      inode_(bound.st_ino),
       fd_(fd),
       wake_read_(wake[0]),
       wake_write_(wake[1]) {}
@@ -119,7 +129,13 @@ void UnixListener::Close() {
   // A full pipe is already readable, so a failed write changes nothing.
   const ssize_t written = write(wake_write_, &wake, 1);
   static_cast<void>(written);
-  unlink(path_.c_str());
+  // Only the socket this listener bound: another facepalm may own the path
+  // by now.
+  struct stat current{};
+  if (lstat(path_.c_str(), &current) == 0 &&
+      std::tie(current.st_dev, current.st_ino) == std::tie(device_, inode_)) {
+    unlink(path_.c_str());
+  }
 }
 
 UnixStream::UnixStream(int fd) : fd_(fd) {

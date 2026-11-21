@@ -1,6 +1,8 @@
 #ifndef FACEPALM_SRC_UNIX_SOCKET_H_
 #define FACEPALM_SRC_UNIX_SOCKET_H_
 
+#include <sys/stat.h>
+
 #include <array>
 #include <memory>
 #include <optional>
@@ -19,7 +21,8 @@ class UnixListener : public Listener {
  public:
   // Listens at `path`, replacing a socket file left behind by a facepalm
   // that is no longer running. nullptr, with `error` saying why, when
-  // another is still listening there or the socket cannot be made.
+  // another is still listening there, when something other than a socket
+  // is there, which it leaves alone, or when the socket cannot be made.
   static std::unique_ptr<UnixListener> Create(const std::string& path,
                                               std::string& error);
   ~UnixListener() override;
@@ -27,13 +30,17 @@ class UnixListener : public Listener {
   UnixListener& operator=(const UnixListener&) = delete;
 
   std::unique_ptr<Stream> Accept() override;
-  // Ends Accept, and removes the socket file.
+  // Ends Accept, and removes the socket file if it is still the one this
+  // listener made.
   void Close() override;
 
  private:
-  UnixListener(std::string path, int fd, std::array<int, 2> wake);
+  UnixListener(std::string path, int fd, std::array<int, 2> wake,
+               const struct stat& bound);
 
   const std::string path_;
+  const dev_t device_;  // Which file Close may remove.
+  const ino_t inode_;
   const int fd_;
   const int wake_read_;  // Close writes to wake_write_ to end a poll.
   const int wake_write_;
