@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, truncate } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -10,11 +10,11 @@ import test from 'node:test';
 const adapter = process.env.FACEPALM_MCP_ADAPTER ?? 'mcp/main.js';
 const fixturePath = process.env.MCP_FIXTURE ?? './build/mcp_service_fixture';
 
-test('MCP reads, rates and reads a beat from the real synthetic service per session', { timeout: 15000 }, async (t) => {
+test('MCP reads, reads a beat and tells its feeling to the real synthetic service per session', { timeout: 15000 }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'fp-mcp-'));
   const socketPath = path.join(dir, 's');
-  const feedbackPath = path.join(dir, 'ratings.jsonl');
-  const fixture = spawn(fixturePath, [socketPath, feedbackPath]);
+  const feelingsPath = path.join(dir, 'state', 'feelings');
+  const fixture = spawn(fixturePath, [socketPath, feelingsPath]);
   const fixtureExited = once(fixture, 'exit');
   const children = [];
   const lines = createInterface({ input: fixture.stdout })[Symbol.asyncIterator]();
@@ -53,8 +53,8 @@ test('MCP reads, rates and reads a beat from the real synthetic service per sess
   const wait = (session, timeout_ms) => session.call('tools/call', {
     name: 'wait_for_reaction', arguments: { timeout_ms },
   });
-  const rate = (session, id, score) => session.call('tools/call', {
-    name: 'rate_reaction', arguments: { id, score },
+  const tell = (session, id, feeling) => session.call('tools/call', {
+    name: 'tell_feeling', arguments: { id, feeling },
   });
   const unpack = (result) => JSON.parse(result.content[0].text);
   assert.deepEqual(unpack(await wait(first, 0)).readings, []);
@@ -68,21 +68,6 @@ test('MCP reads, rates and reads a beat from the real synthetic service per sess
   assert.deepEqual(delivery.readings[0].detail, { gesture: 'nod' });
   assert.equal(delivery.readings[0].published_at_ms, 1763658000123);
   assert.deepEqual(unpack(await wait(first, 0)).readings, []);
-  assert.notEqual((await rate(first, 1, 5)).isError, true);
-  assert.match((await lines.next()).value, /^rated \S+ 1 5$/);
-  const records = (await readFile(feedbackPath, 'utf8')).trim().split('\n').map(JSON.parse);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].id, 1);
-  assert.equal(records[0].score, 5);
-  assert.equal(records[0].summary, 'synthetic nod');
-  assert.equal(records[0].published_at_ms, 1763658000123);
-  assert.equal(typeof records[0].rated_at_ms, 'number');
-  assert.equal(records[0].version, 1);
-  assert.deepEqual(Object.keys(records[0]).sort(),
-    ['id', 'published_at_ms', 'rated_at_ms', 'score', 'summary', 'version']);
-  await truncate(feedbackPath, 10 * 1024 * 1024);
-  assert.equal((await rate(first, 1, 4)).isError, true);
-  assert.equal((await rate(first, 999, 5)).isError, true);
 
   // A beat: the nod made inside its window is read as agreement.
   const beat = first.call('tools/call', {
@@ -93,16 +78,25 @@ test('MCP reads, rates and reads a beat from the real synthetic service per sess
   assert.equal((await lines.next()).value, 'reacted 2');
   const beaten = unpack(await beat);
   assert.deepEqual(beaten.readings.map((reading) => reading.id), [2]);
-  assert.deepEqual(beaten.interpretation, { id: 1, feeling: 'agreement', beat: 'question' });
+  const feelings = ['agreement', 'disagreement', 'engagement', 'annoyance', 'confused', 'unknown'];
+  assert.deepEqual(beaten.interpretation, { id: 1, feeling: 'agreement', beat: 'question', feelings });
+
+  // The person says how they felt: taken once, and kept in their own file.
+  assert.notEqual((await tell(first, 1, 'engagement')).isError, true);
+  assert.equal((await tell(first, 1, 'engagement')).isError, true);
+  assert.equal((await tell(first, 999, 'engagement')).isError, true);
+  assert.equal((await tell(first, 1, 'happy')).isError, true);
+  assert.equal(await readFile(feelingsPath, 'utf8'), 'facepalm feelings 1\nnod question engagement 1\n');
+  assert.equal((await stat(feelingsPath)).mode & 0o777, 0o600);
   const quiet = unpack(await first.call('tools/call', {
     name: 'wait_for_reaction', arguments: { beat: 'proposal', timeout_ms: 1 },
   }));
   assert.equal((await lines.next()).value, 'beat');
-  assert.deepEqual(quiet.interpretation, { id: 2, feeling: 'unknown', beat: 'proposal' });
+  assert.deepEqual(quiet.interpretation, { id: 2, feeling: 'unknown', beat: 'proposal', feelings });
 
   const second = await session();
   assert.deepEqual(unpack(await wait(second, 0)).readings, []);
-  assert.equal((await rate(second, 1, 4)).isError, true);
+  assert.equal((await tell(second, 2, 'confused')).isError, true);
   first.child.stdin.end();
   second.child.stdin.end();
   assert.deepEqual(await Promise.all([first.exited, second.exited]), [[0, null], [0, null]]);

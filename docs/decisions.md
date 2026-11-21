@@ -5,6 +5,49 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: The feeling the person picks tunes the next read, in the daemon
+
+-   **Decision:** a client sends `feel <interpretation-id> <feeling>` when
+    the person says how they really felt at a beat. The service takes it only
+    for an interpretation it gave that connection, once, within five minutes,
+    and only a feeling from `src/feelings.h`; it answers `{"ok":true}` or an
+    error. `reset feelings` forgets every pick. Each beat's interpretation
+    also lists every feeling, so clients take the names from the service. The
+    daemon counts picks of each feeling for each reaction and kind of beat, in
+    one file private to the person (`facepalm/feelings` in `$XDG_CONFIG_HOME`
+    or `~/.config`, or `--feelings-file`), which it alone writes: it holds a
+    lock file while open, saves one pick at a time by renaming a synced
+    temporary file over it, and answers ok only once the folder is synced. A
+    feeling picked at least twice and more than half the time is the
+    person's read for that reaction and beat, once a held-out check passes:
+    each pick in turn is held out and read from the others, and those reads
+    must be right more often than the generic rule. Three matching picks are
+    enough. The MCP adapter's `tell_feeling` replaces `rate_reaction`, and
+    `/facepalm:feel` replaces `/facepalm:rate`. `specs/FeelingFeedback.tla`
+    models it.
+-   **Why:** the user chose "pick the feeling" over the 1 to 5 rating, and
+    feelings and their learning in the service, so every client feeds the
+    same corrections (#61). Generic reads first, then light personal tuning
+    (#35): the check keeps a person's picks from changing a read until they
+    would have predicted that person better than the rule.
+-   **Rejected:** the 1 to 5 rating, `rate_reaction`, the ratings file and
+    `specs/RatingPersistence.tla`, which a rating needed. Codex's draft
+    `meaning-model.js`, whose held-out idea this keeps: it learned only
+    agreement and disagreement from nods and shakes, held out the last closed
+    session, which needs a session lifecycle no client has, and compared
+    against the most common label rather than the generic rule; the check
+    here holds out each pick, so plain counts suffice. A machine-learning
+    framework, which a few counts do not need. Keeping summaries, reading IDs
+    or times in the file.
+-   **Cost:** picks never fade; a reset clears them all. A beat with reactions
+    of more than one kind, or with a dropped reading, takes a feeling but
+    teaches nothing, since it cannot say which reaction it was about. A frown
+    already reads as confused, so picking confused for it changes nothing. A
+    save whose folder sync fails is answered with an error, yet its pick is in
+    the file and is read. One daemon at a time can open the file.
+-   **Evidence:** [#35](https://github.com/mattyv/facepalm/issues/35),
+    [#61](https://github.com/mattyv/facepalm/issues/61).
+
 ## 2026-11-21: Remove the Linux ELF build of the MediaPipe shim
 
 -   **Decision:** remove the Bazel `libfacepalm_mediapipe.so` target, its
@@ -263,6 +306,9 @@ Replaced by "Remove the Linux ELF build of the MediaPipe shim" (2026-11-21).
 
 ## 2026-11-20: Store feedback only when explicitly requested
 
+Replaced by "The feeling the person picks tunes the next read, in the daemon"
+(2026-11-21).
+
 -   **Decision:** `--ratings-file` enables a private, single-writer versioned
     JSONL feedback file capped at 10 MiB. A rating succeeds only after its
     record is appended and synced. It records the delivered interpretation,
@@ -459,6 +505,9 @@ settles anywhere" (2026-11-21).
 
 ## 2026-11-18: How reactions reach an agent
 
+Its 1 to 5 rating is replaced by
+"The feeling the person picks tunes the next read, in the daemon" (2026-11-21).
+
 -   **Decision:** facepalm has its own MCP server. Where a client supports
     hooks, reactions are delivered automatically after each agent action; the
     MCP tools are the fallback.
@@ -475,6 +524,10 @@ settles anywhere" (2026-11-21).
 -   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
 
 ## 2026-11-18: Generic readings first, light personal tuning after
+
+Its tuning from ratings is replaced by
+"The feeling the person picks tunes the next read, in the daemon" (2026-11-21):
+the person's picked feelings tune the reads.
 
 -   **Decision:** reactions are read with rules that are the same for
     everyone, and tuned for each person from their ratings.

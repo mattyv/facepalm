@@ -24,17 +24,19 @@ test('tools validate inputs and preserve delivered summaries and details', async
   try {
     const tools = await client.listTools();
     assert.match(tools.tools.find((tool) => tool.name === 'wait_for_reaction').description, /verbatim.*ID/);
-    assert.match(tools.tools.find((tool) => tool.name === 'rate_reaction').description, /five minutes/);
+    assert.match(tools.tools.find((tool) => tool.name === 'tell_feeling').description, /five minutes/);
+    assert.equal(tools.tools.some((tool) => tool.name === 'rate_reaction'), false);
     const result = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
     assert.deepEqual(JSON.parse(result.content[0].text), {
       readings: [{ id: 12, summary: '  A person nodded.  ', detail: { gesture: 'nod' }, published_at_ms: 1763658000123 }], missed: 0,
     });
     assert.deepEqual(commands, ['wait 5000']);
-    const rating = await client.callTool({ name: 'rate_reaction', arguments: { id: 12, score: 5 } });
-    assert.equal(rating.content[0].text, 'Rating accepted.');
-    assert.deepEqual(commands, ['wait 5000', 'rate 12 5']);
-    const invalid = await client.callTool({ name: 'rate_reaction', arguments: { id: 12, score: 6 } });
-    assert.equal(invalid.isError, true);
+    const told = await client.callTool({ name: 'tell_feeling', arguments: { id: 12, feeling: 'annoyance' } });
+    assert.equal(told.content[0].text, 'Feeling taken.');
+    assert.deepEqual(commands, ['wait 5000', 'feel 12 annoyance']);
+    for (const args of [{ id: 12, feeling: 'Annoyed!' }, { id: 0, feeling: 'annoyance' }, { id: 12 }]) {
+      assert.equal((await client.callTool({ name: 'tell_feeling', arguments: args })).isError, true);
+    }
     const tooLong = await client.callTool({ name: 'wait_for_reaction', arguments: { timeout_ms: 60001 } });
     assert.equal(tooLong.isError, true);
     assert.equal(commands.length, 2);
@@ -63,19 +65,26 @@ test('invalid delivery shape closes the session', async () => {
   } finally { await client.close(); await server.close(); }
 });
 
-test('refused rating is an error', async () => {
-  const { server, client } = await connected({ request: async () => ({ error: 'cannot rate that reading' }) });
-  try {
-    const result = await client.callTool({ name: 'rate_reaction', arguments: { id: 4, score: 3 } });
-    assert.equal(result.isError, true);
-  } finally { await client.close(); await server.close(); }
+test('a refused or failed feeling is an error', async () => {
+  for (const request of [async () => ({ error: 'cannot take that feeling' }), async () => { throw new Error('/private/path'); }]) {
+    const { server, client } = await connected({ request });
+    try {
+      const result = await client.callTool({ name: 'tell_feeling', arguments: { id: 4, feeling: 'confused' } });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /did not take that feeling/);
+      assert.doesNotMatch(JSON.stringify(result), /private/);
+    } finally { await client.close(); await server.close(); }
+  }
 });
 
 test('a beat marks the window after a question and returns its interpretation', async () => {
   const commands = [];
   const reply = {
     readings: [{ id: 3, summary: 'Gesture: nod', detail: { gesture: 'nod' } }], missed: 0,
-    interpretation: { id: 1, feeling: 'agreement', beat: 'question' },
+    interpretation: {
+      id: 1, feeling: 'agreement', beat: 'question',
+      feelings: ['agreement', 'disagreement', 'engagement', 'annoyance', 'confused', 'unknown'],
+    },
   };
   const { server, client } = await connected({ request: async (command, signal, timeout) => {
     commands.push([command, timeout]);
@@ -108,7 +117,11 @@ test('a beat outside 1 to 10000 milliseconds or of another kind is refused unsen
 });
 
 test('a beat reply without an interpretation closes the session', async () => {
-  for (const interpretation of [undefined, { id: 1, feeling: 'Agreement!', beat: 'question' }, { id: 0, feeling: 'agreement', beat: 'question' }]) {
+  const feelings = ['agreement', 'unknown'];
+  for (const interpretation of [
+    undefined, { id: 1, feeling: 'Agreement!', beat: 'question', feelings }, { id: 0, feeling: 'agreement', beat: 'question', feelings },
+    { id: 1, feeling: 'agreement', beat: 'question' }, { id: 1, feeling: 'agreement', beat: 'question', feelings: [] },
+  ]) {
     let closed = false;
     const { server, client } = await connected({
       request: async () => ({ readings: [], missed: 0, interpretation }),

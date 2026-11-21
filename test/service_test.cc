@@ -44,9 +44,11 @@ class MockFeed : public Feed {
               (const std::string& client, BeatKind kind,
                std::chrono::milliseconds window),
               (override));
-  MOCK_METHOD(bool, Rate,
-              (const std::string& client, std::int64_t id, int score),
+  MOCK_METHOD(bool, Feel,
+              (const std::string& client, std::int64_t interpretation,
+               Feeling feeling),
               (override));
+  MOCK_METHOD(bool, Reset, (const std::string& client), (override));
 };
 
 // A connection the test writes lines into and reads replies from.
@@ -204,22 +206,40 @@ TEST_F(CanAcceptTest, AClientSaysHelloAndReads) {
   service_.Stop();
 }
 
-TEST_F(CanAcceptTest, AClientWaitsAndRates) {
+TEST_F(CanAcceptTest, AClientWaitsAndSaysHowThePersonFelt) {
   service_.Start();
   EXPECT_CALL(feed_, Wait("agent", std::chrono::milliseconds(2000)))
       .WillOnce(Return(Feed::Delivery{}));
-  EXPECT_CALL(feed_, Rate("agent", 7, 4)).WillOnce(Return(true));
-  EXPECT_CALL(feed_, Rate("agent", 8, 4)).WillOnce(Return(false));
+  EXPECT_CALL(feed_, Feel("agent", 7, Feeling::kAnnoyance))
+      .WillOnce(Return(true));
+  EXPECT_CALL(feed_, Feel("agent", 8, Feeling::kUnknown))
+      .WillOnce(Return(false));
   const auto peer = Named("agent");
 
   peer->Send("wait 2000");
-  peer->Send("rate 7 4");
-  peer->Send("rate 8 4");
+  peer->Send("feel 7 annoyance");
+  peer->Send("feel 8 unknown");
 
   EXPECT_THAT(
       peer->Replies(4),
       ElementsAre(R"({"ok":true})", R"({"readings":[],"missed":0})",
-                  R"({"ok":true})", R"({"error":"cannot rate that reading"})"));
+                  R"({"ok":true})", R"({"error":"cannot take that feeling"})"));
+  service_.Stop();
+}
+
+TEST_F(CanAcceptTest, AClientResetsThePersonsFeelings) {
+  service_.Start();
+  EXPECT_CALL(feed_, Reset("agent"))
+      .WillOnce(Return(true))
+      .WillOnce(Return(false));
+  const auto peer = Named("agent");
+
+  peer->Send("reset feelings");
+  peer->Send("reset feelings");
+
+  EXPECT_THAT(peer->Replies(3),
+              ElementsAre(R"({"ok":true})", R"({"ok":true})",
+                          R"({"error":"cannot reset feelings"})"));
   service_.Stop();
 }
 
@@ -241,7 +261,9 @@ TEST_F(CanAcceptTest, AClientMarksABeatAndIsToldTheFeeling) {
               ElementsAre(R"({"ok":true})",
                           R"({"readings":[],"missed":0,"interpretation":)"
                           R"({"id":1,"feeling":"disagreement",)"
-                          R"("beat":"proposal"}})"));
+                          R"("beat":"proposal","feelings":["agreement",)"
+                          R"("disagreement","engagement","annoyance",)"
+                          R"("confused","unknown"]}})"));
   service_.Stop();
 }
 

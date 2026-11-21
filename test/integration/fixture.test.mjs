@@ -12,7 +12,7 @@ import test from 'node:test';
 test('synthetic fixture serves the real socket protocol', { timeout: 10000 }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'fp-mcp-'));
   const socketPath = path.join(dir, 's');
-  const fixture = spawn(process.env.MCP_FIXTURE ?? './build/mcp_service_fixture', [socketPath]);
+  const fixture = spawn(process.env.MCP_FIXTURE ?? './build/mcp_service_fixture', [socketPath, path.join(dir, 'feelings')]);
   const exited = once(fixture, 'exit');
   const output = createInterface({ input: fixture.stdout })[Symbol.asyncIterator]();
   t.after(async () => {
@@ -33,9 +33,10 @@ test('synthetic fixture serves the real socket protocol', { timeout: 10000 }, as
   const delivery = JSON.parse((await replies.next()).value);
   assert.equal(delivery.readings[0].id, 1);
   assert.equal(delivery.readings[0].summary, 'synthetic nod');
-  socket.write('rate 1 5\n');
+  socket.write('reset feelings\n');
   assert.deepEqual(JSON.parse((await replies.next()).value), { ok: true });
-  assert.equal((await output.next()).value, 'rated agent 1 5');
+  socket.write('rate 1 5\n');
+  assert.deepEqual(JSON.parse((await replies.next()).value), { error: 'unknown request' });
   fixture.stdin.end();
   assert.deepEqual(await exited, [0, null]);
 });
