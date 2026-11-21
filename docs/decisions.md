@@ -5,6 +5,22 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Remove the Linux ELF build of the MediaPipe shim
+
+-   **Decision:** remove the Bazel `libfacepalm_mediapipe.so` target, its
+    ELF export list and the bats test that cross-linked it;
+    `tools/fixtures/build.sh` refuses to run on Linux, naming
+    `docs/linux-camera.md`. This replaces the 2026-11-20 entry "Use an ELF
+    export list for the Linux MediaPipe shim".
+-   **Why:** nothing used it. Since #60, the Linux daemon compiles
+    `src/linux/mediapipe_c_shim.cc` in and links MediaPipe's own
+    `libmediapipe.so` from its 0.10.35 wheel; CMake imports the Bazel shim
+    on macOS only, and no workflow built the `.so`, so its 100 percent rule
+    never ran.
+-   **Rejected:** building and testing the `.so` on CI's Linux, which would
+    add a half-hour Bazel build for a library no Linux build links.
+-   **Evidence:** [#65](https://github.com/mattyv/facepalm/issues/65).
+
 ## 2026-11-21: Run the native tests under ThreadSanitizer too
 
 -   **Decision:** a CI job of its own, on Linux, builds the native CTest suite
@@ -233,6 +249,8 @@ separate portability milestone. [Facepalm service issue #37](https://github.com/
 -   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37).
 
 ## 2026-11-20: Use an ELF export list for the Linux MediaPipe shim
+
+Replaced by "Remove the Linux ELF build of the MediaPipe shim" (2026-11-21).
 
 -   **Decision:** build a `.so` on Linux with the same six-function C ABI as
     the macOS dylib, hiding all other symbols with an ELF version script.

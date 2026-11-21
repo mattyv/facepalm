@@ -15,8 +15,10 @@ made since, each with its reason, are in the
 ## What exists
 
 -   `src/mediapipe_shim`: MediaPipe's face landmarker, as one self-contained
-    library with a plain C interface, built by `tools/fixtures/build.sh`.
-    `tools/fixtures/test_shim.sh` tests it against the real model. Its
+    library with a plain C interface, built by `tools/fixtures/build.sh`,
+    on macOS. On Linux, `src/linux/mediapipe_c_shim.cc` gives its face model
+    functions over MediaPipe's own `libmediapipe.so` (#65).
+    `tools/fixtures/test_shim.sh` tests the shim against the real model. Its
     short-range face detector is unused since #34 replaced Nodding Pigeon
     (below); it is still built and tested, since removing it needs a Bazel
     build this environment could not run.

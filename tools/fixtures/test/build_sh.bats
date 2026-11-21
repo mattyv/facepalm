@@ -107,12 +107,13 @@ teardown() {
   [[ "${log}" == *'--disk_cache=/tmp/bazel-disk'* ]] || false
 }
 
-@test "builds the ELF shim on Linux" {
+# The Linux daemon links MediaPipe's own libmediapipe.so (#60, #65), so
+# there is no shim for Bazel to build there.
+@test "refuses Linux before fetching or building" {
   FAKE_UNAME=Linux run bash "${WORK}/repo/tools/fixtures/build.sh"
-  [[ "${status}" -eq 0 ]] || false
-  log="$(cat "${LOG}")"
-  [[ "${log}" == *'//facepalm_shim:libfacepalm_mediapipe.so'* ]] || false
-  [[ "${log}" != *'//facepalm_shim:libfacepalm_mediapipe.dylib'* ]] || false
+  [[ "${status}" -ne 0 ]] || false
+  [[ "${output}" == *'libmediapipe.so'* ]] || false
+  [[ ! -e "${LOG}" ]] || false
 }
 
 @test "rejects unsupported systems before fetching or building" {
