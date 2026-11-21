@@ -158,7 +158,7 @@ target_link_libraries(gesture_replay_cli PRIVATE gesture_replay look_away_replay
 install(TARGETS gesture_replay_cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
 install(FILES LICENSE THIRDPARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm COMPONENT Runtime)
 install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
-  mcp/package.json mcp/package-lock.json
+  mcp/feeling-widget.js mcp/feeling-widget.html mcp/package.json mcp/package-lock.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm/mcp COMPONENT MCP)
 
 if(FACEPALM_LINUX_TRAY)
