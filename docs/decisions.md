@@ -5,6 +5,123 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Choosing the camera by a stable ID, never silently switching, and retrying a denied permission or a failed start
+
+-   **Decision:** A camera is a `CameraDevice{id, name, built_in}`
+    (`src/camera_directory.h`): `id` is stable across a reboot (macOS:
+    `AVCaptureDevice.uniqueID`, through an `AVCaptureDeviceDiscoverySession`
+    over the built-in, external and Continuity Camera device types; Linux:
+    `v4l2_capability.bus_info`, found by probing `/dev/video0` through
+    `/dev/video3`, since `opendir` has no seam a test can replace the way
+    `v4l2_open`/`v4l2_ioctl`/`v4l2_close` already do). `Config` gets
+    `camera.device_id` (empty for the default); `CaptureSession` (now also
+    a `CameraDirectory`) resolves it in `Configure()`: empty means the
+    first built-in camera found, by its own device type
+    (`AVCaptureDeviceTypeBuiltInWideAngleCamera` on macOS, a `bus_info`
+    starting `platform:` on Linux), never whatever the OS hands back as
+    its "default" device, which is how a Continuity Camera got used
+    silently (#39's live-check comment on #13). A non-empty choice is
+    matched by `id` alone, across every discoverable type, and
+    `specs/CameraLifecycle.tla`'s new `GuardChoosesByIdentity` proves why
+    identity has to be the guard: turned off, `Start` (and `Configure`'s
+    real counterpart) falls back to "any device will do" exactly as the
+    code did before, and TLC finds a 5-state trace where the chosen
+    device is absent but a second, unchosen one present lets the camera
+    open and capture anyway (`CapturesOnlyChosenDevice`). A device
+    connecting or disconnecting that is not the active target changes
+    nothing: `DeviceLost`/`DeviceBack` and the new `OtherDeviceLost`/
+    `OtherDeviceBack` are proven symmetric for both the default
+    (`CameraLifecycle.cfg`) and the other device chosen
+    (`CameraLifecycle_ChosenOther.cfg`). The person's choice is a daemon
+    option read once at startup (`tools/daemon/main.cc` already only
+    reads `--config` once), not a live setting, so it is a TLC `CONSTANT`
+    fixed for a run, not a `VARIABLE`. The devices available are exposed
+    two ways: an approved client already connected asks the protocol's
+    `cameras` line (`protocol::CamerasRequest`, answered from a
+    `CameraDirectory*` `Service` is optionally given, independent of the
+    camera queue), and `facepalm-daemon cameras`, a new subcommand
+    alongside `approve`/`revoke` that needs no running daemon, socket or
+    approval (a throwaway `CaptureSession` just for `List`), one camera a
+    line as id, name and whether built in, tab-separated rather than JSON,
+    since the only callers are the two Settings windows and the codebase
+    otherwise has no reason to carry a JSON reader. Both Settings windows
+    (#97, #106, merged by the time this item landed) run that subcommand
+    to fill a camera picker: an `NSPopUpButton` added to the existing
+    fixed-offset layout by extending its `kExtraHeight` the same way #106
+    did for its own rows, and a `QComboBox` in the existing auto-laid-out
+    form, both keeping the configured choice selected, marked "not
+    connected", when it is not among the cameras just listed, so saving
+    without touching the picker does not silently revert to the default.
+-   **Also decided (#43):** `CaptureSession::SupportedFrameRates` returns
+    `std::vector<FrameRateRange>`, one entry a range, instead of one
+    collapsed minimum and maximum: two disjoint ranges such as 15 and 30
+    fps are not the same as "anything from 15 to 30", and collapsing a
+    fixed rate such as 29.97 fps the old way (`ceil` the minimum, `floor`
+    the maximum) could put the minimum above the maximum, undefined for
+    `std::clamp`. `SessionCamera::Start` now picks the nearest rate across
+    every range (`SessionCameraFrameRateTest`), and
+    `AvFoundationSession::UseFormat` picks the 640x480 format with the
+    widest frame-rate coverage, not the device's first, which a Fable
+    review of #18's fix found could exclude the wanted rate (comment on
+    #13); `UseFormat` has no unit test, as it never has, so this is held
+    to the spec by reading, like the rest of `avfoundation_session.mm`.
+-   **Also decided (#52):** `CameraReports::OnOpenFailed` takes an
+    `OpenFailure` (`kNoDevice`, `kPermissionDenied`, `kStartFailed`)
+    instead of nothing, so `CameraController` can tell a camera that will
+    not come back without a device-connected report from one that might
+    come back on its own. The spec's `Start` splits the same way, adding
+    `permitted` and `startWorks`; `blocked`, cleared only by `Retry`
+    (`GuardRetries`), stands in for the device cause's `usable`, and
+    `Wanted` grows `permitted /\ startWorks` so `WantedOpens` proves the
+    retry, not only a device coming back: turning `GuardRetries` off
+    makes TLC find a denied permission that never clears, a loop with no
+    exit, violating `WantedOpens`. `CameraController` gets an injected
+    `RetrySchedule` (`std::function<void(std::function<void()>)>`,
+    default a no-op, so every existing test and caller is unaffected) it
+    calls once `blocked_` is set; the daemon's own
+    (`tools/daemon/main.cc`'s `RetryAfter`) waits a fixed 5 seconds on a
+    detached thread, then posts back to the control queue, chosen over a
+    growing backoff because the usual cause (the person has not yet
+    answered or opened a System Settings prompt) does not get more or
+    less likely to have cleared the more times it is checked. Since
+    `DaemonControl::OnOpenFailed` stopped the whole daemon on *every*
+    failed open (`specs/DaemonAdmission.tla`'s `GuardOpenFailStops`, "a
+    choice, not a protection"), it now only does that for `kNoDevice`;
+    the other two causes are left to run their retry inside the same
+    process instead. `specs/DaemonAdmission.tla` is re-specified for this
+    too: `reports` splits `openFailed` from a new `openBlocked`, `ctl`
+    gets `blocked`, and a new `Retry` (`GuardRetries`) mirrors
+    `CameraLifecycle.tla`'s; `JoinOpens` moves from a plain `~>` to that
+    spec's `[](<>[]P => <>Q)` shape, over a new `canStart` standing for
+    `permitted /\ startWorks`, since the old shape's escape for a cause
+    that never clears on its own (`~ctl.device`) cannot stand in for one
+    the controller clears itself. Proving `Retry` correct this way found
+    a real gap the addition itself opened: unlike `OnDeviceBack`, which
+    is `DaemonControl`'s own method and checks `~dc.stopping` directly,
+    `Retry` is `CameraController`'s own (scheduled by
+    `schedule_retry_`, never routed through `DaemonControl`), so it has
+    no such flag and depends entirely on `OpenIf`'s consent check;
+    `GuardStopRevokes = FALSE` now also breaks `ReopenAfterRetire`,
+    `Retry` reopening a camera a stop left standing, which the spec's own
+    table records.
+-   **Rejected:** keeping `GuardDiscoverAnyCamera`'s old reach (any camera
+    counts once none is picked) as the default's fallback when no
+    built-in camera exists at all, so facepalm would still open on a Mac
+    with only an external camera and no explicit choice; rejected because
+    the acceptance bar for this item is exactly the opposite ("never
+    silently switching to a Continuity Camera iPhone"), and a Mac with no
+    built-in camera is rare enough that asking the person to choose one
+    in Settings is the honest answer. A real `opendir`-based scan of
+    `/dev/video*` on Linux, rejected because it has no seam a unit test
+    can stand in for, unlike the libv4l2 calls V4l2SessionTest already
+    replaces at link time; a bounded probe of a fixed, small range of
+    node numbers is the same tradeoff the project already made for
+    `camera_probe`'s own diagnostics. Evidence:
+    [#13](https://github.com/mattyv/facepalm/issues/13),
+    [#43](https://github.com/mattyv/facepalm/issues/43),
+    [#52](https://github.com/mattyv/facepalm/issues/52),
+    [#61 item 10](https://github.com/mattyv/facepalm/issues/61).
+
 ## 2026-11-21: Publish the camera-in-use indicator to a plain status file
 
 -   **Decision:** the daemon writes whether the camera is in use to

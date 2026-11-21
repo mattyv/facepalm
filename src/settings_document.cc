@@ -35,8 +35,9 @@ std::optional<std::string> UpdateSettingsDocument(std::string_view original,
     error = "Frames per second must be between 1 and 60.";
     return std::nullopt;
   }
-  constexpr std::array<std::string_view, 16> kNames = {
+  constexpr std::array<std::string_view, 17> kNames = {
       "camera.frames_per_second",
+      "camera.device_id",
       "gestures.enabled",
       "expressions.enabled",
       "gestures.confidence_threshold",
@@ -54,6 +55,7 @@ std::optional<std::string> UpdateSettingsDocument(std::string_view original,
       "screen_context.other_screen_degrees"};
   const std::array<std::string, kNames.size()> values = {
       std::to_string(settings.frames_per_second),
+      settings.camera_device_id,
       settings.gestures_enabled ? "true" : "false",
       settings.expressions_enabled ? "true" : "false",
       settings.gesture_confidence,

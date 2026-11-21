@@ -355,6 +355,7 @@ class Probe : public CameraReports {
         config_(options.config),
         control_(control),
         capture_(
+            config_.camera_device_id,
             [this](const Frame& frame) { OnFrame(frame); },
             [this] { camera_.OnSessionFailed(); },
             [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
@@ -396,8 +397,8 @@ class Probe : public CameraReports {
         });
   }
 
-  void OnOpenFailed() override {
-    controller_.OnOpenFailed();
+  void OnOpenFailed(OpenFailure reason) override {
+    controller_.OnOpenFailed(reason);
     std::fprintf(stderr,
                  "camera_probe: no camera, or camera permission denied\n");
     model_.reset();

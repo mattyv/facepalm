@@ -5,36 +5,47 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "src/camera_controller.h"
+#include "src/camera_directory.h"
 #include "src/post.h"
 
 namespace facepalm {
 
 // One OS's capture API, kept to the calls a camera needs, so that the logic
 // around it is tested with the API mocked. Calls may block.
-class CaptureSession {
+class CaptureSession : public CameraDirectory {
  public:
   enum class Permission : std::uint8_t { kGranted, kUndetermined, kDenied };
 
-  // The frame rates the configured camera supports, in frames a second.
-  struct FrameRates {
+  // One of the camera's supported frame-rate ranges, in frames a second.
+  // A camera can have several, kept apart rather than collapsed into one
+  // overall minimum and maximum (#43): two ranges such as 15 and 30 do not
+  // make every rate between them supported, and a single fixed rate such
+  // as 29.97 rounded outward to a span of integers, {29, 30}, no longer
+  // has `min` above `max`, which a collapsed {ceil 30, floor 29} once did.
+  struct FrameRateRange {
     int min = 0;
     int max = 0;
   };
+  // The configured camera's frame-rate ranges; empty when the camera
+  // reports none, which asks for the wanted rate as it is.
+  using FrameRates = std::vector<FrameRateRange>;
 
-  virtual ~CaptureSession() = default;
+  ~CaptureSession() override = default;
   virtual Permission CurrentPermission() = 0;
   // Asks the user, and calls `done` with the answer, on any thread.
   virtual void RequestPermission(std::function<void(bool granted)> done) = 0;
-  // Sets the session up for the default camera, and returns its unique ID, or
-  // nothing when there is no camera it can use.
+  // Sets the session up for the configured camera (item 10 of #61), and
+  // returns its unique ID, or nothing when it cannot be used: there is no
+  // such camera, or (with none configured) no default.
   virtual std::optional<std::string> Configure() = 0;
   // The configured camera's frame rates.
   virtual FrameRates SupportedFrameRates() = 0;
-  // Starts capturing at `frames_per_second`, which is within
-  // SupportedFrameRates, stamping each frame with `attempt`. Returns whether
-  // it is running.
+  // Starts capturing at `frames_per_second`, which is within one of
+  // SupportedFrameRates' ranges, stamping each frame with `attempt`.
+  // Returns whether it is running.
   virtual bool Start(int frames_per_second, std::uint64_t attempt) = 0;
   virtual void Stop() = 0;
 };
@@ -62,6 +73,7 @@ class SessionCamera : public Camera {
  private:
   void Start(std::uint64_t attempt);
   void Report(void (CameraReports::*report)());
+  void ReportOpenFailed(OpenFailure reason);
 
   CaptureSession& capture_;
   CameraReports& reports_;

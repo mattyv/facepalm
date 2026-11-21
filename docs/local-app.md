@@ -100,8 +100,12 @@ and `feelings` a beat returned, and watch for the card asking "How were you
 feeling just then?" with Facepalm's read already highlighted. A host without
 MCP Apps gets `show_feeling_card`'s text instead, with the same information.
 
-Choose **Settings** from the 🤦 menu to set the frame rate, enable detectors,
-or adjust gesture confidence and expression tuning. Turn Facepalm off and on
+Choose **Settings** from the 🤦 menu to set the frame rate, choose the camera
+(item 10 of #61, #13), enable detectors, or adjust gesture confidence and
+expression tuning. The camera picker lists what `facepalm-daemon cameras`
+finds right now, whether or not Facepalm is on; a choice no longer connected
+stays in the picker, marked "not connected", so saving the other settings
+does not quietly switch it back to the default. Turn Facepalm off and on
 again to apply them; the menu passes the settings file to the daemon when
 there is one. By hand, add
 `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"` to the

@@ -4,7 +4,9 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace facepalm {
@@ -269,7 +271,7 @@ TEST_F(WantedOpensTest, WaitsForTheDeviceAfterTheOsRefusesIt) {
     EXPECT_CALL(camera_, Open(_));
   }
   controller.Subscribe("a");
-  controller.OnOpenFailed();
+  controller.OnOpenFailed(OpenFailure::kNoDevice);
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
   controller.Subscribe("b");
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
@@ -293,8 +295,68 @@ TEST_F(WantedOpensTest, LosingTheDeviceWhileOpeningWaitsForTheFailure) {
   controller.Subscribe("a");
   controller.OnDeviceLost();
   EXPECT_EQ(controller.CurrentState(), State::kOpening);
-  controller.OnOpenFailed();
+  controller.OnOpenFailed(OpenFailure::kNoDevice);
   EXPECT_EQ(controller.CurrentState(), State::kClosed);
+}
+
+// specs/CameraLifecycle.tla's WantedOpens, folding in `permitted` and
+// `startWorks`, proves a denied permission or a failed start is retried
+// (#52), not only a device coming back.
+class RetriesTest : public CameraControllerTest {
+ protected:
+  // Captures the retry Open requested, to run by hand.
+  std::function<void()> retry_;
+  CameraController::RetrySchedule Schedule() {
+    return [this](std::function<void()> retry) { retry_ = std::move(retry); };
+  }
+};
+
+TEST_F(RetriesTest, ADeniedPermissionIsRetried) {
+  CameraController controller(camera_, clients_, /*consent=*/true, Schedule());
+  controller.Subscribe("a");
+  controller.OnOpenFailed(OpenFailure::kPermissionDenied);
+  EXPECT_EQ(controller.CurrentState(), State::kClosed);
+  ASSERT_TRUE(retry_);
+  EXPECT_CALL(camera_, Open(_));
+  retry_();
+  EXPECT_EQ(controller.CurrentState(), State::kOpening);
+}
+
+TEST_F(RetriesTest, AFailedStartIsRetried) {
+  CameraController controller(camera_, clients_, /*consent=*/true, Schedule());
+  controller.Subscribe("a");
+  controller.OnOpenFailed(OpenFailure::kStartFailed);
+  ASSERT_TRUE(retry_);
+  EXPECT_CALL(camera_, Open(_));
+  retry_();
+  EXPECT_EQ(controller.CurrentState(), State::kOpening);
+}
+
+TEST_F(RetriesTest, WithoutAScheduleABlockedCameraStaysBlocked) {
+  CameraController controller(camera_, clients_, /*consent=*/true);
+  EXPECT_CALL(camera_, Open(_)).Times(1);
+  controller.Subscribe("a");
+  controller.OnOpenFailed(OpenFailure::kStartFailed);
+  controller.Subscribe("b");
+  EXPECT_EQ(controller.CurrentState(), State::kClosed);
+}
+
+TEST_F(RetriesTest, ARetryThatIsNoLongerWantedDoesNothing) {
+  CameraController controller(camera_, clients_, /*consent=*/true, Schedule());
+  controller.Subscribe("a");
+  controller.OnOpenFailed(OpenFailure::kStartFailed);
+  ASSERT_TRUE(retry_);
+  controller.Leave("a");
+  EXPECT_CALL(camera_, Open(_)).Times(0);
+  retry_();
+  EXPECT_EQ(controller.CurrentState(), State::kClosed);
+}
+
+TEST_F(RetriesTest, ANoDeviceFailureIsNotRetried) {
+  CameraController controller(camera_, clients_, /*consent=*/true, Schedule());
+  controller.Subscribe("a");
+  controller.OnOpenFailed(OpenFailure::kNoDevice);
+  EXPECT_FALSE(retry_);
 }
 
 class RevokingClosesTest : public CameraControllerTest {};
@@ -314,7 +376,7 @@ TEST_F(LateReportsTest, ReportsOutOfTurnChangeNothing) {
   CameraController controller(camera_, clients_, /*consent=*/true);
   EXPECT_CALL(camera_, Open(_)).Times(0);
   controller.OnOpened();
-  controller.OnOpenFailed();
+  controller.OnOpenFailed(OpenFailure::kNoDevice);
   controller.OnClosed();
   controller.OnDeviceBack();
   EXPECT_EQ(controller.CurrentState(), State::kClosed);

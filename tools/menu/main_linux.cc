@@ -1,6 +1,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDialog>
@@ -11,18 +12,22 @@
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QList>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QLockFile>
 #include <QMenu>
 #include <QMessageBox>
+#include <QProcess>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSpinBox>
 #include <QStringDecoder>
+#include <QStringList>
 #include <QSystemTrayIcon>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <cstddef>
@@ -236,6 +241,54 @@ bool ServiceIsOn() {
   return service.IsOn();
 }
 
+// facepalm-daemon's own path: the tray's own install first, then the
+// documented one, the same two prefixes SwitchService's FindProgram tries
+// (#37); empty when neither has it. Finding it needs no face model, since
+// listing cameras does not run one.
+QString DaemonPath() {
+  const QStringList prefixes{
+      QDir::cleanPath(QCoreApplication::applicationDirPath() +
+                      QStringLiteral("/..")),
+      QDir::homePath() + QStringLiteral("/.local/facepalm")};
+  for (const QString& prefix : prefixes) {
+    const QString candidate =
+        QDir(prefix).filePath(QStringLiteral("bin/facepalm-daemon"));
+    if (QFileInfo(candidate).isExecutable()) {
+      return candidate;
+    }
+  }
+  return {};
+}
+
+// The cameras facepalm-daemon's own `cameras` command lists (item 10 of
+// #61, #13): id, name and whether built in, tab-separated, one camera a
+// line. Run synchronously, since opening Settings already waits on
+// reading the settings file; empty, with no error shown, when the daemon
+// cannot be found or does not run, so the picker then offers only the
+// default.
+QList<QStringList> ListCameras() {
+  const QString daemon = DaemonPath();
+  if (daemon.isEmpty()) {
+    return {};
+  }
+  QProcess process;
+  process.start(daemon, {QStringLiteral("cameras")});
+  constexpr int kListCamerasTimeoutMs = 2000;
+  if (!process.waitForFinished(kListCamerasTimeoutMs)) {
+    return {};
+  }
+  const QString text = QString::fromUtf8(process.readAllStandardOutput());
+  QList<QStringList> devices;
+  for (const QString& line :
+       text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
+    const QStringList fields = line.split(QLatin1Char('\t'));
+    if (fields.size() == 3) {
+      devices.append(fields);
+    }
+  }
+  return devices;
+}
+
 QString Number(float value) {
   constexpr std::size_t kBufferSize = 64;
   std::array<char, kBufferSize> buffer{};
@@ -267,6 +320,16 @@ class SettingsDialog : public QDialog {
     fps_ = new QSpinBox(this);
     fps_->setRange(1, kMaxFramesPerSecond);
     AddField(*basic, 0, QStringLiteral("Frames per second (1–60)"), *fps_);
+    // The chosen camera (item 10 of #61, #13): QComboBox has no
+    // setAlignment, unlike AddField's other fields, so this row is added
+    // directly rather than through that helper.
+    camera_ = new QComboBox(this);
+    camera_->setAccessibleName(QStringLiteral("Camera"));
+    auto* camera_label =
+        new QLabel(QStringLiteral("Camera (next start)"), this);
+    camera_label->setBuddy(camera_);
+    basic->addWidget(camera_label, 1, 0);
+    basic->addWidget(camera_, 1, 1);
     layout->addLayout(basic);
     gestures_ = new QCheckBox(QStringLiteral("Detect head gestures"), this);
     expressions_ =
@@ -435,6 +498,25 @@ class SettingsDialog : public QDialog {
       }
     }
     fps_->setValue(config.frames_per_second);
+    camera_->clear();
+    camera_->addItem(QStringLiteral("Default (built-in camera)"), QString());
+    const QString wanted = QString::fromStdString(config.camera_device_id);
+    bool found_wanted = wanted.isEmpty();
+    for (const QStringList& device : ListCameras()) {
+      const QString& id = device[0];
+      const QString& name = device[1];
+      const bool built_in = device[2] == QStringLiteral("1");
+      camera_->addItem(built_in ? name + QStringLiteral(" (built-in)") : name,
+                       id);
+      found_wanted = found_wanted || id == wanted;
+    }
+    if (!found_wanted) {
+      // Kept as its own item so saving without touching the picker does
+      // not silently fall back to the default while the chosen camera is
+      // away (item 10 of #61, #13).
+      camera_->addItem(wanted + QStringLiteral(" (not connected)"), wanted);
+    }
+    camera_->setCurrentIndex(std::max(0, camera_->findData(wanted)));
     gestures_->setChecked(config.gestures_enabled);
     expressions_->setChecked(config.expressions_enabled);
     looking_away_->setChecked(config.looking_away_enabled);
@@ -466,6 +548,7 @@ class SettingsDialog : public QDialog {
     }
     facepalm::MenuSettings settings;
     settings.frames_per_second = fps_->value();
+    settings.camera_device_id = camera_->currentData().toString().toStdString();
     settings.gestures_enabled = gestures_->isChecked();
     settings.expressions_enabled = expressions_->isChecked();
     settings.looking_away_enabled = looking_away_->isChecked();
@@ -514,6 +597,7 @@ class SettingsDialog : public QDialog {
   std::optional<ConfigSnapshot> snapshot_;
   QString load_error_;
   QSpinBox* fps_;
+  QComboBox* camera_;
   QCheckBox* gestures_;
   QCheckBox* expressions_;
   QCheckBox* looking_away_;

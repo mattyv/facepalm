@@ -67,6 +67,11 @@ class MockCalibrationController : public CalibrationController {
   MOCK_METHOD(void, OnCameraUp, (), (override));
 };
 
+class MockCameraDirectory : public CameraDirectory {
+ public:
+  MOCK_METHOD(std::vector<CameraDevice>, List, (), (override));
+};
+
 // A connection the test writes lines into and reads replies from.
 class FakeStream : public Stream {
  public:
@@ -685,6 +690,21 @@ TEST_F(CalibrateTest, RefusesCalibrateWithNoControllerGiven) {
   service_.Stop();
 }
 
+using CamerasTest = ServiceTest;
+
+// item 10 of #61, #13: a Service with no directory given still answers
+// "cameras", with none listed, rather than an error.
+TEST_F(CamerasTest, AnswersNoCamerasWithNoDirectoryGiven) {
+  service_.Start();
+  const auto peer = Named("agent");
+
+  peer->Send("cameras");
+
+  EXPECT_THAT(peer->Replies(2),
+              ElementsAre(R"({"ok":true})", R"({"ok":true,"cameras":[]})"));
+  service_.Stop();
+}
+
 // A Service given a controller (item 12 of #61) dispatches "calibrate" to
 // it instead; everything else still goes to the feed.
 class ServiceWithCalibrationTest : public ::testing::Test {
@@ -811,6 +831,53 @@ TEST_F(ServiceWithCalibrationTest, ReportsAFailedCancel) {
 
   EXPECT_THAT(peer->Reply(2),
               Eq(R"({"error":"no calibration session is running"})"));
+  service_.Stop();
+}
+
+// A Service given a directory (item 10 of #61, #13) dispatches "cameras"
+// to it instead of answering with none; everything else still goes to the
+// feed.
+class ServiceWithCamerasTest : public ::testing::Test {
+ protected:
+  ServiceWithCamerasTest()
+      : service_(std::make_unique<FakeListener>(queue_), feed_, approvals_,
+                 /*calibration=*/nullptr, &cameras_) {
+    ON_CALL(feed_, Connect).WillByDefault(Return(true));
+    ON_CALL(approvals_, Approved).WillByDefault(Return(true));
+  }
+
+  std::shared_ptr<FakeStream::Peer> Named(const std::string& name) {
+    auto peer = std::make_shared<FakeStream::Peer>();
+    {
+      const std::scoped_lock lock(queue_->mutex);
+      queue_->streams.push_back(std::make_unique<FakeStream>(peer));
+      queue_->changed.notify_all();
+    }
+    peer->Send("hello " + name);
+    EXPECT_THAT(peer->Replies(1), ElementsAre(R"({"ok":true})"));
+    return peer;
+  }
+
+  std::shared_ptr<FakeListener::Queue> queue_ =
+      std::make_shared<FakeListener::Queue>();
+  NiceMock<MockFeed> feed_;
+  NiceMock<MockApprovals> approvals_;
+  NiceMock<MockCameraDirectory> cameras_;
+  Service service_;
+};
+
+TEST_F(ServiceWithCamerasTest, ListsTheDirectorysCameras) {
+  service_.Start();
+  EXPECT_CALL(cameras_, List)
+      .WillOnce(Return(std::vector<CameraDevice>{
+          {.id = "builtin", .name = "FaceTime HD Camera", .built_in = true}}));
+  const auto peer = Named("agent");
+
+  peer->Send("cameras");
+
+  EXPECT_THAT(peer->Reply(2),
+              Eq(R"({"ok":true,"cameras":[{"id":"builtin","name":"FaceTime HD )"
+                 R"(Camera","built_in":true}]})"));
   service_.Stop();
 }
 

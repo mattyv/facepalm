@@ -1,12 +1,39 @@
 #include "src/session_camera.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <optional>
 #include <string>
 #include <utility>
 
 namespace facepalm {
+namespace {
+
+// The rate in `range` nearest `wanted`.
+int Nearest(int wanted, const CaptureSession::FrameRateRange& range) {
+  return std::clamp(wanted, range.min, range.max);
+}
+
+// The rate nearest `wanted` that one of `rates`' ranges supports, or
+// `wanted` as it is when the camera reports no ranges (#43): collapsing
+// them into one overall minimum and maximum let `Start` be asked for a
+// rate none of the camera's actual ranges covered.
+int NearestSupportedRate(int wanted, const CaptureSession::FrameRates& rates) {
+  if (rates.empty()) {
+    return wanted;
+  }
+  int best = Nearest(wanted, rates.front());
+  for (const CaptureSession::FrameRateRange& range : rates) {
+    const int candidate = Nearest(wanted, range);
+    if (std::abs(candidate - wanted) < std::abs(best - wanted)) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+}  // namespace
 
 SessionCamera::SessionCamera(CaptureSession& capture, CameraReports& reports,
                              Post session, Post control, int frames_per_second)
@@ -17,7 +44,8 @@ SessionCamera::SessionCamera(CaptureSession& capture, CameraReports& reports,
       frames_per_second_(frames_per_second) {}
 
 // specs/CameraLifecycle.tla, Open: asks for permission the first time, then
-// starts. Denied permission is the spec's OpenFailed.
+// starts. Denied permission is the spec's OpenFailed with `~permitted`
+// (#52).
 void SessionCamera::Open(std::uint64_t attempt) {
   session_([this, attempt] {
     attempt_ = attempt;
@@ -27,7 +55,7 @@ void SessionCamera::Open(std::uint64_t attempt) {
       return;
     }
     if (permission == CaptureSession::Permission::kDenied) {
-      Report(&CameraReports::OnOpenFailed);
+      ReportOpenFailed(OpenFailure::kPermissionDenied);
       return;
     }
     // Undetermined: ask. The answer arrives on any thread, so starting goes
@@ -42,7 +70,7 @@ void SessionCamera::Open(std::uint64_t attempt) {
         if (granted) {
           Start(attempt);
         } else {
-          Report(&CameraReports::OnOpenFailed);
+          ReportOpenFailed(OpenFailure::kPermissionDenied);
         }
       });
     });
@@ -88,26 +116,32 @@ void SessionCamera::OnDeviceConnected(std::string id) {
   });
 }
 
-// specs/CameraLifecycle.tla, Opened when the session runs, OpenFailed when
-// there is no camera to use or it does not start. Asks for the supported rate
-// nearest the one wanted.
+// specs/CameraLifecycle.tla, Opened when the session runs; OpenFailed with
+// `~device` (no camera to use, #13) or `~startWorks` (it does not start,
+// #52). Asks for the supported rate nearest the one wanted, from the
+// camera's actual ranges (#43).
 void SessionCamera::Start(std::uint64_t attempt) {
-  bool running = false;
   const std::optional<std::string> device = capture_.Configure();
-  if (device.has_value()) {
-    device_id_ = *device;
-    // A camera that reports no rates is asked for the wanted one as it is.
-    const CaptureSession::FrameRates rates = capture_.SupportedFrameRates();
-    const int rate = rates.max == 0
-                         ? frames_per_second_
-                         : std::clamp(frames_per_second_, rates.min, rates.max);
-    running = capture_.Start(rate, attempt);
+  if (!device.has_value()) {
+    ReportOpenFailed(OpenFailure::kNoDevice);
+    return;
   }
-  Report(running ? &CameraReports::OnOpened : &CameraReports::OnOpenFailed);
+  device_id_ = *device;
+  const int rate =
+      NearestSupportedRate(frames_per_second_, capture_.SupportedFrameRates());
+  if (!capture_.Start(rate, attempt)) {
+    ReportOpenFailed(OpenFailure::kStartFailed);
+    return;
+  }
+  Report(&CameraReports::OnOpened);
 }
 
 void SessionCamera::Report(void (CameraReports::*report)()) {
   control_([this, report] { (reports_.*report)(); });
+}
+
+void SessionCamera::ReportOpenFailed(OpenFailure reason) {
+  control_([this, reason] { reports_.OnOpenFailed(reason); });
 }
 
 }  // namespace facepalm

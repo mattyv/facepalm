@@ -5,10 +5,12 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/calibration.h"
+#include "src/camera_directory.h"
 #include "src/feed.h"
 #include "src/feelings.h"
 
@@ -138,6 +140,14 @@ TEST(ParseTest, RefusesABadCalibrate) {
   EXPECT_THAT(Refused("calibrate start 99999999999"), Eq(kBadCalibrate));
   EXPECT_THAT(Refused("calibrate start 1 2"), Eq(kBadCalibrate));
   EXPECT_THAT(Refused("calibrate next now"), Eq(kBadCalibrate));
+}
+
+TEST(ParseTest, ReadsCameras) {
+  EXPECT_TRUE(std::holds_alternative<CamerasRequest>(Parsed("cameras")));
+}
+
+TEST(ParseTest, RefusesCamerasWithWords) {
+  EXPECT_THAT(Refused("cameras builtin"), Eq("unknown request"));
 }
 
 TEST(ParseTest, IgnoresATrailingCarriageReturn) {
@@ -305,6 +315,21 @@ TEST(JsonTest, WritesDoneAndIdle) {
               Eq(R"({"ok":true,"calibration":{"state":"done"}})"));
   EXPECT_THAT(CalibrationStatusJson({.running = false, .done = false}),
               Eq(R"({"ok":true,"calibration":{"state":"idle"}})"));
+}
+
+TEST(JsonTest, WritesEveryCamera) {
+  const std::vector<CameraDevice> devices{
+      {.id = "builtin", .name = "FaceTime HD Camera", .built_in = true},
+      {.id = R"(usb-"1")", .name = "USB Camera", .built_in = false}};
+
+  EXPECT_THAT(CamerasJson(devices),
+              Eq(R"({"ok":true,"cameras":[{"id":"builtin","name":"FaceTime HD )"
+                 R"(Camera","built_in":true},{"id":"usb-\"1\"","name":"USB )"
+                 R"(Camera","built_in":false}]})"));
+}
+
+TEST(JsonTest, WritesNoCameras) {
+  EXPECT_THAT(CamerasJson({}), Eq(R"({"ok":true,"cameras":[]})"));
 }
 
 }  // namespace

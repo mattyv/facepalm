@@ -19,6 +19,7 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   const Config config = parsed.value_or(Config{});
 
   EXPECT_THAT(config.frames_per_second, Eq(15));
+  EXPECT_THAT(config.camera_device_id, Eq(""));
   EXPECT_TRUE(config.head_pose_enabled);
   EXPECT_TRUE(config.gestures_enabled);
   EXPECT_THAT(config.gesture_confidence_threshold, FloatEq(0.5F));
@@ -41,6 +42,7 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   std::string error;
   const std::optional<Config> parsed = ParseConfig(
       "camera.frames_per_second = 30\n"
+      "camera.device_id = continuity-iphone-15\n"
       "head_pose.enabled = false\n"
       "gestures.enabled=false\n"
       "  gestures.confidence_threshold =\t0.25  \n"
@@ -62,6 +64,7 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   const Config config = parsed.value_or(Config{});
 
   EXPECT_THAT(config.frames_per_second, Eq(30));
+  EXPECT_THAT(config.camera_device_id, Eq("continuity-iphone-15"));
   EXPECT_FALSE(config.head_pose_enabled);
   EXPECT_FALSE(config.gestures_enabled);
   EXPECT_THAT(config.gesture_confidence_threshold, FloatEq(0.25F));
@@ -122,6 +125,15 @@ TEST(ParseConfigTest, RefusesAFrameRateOutsideOneToSixty) {
               Eq("line 1: expected a whole number from 1 to 60"));
   EXPECT_THAT(ErrorFor("camera.frames_per_second = fast"),
               Eq("line 1: expected a whole number from 1 to 60"));
+}
+
+TEST(ParseConfigTest, ABlankCameraDeviceIdChoosesTheDefault) {
+  std::string error;
+  const std::optional<Config> parsed =
+      ParseConfig("camera.device_id = \n", error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const Config config = parsed.value_or(Config{});
+  EXPECT_THAT(config.camera_device_id, Eq(""));
 }
 
 TEST(ParseConfigTest, RefusesASwitchOtherThanTrueOrFalse) {
