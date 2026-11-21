@@ -20,7 +20,8 @@ std::optional<UserPaths> PathsFor(std::string_view home, Platform platform) {
   return UserPaths{.directory = directory,
                    .socket = directory + "/service.sock",
                    .clients = directory + "/clients",
-                   .status = directory + "/status"};
+                   .status = directory + "/status",
+                   .calibration = directory + "/calibration"};
 }
 
 std::string ClientTokenPath(const UserPaths& paths, std::string_view name) {

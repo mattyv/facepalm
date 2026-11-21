@@ -8,6 +8,7 @@
 #include <string_view>
 #include <variant>
 
+#include "src/calibration.h"
 #include "src/feed.h"
 #include "src/feelings.h"
 
@@ -25,6 +26,9 @@
 //                           says how the person felt at a beat this client
 //                           was given, once, within five minutes
 //   reset feelings          forgets every feeling the person gave
+//   calibrate start [screens]|next|cancel
+//                           starts, steps through or cancels an optional
+//                           calibration session (#36, #35, item 12 of #61)
 namespace facepalm::protocol {
 
 struct Hello {
@@ -46,8 +50,14 @@ struct BeatRequest {
   std::chrono::milliseconds window;
 };
 
+struct CalibrateRequest {
+  enum class Action : std::uint8_t { kStart, kNext, kCancel };
+  Action action;
+  int screens = 1;  // Only meaningful for kStart.
+};
+
 using Request = std::variant<Hello, ReadRequest, WaitRequest, BeatRequest,
-                             FeelRequest, ResetRequest>;
+                             FeelRequest, ResetRequest, CalibrateRequest>;
 
 // The request on `line`, or nullopt with `error` saying why not.
 std::optional<Request> Parse(std::string_view line, std::string& error);
@@ -70,6 +80,12 @@ std::string Quoted(std::string_view text);
 
 std::string DeliveryJson(const Feed::Delivery& delivery);
 std::string ErrorJson(std::string_view message);
+
+// {"ok":true,"calibration":{"state":"running","index":i,"total":n,
+// "step":"resting"}}, or with "step":"screen","screen":s,"point":".." for a
+// screen's point; {"ok":true,"calibration":{"state":"done"}} once the last
+// step is finished and saved.
+std::string CalibrationStatusJson(const CalibrationController::Status& status);
 
 }  // namespace facepalm::protocol
 

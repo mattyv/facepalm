@@ -18,7 +18,8 @@ std::optional<UserPaths> Home() {
   return UserPaths{.directory = "/h/fp",
                    .socket = "/h/fp/service.sock",
                    .clients = "/h/fp/c",
-                   .status = "/h/fp/status"};
+                   .status = "/h/fp/status",
+                   .calibration = "/h/fp/calibration"};
 }
 
 std::optional<DaemonOptions> Parse(const std::vector<const char*>& arguments,

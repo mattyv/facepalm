@@ -46,7 +46,7 @@ execute_process(COMMAND dpkg-deb -e "${package}" "${SMOKE_ROOT}/control" RESULT_
 check("${result}" "extract package control")
 set(payload "${SMOKE_ROOT}/payload")
 set(files
-  usr/bin/facepalm-menu usr/bin/gesture_replay
+  usr/bin/facepalm-menu usr/bin/gesture_replay usr/bin/calibrate_cli
   usr/share/applications/facepalm.desktop
   usr/share/icons/hicolor/128x128/apps/facepalm.png
   usr/share/doc/facepalm/README.md usr/share/doc/facepalm/copyright
