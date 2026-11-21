@@ -155,7 +155,12 @@ test('the real userInfo is read, with lstat mocked to stop before any launch', a
   }));
 });
 
-test('the real execFile fails harmlessly on a bundle that only lstat claims exists', { skip: process.platform !== 'darwin' }, async () => {
+test('the real execFile fails harmlessly on a bundle that only lstat claims exists', async () => {
+  // /usr/bin/plutil is a real path on macOS and does not exist on Linux;
+  // either way the real execFile fails (a bad exit there, ENOENT here),
+  // exercising the same ops.execFile ?? execFile fallback branch, so
+  // this needs no platform skip. The home directory is fake regardless,
+  // so even a real Mac never touches its real installed bundle.
   await assert.rejects(openFacepalmSettings({
     platform: 'darwin', userInfo: () => ({ homedir: '/nonexistent-test-home-xyz' }),
     lstat: async path => (path.endsWith('Facepalm.app') ? folder : file),
