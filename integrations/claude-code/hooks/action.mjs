@@ -1,6 +1,11 @@
 import net from 'node:net';
 import { parseHookInput, formatHookContext } from '../lib/hook.mjs';
 
+// A write failure (such as the reading process having already closed its
+// end) reaches its own callback below; without this, the stream's 'error'
+// event, with nothing else listening for it, would also crash the process.
+process.stdout.on('error', () => {});
+
 const brokerPath = process.env.FACEPALM_HOOK_SOCKET;
 if (brokerPath) {
   let raw = '';
