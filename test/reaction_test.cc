@@ -1,6 +1,8 @@
 #include "src/reaction.h"
 
 #include <array>
+#include <limits>
+#include <optional>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -10,6 +12,7 @@ namespace facepalm {
 namespace {
 
 using ::testing::Eq;
+using ::testing::Optional;
 
 // A face whose transformation matrix, column by column, is `pose`.
 Face FaceWithPose(const std::array<float, FP_POSE_VALUES>& pose) {
@@ -26,7 +29,8 @@ TEST(ReactionFromTest, AFaceStraightAheadHasNoTurn) {
                                   0, 0, 1, 0,  //
                                   0, 0, -60, 1});
 
-  EXPECT_THAT(ReactionFrom(face), Eq(R"({"yaw":0.0,"pitch":0.0,"roll":0.0})"));
+  EXPECT_THAT(ReactionFrom(face),
+              Optional(Eq(R"({"yaw":0.0,"pitch":0.0,"roll":0.0})")));
 }
 
 TEST(ReactionFromTest, GivesMediaPipesPortraitsAnglesToOneDecimalPlace) {
@@ -37,7 +41,34 @@ TEST(ReactionFromTest, GivesMediaPipesPortraitsAnglesToOneDecimalPlace) {
                                   0.038823195F, -0.1101321F, 0.99315894F, 0,
                                   -0.3691378F, 22.75809F, -65.765925F, 1});
 
-  EXPECT_THAT(ReactionFrom(face), Eq(R"({"yaw":2.2,"pitch":6.3,"roll":1.0})"));
+  EXPECT_THAT(ReactionFrom(face),
+              Optional(Eq(R"({"yaw":2.2,"pitch":6.3,"roll":1.0})")));
+}
+
+// A zero matrix has no rotation to read: its scale, the cube root of its
+// determinant, is 0, so dividing it out gives NaN (#44).
+TEST(ReactionFromTest, GivesNoReactionForAZeroPose) {
+  EXPECT_THAT(ReactionFrom(Face{}), Eq(std::nullopt));
+}
+
+TEST(ReactionFromTest, GivesNoReactionForAPoseHoldingNaN) {
+  const Face face =
+      FaceWithPose({std::numeric_limits<float>::quiet_NaN(), 0, 0, 0,  //
+                    0, 1, 0, 0,                                        //
+                    0, 0, 1, 0,                                        //
+                    0, 0, -60, 1});
+
+  EXPECT_THAT(ReactionFrom(face), Eq(std::nullopt));
+}
+
+TEST(ReactionFromTest, GivesNoReactionForAPoseHoldingInfinity) {
+  const Face face =
+      FaceWithPose({std::numeric_limits<float>::infinity(), 0, 0, 0,  //
+                    0, 1, 0, 0,                                       //
+                    0, 0, 1, 0,                                       //
+                    0, 0, -60, 1});
+
+  EXPECT_THAT(ReactionFrom(face), Eq(std::nullopt));
 }
 
 }  // namespace

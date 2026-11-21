@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <optional>
 
 #include "src/camera_controller.h"
 #include "src/face_model.h"
@@ -21,17 +22,25 @@ double Tenths(double degrees) {
 
 }  // namespace
 
-Reaction ReactionFrom(const Face& face) {
+std::optional<Reaction> ReactionFrom(const Face& face) {
   PoseMatrix pose{};
   std::ranges::copy(face.pose_column_major, pose.begin());
-  const HeadRotation head = HeadRotationFrom(RotationFrom(pose));
+  const Rotation rotation = RotationFrom(pose);
+  // From a finite rotation, every angle is finite too.
+  for (const auto& row : rotation.rows) {
+    if (!std::ranges::all_of(
+            row, [](double value) { return std::isfinite(value); })) {
+      return std::nullopt;
+    }
+  }
+  const HeadRotation head = HeadRotationFrom(rotation);
   constexpr int kLongest = 64;  // Three angles to one decimal place, and keys.
   std::array<char, kLongest> text{};
   std::snprintf(text.data(), text.size(),
                 R"({"yaw":%.1f,"pitch":%.1f,"roll":%.1f})",
                 Tenths(head.yaw_degrees), Tenths(head.pitch_degrees),
                 Tenths(head.roll_degrees));
-  return text.data();
+  return Reaction(text.data());
 }
 
 }  // namespace facepalm
