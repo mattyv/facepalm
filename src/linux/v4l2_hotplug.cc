@@ -71,9 +71,9 @@ std::optional<std::string> IdOf(const std::string& path) {
 // its id, exactly as Watch's own doc comment describes; anything else is
 // ignored. Returns how many bytes the event occupied, so Watch can
 // advance past it.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::size_t HandleEvent(const std::byte* event,
                         std::map<std::string, std::string>& known,
+                        // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                         const std::function<void(std::string)>& on_disconnected,
                         const std::function<void(std::string)>& on_connected) {
   inotify_event header{};
@@ -119,9 +119,9 @@ void V4l2InotifyMonitor::Start(std::function<void(std::string)> on_disconnected,
 // SessionCamera's own OnDeviceConnected/OnDeviceDisconnected can tell
 // whether it is the camera in use the same way it already does for macOS
 // (#13).
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void V4l2InotifyMonitor::Watch(
     const std::stop_token& stop,
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
     const std::function<void(std::string)>& on_disconnected,
     const std::function<void(std::string)>& on_connected) {
   const int notify = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
