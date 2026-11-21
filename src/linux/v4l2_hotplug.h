@@ -47,9 +47,9 @@ class V4l2InotifyMonitor final : public HotplugMonitor {
              std::function<void(std::string)> on_connected) override;
 
  private:
-  void Watch(const std::stop_token& stop,
-             const std::function<void(std::string)>& on_disconnected,
-             const std::function<void(std::string)>& on_connected);
+  static void Watch(const std::stop_token& stop,
+                    const std::function<void(std::string)>& on_disconnected,
+                    const std::function<void(std::string)>& on_connected);
 
   std::jthread watcher_;
 };

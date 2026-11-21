@@ -363,8 +363,12 @@ int ChangeApproval(const DaemonOptions& options) {
 // otherwise has no reason to carry.
 int ListCameras() {
 #ifdef __linux__
+  // Thrown away with capture itself: it stops watching, with no camera
+  // ever having been opened, when this function returns (#111).
+  V4l2InotifyMonitor hotplug;
   V4l2Session capture(
-      /*device_id=*/{}, [](const Frame&) {}, [] {});
+      /*device_id=*/{}, [](const Frame&) {}, [] {}, [](const std::string&) {},
+      [](const std::string&) {}, hotplug);
 #else
   AvFoundationSession capture(
       /*device_id=*/{}, [](const Frame&) {}, [] {}, [](const std::string&) {},

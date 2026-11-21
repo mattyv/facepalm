@@ -28,7 +28,7 @@ namespace {
 // v4l2_ioctl and v4l2_close do (duplicated from v4l2_session.cc rather than
 // shared, so each file's test covers its own copy alone, #111).
 constexpr int kProbedNodes = 4;
-constexpr char kDevDirectory[] = "/dev";
+constexpr const char* kDevDirectory = "/dev";
 // How long one wait for an inotify event blocks before checking
 // stop_requested again, the same way SessionCamera's capture loop polls
 // its device at a bounded interval.
@@ -66,12 +66,43 @@ std::optional<std::string> IdOf(const std::string& path) {
   return std::string(reinterpret_cast<const char*>(cap.bus_info));
 }
 
+// Handles one inotify_event at the start of `event`: a probed node
+// appearing or disappearing fires `on_connected`/`on_disconnected` with
+// its id, exactly as Watch's own doc comment describes; anything else is
+// ignored. Returns how many bytes the event occupied, so Watch can
+// advance past it.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::size_t HandleEvent(const std::byte* event,
+                        std::map<std::string, std::string>& known,
+                        const std::function<void(std::string)>& on_disconnected,
+                        const std::function<void(std::string)>& on_connected) {
+  inotify_event header{};
+  std::memcpy(&header, event, sizeof(header));
+  const auto* name = reinterpret_cast<const char*>(event + sizeof(header));
+  if (const std::optional<int> index = ProbedNode(name)) {
+    const std::string path = NodePath(*index);
+    if ((header.mask & IN_CREATE) != 0) {
+      if (const std::optional<std::string> id = IdOf(path)) {
+        known[path] = *id;
+        on_connected(*id);
+      }
+    } else if ((header.mask & IN_DELETE) != 0) {
+      const auto found = known.find(path);
+      if (found != known.end()) {
+        on_disconnected(found->second);
+        known.erase(found);
+      }
+    }
+  }
+  return sizeof(header) + header.len;
+}
+
 }  // namespace
 
 void V4l2InotifyMonitor::Start(std::function<void(std::string)> on_disconnected,
                                std::function<void(std::string)> on_connected) {
   watcher_ = std::jthread(
-      [this, on_disconnected = std::move(on_disconnected),
+      [on_disconnected = std::move(on_disconnected),
        on_connected = std::move(on_connected)](const std::stop_token& stop) {
         Watch(stop, on_disconnected, on_connected);
       });
@@ -88,6 +119,7 @@ void V4l2InotifyMonitor::Start(std::function<void(std::string)> on_disconnected,
 // SessionCamera's own OnDeviceConnected/OnDeviceDisconnected can tell
 // whether it is the camera in use the same way it already does for macOS
 // (#13).
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void V4l2InotifyMonitor::Watch(
     const std::stop_token& stop,
     const std::function<void(std::string)>& on_disconnected,
@@ -125,27 +157,9 @@ void V4l2InotifyMonitor::Watch(
       break;
     }
     std::size_t offset = 0;
-    while (offset < static_cast<std::size_t>(count)) {
-      inotify_event header{};
-      std::memcpy(&header, buffer.data() + offset, sizeof(header));
-      const auto* name = reinterpret_cast<const char*>(buffer.data() + offset +
-                                                       sizeof(header));
-      if (const std::optional<int> index = ProbedNode(name)) {
-        const std::string path = NodePath(*index);
-        if ((header.mask & IN_CREATE) != 0) {
-          if (const std::optional<std::string> id = IdOf(path)) {
-            known[path] = *id;
-            on_connected(*id);
-          }
-        } else if ((header.mask & IN_DELETE) != 0) {
-          const auto found = known.find(path);
-          if (found != known.end()) {
-            on_disconnected(found->second);
-            known.erase(found);
-          }
-        }
-      }
-      offset += sizeof(header) + header.len;
+    while (std::cmp_less(offset, count)) {
+      offset += HandleEvent(buffer.data() + offset, known, on_disconnected,
+                            on_connected);
     }
   }
   close(notify);

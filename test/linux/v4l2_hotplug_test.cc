@@ -60,8 +60,8 @@ MockV4l2Hotplug* mock = nullptr;
 // descriptors when V4l2InotifyMonitor closes it.
 constexpr int kNotifyFd = 4242;
 constexpr int kFd = 7;
-constexpr char kKnownCard[] = "USB Camera";
-constexpr char kKnownBusInfo[] = "usb-0000:00:14.0-1";
+constexpr const char* kKnownCard = "USB Camera";
+constexpr const char* kKnownBusInfo = "usb-0000:00:14.0-1";
 constexpr auto kPatience = std::chrono::seconds(10);
 
 // Answers VIDIOC_QUERYCAP with `card`/`bus_info`, as
@@ -78,7 +78,7 @@ auto Capability(std::string card, std::string bus_info) {
 
 // A select() that waits a moment and finds nothing ready, the way
 // v4l2_session_test.cc's NothingYet() slows its own busy loop.
-int TimesOut(int, timeval*) {
+int TimesOut(int /*nfds*/, timeval* /*timeout*/) {
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
   return 0;
 }
@@ -175,7 +175,7 @@ class V4l2HotplugTest : public ::testing::Test {
   // afterward (Stop) then waits for it to finish handling whatever that
   // read delivered, before a test checks that nothing fired (#111).
   template <typename Action>
-  auto CountedRead(Action action) {
+  auto CountedRead(const Action& action) {
     return [this, action](int fd, void* buffer, std::size_t size) {
       const ssize_t result = action(fd, buffer, size);
       const std::scoped_lock lock(mutex_);
@@ -462,8 +462,10 @@ int v4l2_ioctl(int fd, unsigned long int request, ...) {
   return facepalm::mock->QueryCap(fd, static_cast<v4l2_capability*>(argument));
 }
 
+// NOLINTNEXTLINE(bugprone-exception-escape)
 int inotify_init1(int flags) { return facepalm::mock->InotifyInit1(flags); }
 
+// NOLINTNEXTLINE(bugprone-exception-escape,readability-inconsistent-declaration-parameter-name)
 int inotify_add_watch(int fd, const char* path, std::uint32_t inotify_mask) {
   return facepalm::mock->InotifyAddWatch(fd, path, inotify_mask);
 }
@@ -474,6 +476,7 @@ int select(int nfds, fd_set* /*readfds*/, fd_set* /*writefds*/,
   return facepalm::mock->Select(nfds, timeout);
 }
 
+// NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)
 ssize_t read(int fd, void* buffer, std::size_t count) {
   return facepalm::mock->Read(fd, buffer, count);
 }
