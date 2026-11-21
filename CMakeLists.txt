@@ -91,7 +91,7 @@ facepalm_unit(screen_context_reporter)
 # The gaze rule and protocol::Quoted are pure computation, so the
 # reporter's tests run them for real; only ScreenSource, the OS seam, is
 # mocked.
-target_link_libraries(screen_context_reporter PUBLIC screen_context protocol)
+target_link_libraries(screen_context_reporter PUBLIC screen_context protocol calibration)
 facepalm_unit(screen_context_reader)
 # ScreenContextReader's tests run the real ExpressionTracker and head_pose
 # (also pure computation), as expression_reader's and look_away_reader's
@@ -110,7 +110,7 @@ facepalm_unit(reaction_feed)
 # them for real.
 target_link_libraries(reaction_feed PUBLIC feelings)
 facepalm_unit(protocol)
-target_link_libraries(protocol PUBLIC feelings)
+target_link_libraries(protocol PUBLIC feelings calibration)
 facepalm_unit(service)
 # The protocol is pure computation, so the service's tests run it for real.
 target_link_libraries(service PUBLIC protocol)
@@ -130,6 +130,13 @@ target_link_libraries(expression_reader PUBLIC expressions head_pose)
 # like the expression reader's (#35).
 target_link_libraries(look_away PUBLIC head_pose)
 target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose)
+facepalm_unit(calibration)
+target_link_libraries(calibration PUBLIC head_pose)
+facepalm_unit(calibration_store)
+target_link_libraries(calibration_store PUBLIC calibration)
+facepalm_unit(calibration_reader)
+target_link_libraries(calibration_reader PUBLIC calibration head_pose)
+facepalm_unit(calibrate_cli)
 facepalm_unit(session_camera)
 # The daemon's readers are pure computation, so their factory's tests make
 # them for real. screen_context_reader (#61 item 11) is the one exception:
@@ -153,9 +160,15 @@ add_executable(gesture_replay_cli tools/gesture_replay/main.cc)
 set_target_properties(gesture_replay_cli PROPERTIES OUTPUT_NAME gesture_replay)
 target_link_libraries(gesture_replay_cli PRIVATE gesture_replay look_away_replay)
 
+# A minimal way to drive a calibration session for testing (#36, #35, item
+# 12 of #61), and a model for the eventual menu entry (item 8).
+add_executable(calibrate_cli_tool tools/calibrate_cli/main.cc)
+set_target_properties(calibrate_cli_tool PROPERTIES OUTPUT_NAME calibrate_cli)
+target_link_libraries(calibrate_cli_tool PRIVATE calibrate_cli client_token user_paths)
+
 # A normal install retains the MCP source and lockfile for user-managed Node 22.
 # Debian packages select Runtime only and do not install or fetch MCP dependencies.
-install(TARGETS gesture_replay_cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
+install(TARGETS gesture_replay_cli calibrate_cli_tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
 install(FILES LICENSE THIRDPARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm COMPONENT Runtime)
 install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
   mcp/package.json mcp/package-lock.json
@@ -271,7 +284,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   add_executable(facepalm_daemon tools/daemon/main.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "@executable_path/../Frameworks")
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
+    client_approvals client_token
     daemon_control daemon_options face_readers feed_clients user_paths avfoundation_session
     camera_controller config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
@@ -326,7 +340,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
   # face_model calls the shim, and the shim MediaPipe, so each comes after
   # the one that calls it.
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
+    client_approvals client_token
     daemon_control daemon_options face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader screen_context_reader screen_context_reporter screen_context
@@ -344,6 +359,7 @@ file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
   ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.cc ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.h
+  ${PROJECT_SOURCE_DIR}/tools/calibrate_cli/*.cc
   ${PROJECT_SOURCE_DIR}/tools/menu/*.cc ${PROJECT_SOURCE_DIR}/tools/menu/*.mm
   ${PROJECT_SOURCE_DIR}/tools/daemon/*.cc
   ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc

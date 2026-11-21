@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "src/calibration.h"
 #include "src/head_pose.h"
 #include "src/screen_context.h"
 #include "src/screen_source.h"
@@ -111,6 +112,70 @@ TEST(ScreenContextReporterTest, NamesEscapeAsJsonText) {
                                        /*titles_enabled=*/false);
   EXPECT_EQ(reporter.Json(kRest, kRest),
             R"({"active_app":"Quo\"te","gaze":"this_screen"})");
+}
+
+// A calibration profile (#61 item 12) is optional, and additive: it never
+// changes CoarseGazeFrom's own reading, only adds a more precise one
+// alongside it.
+CalibrationProfile TwoScreenProfile() {
+  CalibrationProfile profile;
+  ScreenCalibration left;
+  left.points[static_cast<std::size_t>(CalibrationPoint::kCentre)] =
+      HeadRotation{.yaw_degrees = -30};
+  ScreenCalibration right;
+  right.points[static_cast<std::size_t>(CalibrationPoint::kCentre)] =
+      HeadRotation{.yaw_degrees = 30};
+  profile.screens = {left, right};
+  return profile;
+}
+
+TEST(ScreenContextReporterTest, ACalibrationProfileAddsTheNearestScreen) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
+  const CalibrationProfile profile = TwoScreenProfile();
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false, &profile);
+  const std::optional<HeadRotation> pose = HeadRotation{.yaw_degrees = 25};
+
+  EXPECT_EQ(reporter.Json(pose, kRest),
+            R"({"gaze":"away","calibrated_screen":1})");
+}
+
+TEST(ScreenContextReporterTest, NoPoseLeavesTheCalibratedScreenOut) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
+  const CalibrationProfile profile = TwoScreenProfile();
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false, &profile);
+
+  EXPECT_EQ(reporter.Json(std::nullopt, kRest), R"({"gaze":"unknown"})");
+}
+
+TEST(ScreenContextReporterTest, AnEmptyProfileLeavesTheCalibratedScreenOut) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
+  const CalibrationProfile empty;
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false, &empty);
+
+  EXPECT_EQ(reporter.Json(kRest, kRest), R"({"gaze":"this_screen"})");
+}
+
+TEST(ScreenContextReporterTest, NoProfileGivenLeavesTheCalibratedScreenOut) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false);
+
+  EXPECT_EQ(reporter.Json(kRest, kRest), R"({"gaze":"this_screen"})");
 }
 
 }  // namespace
