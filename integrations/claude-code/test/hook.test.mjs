@@ -43,6 +43,8 @@ test('empty or malformed delivery emits no context', () => {
   assert.equal(formatHookContext('PostToolUseFailure', null), null);
   assert.equal(formatHookContext('PreToolUse', { readings: [{ id: 1, summary: 'nod' }] }), null);
   assert.equal(formatHookContext('PostToolUse', { readings: [{ id: -1, summary: 'nod' }] }), null);
+  assert.equal(formatHookContext('PostToolUse', { readings: [{ id: 1, summary: 12 }] }), null);
+  assert.equal(formatHookContext('PostToolUse', { readings: [{ id: 2, summary: 'ok' }, { id: -5, summary: 'bad' }] }), null);
 });
 
 test('reports missed readings even when no summaries remain', () => {
