@@ -200,6 +200,7 @@ if(FACEPALM_LINUX_TRAY)
     find_program(DBUS_RUN_SESSION NAMES dbus-run-session REQUIRED)
     find_program(XVFB_RUN NAMES xvfb-run REQUIRED)
     find_program(XDOTOOL NAMES xdotool REQUIRED)
+    find_program(XDPYINFO NAMES xdpyinfo REQUIRED)
     # Use the same sibling share directory that the installed tray searches.
     set_target_properties(facepalm_menu PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
     configure_file(tools/menu/linux/facepalm.png
@@ -208,8 +209,12 @@ if(FACEPALM_LINUX_TRAY)
     set_target_properties(linux_tray_integration PROPERTIES AUTOMOC ON)
     add_dependencies(linux_tray_integration facepalm_menu)
     target_link_libraries(linux_tray_integration PRIVATE Qt6::Core Qt6::DBus Qt6::Network Qt6::Widgets)
+    # xvfb-run's own readiness check only waits for the server's lock file
+    # to appear, which can be ready before the server accepts clients, so
+    # wait_for_display.sh polls xdpyinfo first (#101).
     add_test(NAME linux_tray_integration COMMAND ${DBUS_RUN_SESSION} --
-      ${XVFB_RUN} -a $<TARGET_FILE:linux_tray_integration> $<TARGET_FILE:facepalm_menu>)
+      ${XVFB_RUN} -a "${PROJECT_SOURCE_DIR}/scripts/wait_for_display.sh"
+      $<TARGET_FILE:linux_tray_integration> $<TARGET_FILE:facepalm_menu>)
     set_tests_properties(linux_tray_integration PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb" TIMEOUT 40)
   endif()
 
