@@ -5,6 +5,26 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Skip a degenerate pose's frame in the expression reader
+
+-   **Decision:** the expression reader drops a face whose transformation
+    matrix has no rotation to read, as it would a frame with no face: no
+    scores are judged and nothing is learned from it. The looking-away
+    reader already did the same.
+-   **Why:** averaged into `ExpressionTracker`'s resting pose, one such
+    frame left it NaN until the next gap of more than two seconds, and the
+    pose gate never shut: with a degenerate frame before it, a smile held
+    while the head turned 25 degrees away was reported, where without one
+    it was not.
+-   **Rejected:** judging the frame's scores with the pose left out, which
+    would let scores the pose has moved through ungated; and having
+    `ExpressionTracker` ignore a non-finite pose itself, where
+    `ReactionFrom` and the looking-away reader check the matrix as they
+    read the pose from it, and this reader now does the same.
+-   **Narrows:** the 2026-11-21 entry for #44, which left the other readers
+    seeing such a face. Evidence:
+    [#79](https://github.com/mattyv/facepalm/issues/79).
+
 ## 2026-11-21: Read a reaction as a feeling when a client marks a beat
 
 A client that has just asked a question or made a proposal sends
