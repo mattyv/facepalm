@@ -106,15 +106,16 @@ Each mutation, and what TLC found:
 | Mutation | Broke |
 |---|---|
 | `GuardSettleAway = FALSE`: only a return releases, the design before #62 | `TurnRearms`: a turn, then the head held still away, stays latched forever |
-| `GuardHoldAway = FALSE`: a release away needs no hold | `NoRearmOnGlance`, 3 states |
-| `GuardReturn = FALSE`: a return release needs no return | `NoRearmAway`, 4 states |
+| `GuardHoldAway = FALSE`: a release away needs no hold | `ReleaseNeedsStill`, 6 states |
+| `SettleAway` needs `held >= 1`, not `held = 2 \/ ~GuardHoldAway` | `NoRearmOnGlance`, 13 states |
+| `GuardReturn = FALSE`: a return release needs no return | `NoRearmAway`, 13 states |
 | `GuardRepeat = FALSE`: a turn is reported while one is latched | `NoRepeat`, 3 states |
-| `Settle` needs no stillness | `ReleaseNeedsStill`, 4 states |
+| `Settle` needs no stillness | `ReleaseNeedsStill`, 12 states |
 | `Hold` never enabled | `TurnRearms` |
 | No fairness on `Hold` | `TurnRearms` |
 | No fairness on `Settle \/ SettleAway` | `TurnRearms` |
 | No fairness at all | `TurnRearms` |
-| `Hold` writes a `held` outside the type | `TypeOK`, 3 states |
+| `Hold` writes a `held` outside the type | `TypeOK`, 19 states |
 
 `src/gesture_reader.cc` implements the spec in `GestureReportGate`:
 `SuppressTurn` names `Away`, `Return`, `Hold`, `Settle` and `SettleAway`, and
@@ -155,7 +156,7 @@ distinct states, every property holds.
 | Property | What it says | Test |
 |---|---|---|
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
-| `NoReportWhileLearning` | Nothing is reported while the resting pose is being learned. | `NoReportWhileLearningTest` in `test/look_away_test.cc`; `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`; `ExpressionsTest.HasNoRestingPoseWhileItIsLearned` and `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain` |
+| `NoReportWhileLearning` | Nothing is reported while the resting pose is being learned. | `NoReportWhileLearningTest.NothingIsReportedWithoutARestingPose` and `AGapClearsAHoldInProgress` in `test/look_away_test.cc`; `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`; `ExpressionsTest.HasNoRestingPoseWhileItIsLearned` and `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain` |
 | `NoReportBeforeHold` | A nod or a shake, away for less than `hold_ms`, is not reported. | `NoReportBeforeHoldTest`; `LookAwayReaderTest.NodsAreNotALookAway`; `LookAwayReplayTest.RecordedNodsAreNotReported` |
 | `OncePerLook` | One report per look away. | `OncePerLookTest`; `LookAwayReplayTest.EachRecordedLookDownIsReportedOnce`, `EachRecordedTurnAwayIsReportedOnce` |
 | `RearmOnlyAtRest` | The next look is reported only after the head comes back within half the threshold. | `RearmOnlyAtRestTest` |

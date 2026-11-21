@@ -39,7 +39,8 @@ jobs:
           shfmt -d scripts/*.sh specs/*.sh tools/fixtures/*.sh \
             integrations/claude-code/*.sh
           bash scripts/check_bats.sh
-          bats scripts/test specs/test tools/fixtures/test
+          bats scripts/test specs/test tools/fixtures/test \
+            integrations/claude-code/test
       - name: Markdown
         run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"
       - name: Tests and coverage
