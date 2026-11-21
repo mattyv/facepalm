@@ -33,7 +33,7 @@ made since, each with its reason, are in the
     frame and gives the face it found, or that there was none, to every
     `FaceReader`.
 -   `src/head_pose_reader`: a `FaceReader` that reacts with the head's yaw,
-    pitch and roll.
+    pitch and roll, and with nothing for a face whose pose is degenerate.
 -   `src/gesture_reader`, `src/head_gesture_model`: a `FaceReader` that runs
     Idiap's CCDbHG head-gesture model (#34, replacing Nodding Pigeon) and
     reacts once to each nod, shake, tilt, turn or up/down. `head_gesture_model`
@@ -62,7 +62,9 @@ made since, each with its reason, are in the
     that only its user can open, on macOS and Linux; tested on real
     sockets.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
-    to a tenth of a degree, as JSON text.
+    to a tenth of a degree, as JSON text; none for a degenerate pose matrix,
+    such as all zeros or one holding NaN or infinity, whose angles JSON
+    cannot hold (#44).
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
     transformation matrix, which is stored column by column and carries a
     uniform scale. Its test checks against MediaPipe's own expected matrix

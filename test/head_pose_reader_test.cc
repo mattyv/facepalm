@@ -33,6 +33,15 @@ TEST(HeadPoseReaderTest, ReactsToAFaceWithItsHeadAngles) {
   EXPECT_THAT(reactions, ElementsAre(R"({"yaw":0.0,"pitch":0.0,"roll":0.0})"));
 }
 
+TEST(HeadPoseReaderTest, ReactsToNothingForAFaceWithADegeneratePose) {
+  HeadPoseReader reader;
+  std::vector<Reaction> reactions;
+
+  reader.OnFace(Face{}, 1, 1, 33, reactions);
+
+  EXPECT_THAT(reactions, IsEmpty());
+}
+
 TEST(HeadPoseReaderTest, OnNoFaceReactsToNothing) {
   HeadPoseReader reader;
   const std::vector<Reaction> reactions;

@@ -5,6 +5,16 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Send no head-angle reaction for a degenerate pose
+
+When the face's transformation matrix has no rotation to read (all zeros, or
+holding NaN or infinity), the head-pose reader sends nothing for that frame,
+rather than JSON holding `nan`, which no client can parse. The other readers
+still see the face. Rejected: sending `null` angles, which every client would
+have to handle for a case of no use to it, and sending zeros, which reads as
+a head facing the camera. Evidence:
+[#44](https://github.com/mattyv/facepalm/issues/44).
+
 ## 2026-11-21: Remove only facepalm's own socket at the socket path
 
 At startup, facepalm still replaces a socket that nothing answers on, so it
