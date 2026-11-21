@@ -90,7 +90,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            bats ca-certificates git jq kcov nodejs perl
+            bats binutils ca-certificates clang git jq kcov nodejs perl
       - uses: actions/checkout@v7
       # The scripts run git over files another user owns.
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
