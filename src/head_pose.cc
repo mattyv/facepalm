@@ -57,4 +57,14 @@ Rotation RotationFrom(const PoseMatrix& pose) {
   return rotation;
 }
 
+bool IsFiniteRotation(const Rotation& rotation) {
+  for (const auto& row : rotation.rows) {
+    if (!std::ranges::all_of(
+            row, [](double value) { return std::isfinite(value); })) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace facepalm

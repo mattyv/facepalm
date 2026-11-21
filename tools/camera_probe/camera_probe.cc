@@ -302,16 +302,15 @@ class GestureProbeReader : public FaceReader {
     std::printf("\n");
     // The head pose in degrees, as LookAwayReader reads it, so a recording
     // can be replayed with gesture_replay --looking-away (#35). A frame with
-    // no rotation to read (#44) gets none, as LookAwayReader skips it.
+    // no rotation to read (#44, #85) gets none, as LookAwayReader skips it.
     PoseMatrix pose{};
     std::ranges::copy(face.pose_column_major, pose.begin());
-    const HeadRotation rotation = HeadRotationFrom(RotationFrom(pose));
-    if (std::isfinite(rotation.yaw_degrees) &&
-        std::isfinite(rotation.pitch_degrees) &&
-        std::isfinite(rotation.roll_degrees)) {
+    const Rotation rotation = RotationFrom(pose);
+    if (IsFiniteRotation(rotation)) {
+      const HeadRotation angles = HeadRotationFrom(rotation);
       std::printf("head_pose %lld %.2f %.2f %.2f\n",
-                  static_cast<long long>(timestamp_ms), rotation.yaw_degrees,
-                  rotation.pitch_degrees, rotation.roll_degrees);
+                  static_cast<long long>(timestamp_ms), angles.yaw_degrees,
+                  angles.pitch_degrees, angles.roll_degrees);
     }
 
     const std::optional<

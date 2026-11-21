@@ -26,12 +26,8 @@ std::optional<Reaction> ReactionFrom(const Face& face) {
   PoseMatrix pose{};
   std::ranges::copy(face.pose_column_major, pose.begin());
   const Rotation rotation = RotationFrom(pose);
-  // From a finite rotation, every angle is finite too.
-  for (const auto& row : rotation.rows) {
-    if (!std::ranges::all_of(
-            row, [](double value) { return std::isfinite(value); })) {
-      return std::nullopt;
-    }
+  if (!IsFiniteRotation(rotation)) {
+    return std::nullopt;
   }
   const HeadRotation head = HeadRotationFrom(rotation);
   constexpr int kLongest = 64;  // Three angles to one decimal place, and keys.

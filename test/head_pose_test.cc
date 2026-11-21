@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <ostream>
 
@@ -155,6 +156,34 @@ TEST(RotationFromTest, MediaPipesPortraitIsAlmostFacingTheCamera) {
   EXPECT_NEAR(angles.yaw_degrees, 2.24, 0.01);
   EXPECT_NEAR(angles.pitch_degrees, 6.32, 0.01);
   EXPECT_NEAR(angles.roll_degrees, 0.99, 0.01);
+}
+
+// The single check reaction.cc, expression_reader.cc, look_away_reader.cc,
+// gesture_reader.cc and camera_probe.cc each need before trusting a
+// rotation (#85): every entry finite, as a rotation taken from a real pose
+// always is.
+TEST(IsFiniteRotationTest, TrueForAFiniteRotation) {
+  const Rotation identity{{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}}};
+  EXPECT_TRUE(IsFiniteRotation(identity));
+}
+
+// A zero transformation matrix has no rotation to read: its scale, the cube
+// root of its determinant, is 0, so RotationFrom's divide gives NaN
+// throughout (#44, #85).
+TEST(IsFiniteRotationTest, FalseForTheRotationOfAZeroPose) {
+  EXPECT_FALSE(IsFiniteRotation(RotationFrom(PoseMatrix{})));
+}
+
+TEST(IsFiniteRotationTest, FalseWhenAnEntryIsNan) {
+  Rotation rotation{{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}}};
+  rotation.rows[1][2] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_FALSE(IsFiniteRotation(rotation));
+}
+
+TEST(IsFiniteRotationTest, FalseWhenAnEntryIsInfinite) {
+  Rotation rotation{{{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}}};
+  rotation.rows[2][0] = std::numeric_limits<double>::infinity();
+  EXPECT_FALSE(IsFiniteRotation(rotation));
 }
 
 }  // namespace

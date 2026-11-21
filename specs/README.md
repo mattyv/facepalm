@@ -40,6 +40,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
+| `UserService.cfg` | the menu, the service manager, one daemon and a session that may log out and in | holds, with `TurnOffStops` and `OnRuns` | 15 |
 | `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
 
 ## `McpSocket`: an MCP session owns one socket
@@ -138,6 +139,60 @@ The model does not cover the OS camera itself, which `CameraLifecycle`
 models, nor the secrecy of the token files, which only file permissions
 give.
 
+## `UserService`: the menu turns facepalm on and off
+
+Models #37's start from the menu, as `src/user_service.cc` implements it.
+**Turn On** is the person's consent: it approves the bundled MCP adapter,
+writes a launchd LaunchAgent (macOS) or a systemd `--user` unit (Linux) that
+runs the daemon with `--consent`, and loads it. **Turn Off** unloads it,
+which stops the daemon, and removes the file, so the next login does not
+start it. The service manager restarts a daemon that failed (KeepAlive's
+`SuccessfulExit = false`, `Restart=on-failure`) and not one that stopped
+cleanly. The daemon's own stop is `DaemonAdmission`'s: one fair step here.
+The service manager and a stopping daemon are fair; the person, failures
+and logging out are not.
+
+| Property | What it says | Test |
+|---|---|---|
+| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
+| `RunsOnlyWhenOn` | The daemon, which holds the person's consent, runs only while they have it turned on. | `RunsOnlyWhenOnTest` in `test/user_service_test.cc` |
+| `FileMatchesMenu` | The service's file is installed exactly while it is turned on. | `FileMatchesMenuTest` |
+| `TurnOffStops` | Liveness: turning off stops the daemon. | `TurnOffStopsTest` |
+| `OnRuns` | Liveness, and something must happen: turned on, in a session, the daemon runs, and runs again after it fails. | `OnRunsTest`; `LaunchAgentPlistTest` and `SystemdUnitTest` for the restart policy |
+
+TLC found one design gap while the spec was written: turning on again while
+the previous daemon was still stopping left it loaded but never started, as
+its clean exit is not restarted. `GuardOffWaits` closes it: `launchctl
+bootout` and `systemctl --user disable --now` return only once the daemon
+has exited, and the menu runs one command at a time.
+
+| Mutation | Broke |
+|---|---|
+| `GuardUnloadOnTurnOff = FALSE`: turning off leaves the service loaded | `RunsOnlyWhenOn`, 4 states; with it left out, `TurnOffStops` |
+| `GuardRemoveOnTurnOff = FALSE`: turning off leaves the file | `FileMatchesMenu`, 3 states; with it left out, `RunsOnlyWhenOn` at the next login |
+| `GuardRestartOnFailure = FALSE`: a failed daemon stays down | `OnRuns` |
+| `GuardOffWaits = FALSE`: turning on while the old daemon stops | `OnRuns` |
+| `GuardNoRestartOnStop = FALSE`: a clean stop is restarted too | Nothing: a clean stop comes only from turning off or logging out, which unload the service, so there is nothing to restart |
+| `Start` never enabled | `OnRuns` |
+| No fairness on `Start` | `OnRuns` |
+| No fairness on `Exit` | `TurnOffStops` |
+| `Fail` writes a state outside the type | `TypeOK`, 4 states |
+
+The same mutations, made to the code, fail the tests that stand for the
+properties they break:
+
+| Mutation to `UserService` | Fails |
+|---|---|
+| Turning off leaves the file | Every `TurnOffStopsTest`, `RunsOnlyWhenOnTest.AFileThatWillNotGoIsReported` |
+| A service that will not load keeps its file | `FileMatchesMenuTest.AServiceThatWillNotLoadLeavesNoFile`, `OnRunsTest.TurningOnSaysWhichStepFailed` |
+| A service still running after the unload counts as off | `RunsOnlyWhenOnTest.AServiceThatWillNotStopStaysOn` |
+| The agent restarts after a clean stop; the unit never restarts | `LaunchAgentPlistTest.RunsTheDaemonWithConsentAndRestartsOnFailure`; `SystemdUnitTest.RunsTheDaemonWithConsentAndRestartsOnFailure` |
+| Turning on approves no adapter | Every `OnRunsTest`, `FileMatchesMenuTest.AServiceThatWillNotLoadLeavesNoFile` |
+| The service runs the daemon without `--consent` | `LaunchAgentPlistTest.RunsTheDaemonWithConsentAndRestartsOnFailure`, both `SystemdUnitTest` |
+
+The model does not cover launchd or systemd themselves, nor macOS's camera
+permission for a LaunchAgent, which only a run on a real Mac shows.
+
 ## `FeedWaitRetirement`: canceled wait ownership
 
 The bounded model checks eight states, with one old wait and one successor,
@@ -174,7 +229,7 @@ property holds.
 |---|---|---|
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
 | `ReleaseNeedsStill` | A turn is released only once the head has held still for 750 ms. | `GestureReportGateTest.ReleaseNeedsStillSoADriftStartsTheHoldAgain`, `AnotherGestureWhileSettledAwayStartsTheHoldAgain`, `ReturnMustRemainNearForTheFullStillTime` in `test/gesture_reader_test.cc` |
-| `NoRearmAway` | A release by return happens back near the origin. | `TurnWaitsForReturnAndStillnessBeforeRearming`, `ReturnDistanceWrapsAroundPi` |
+| `NoRearmAway` | A release by return happens back near the origin. | `TurnWaitsForReturnAndStillnessBeforeRearming`, `ReturnDistanceWrapsAroundPi`, `NoRearmFromANonFiniteYaw` |
 | `NoRearmOnGlance` | A release away from the origin needs the full 2,000 ms, so a glance and its return stay one turn. | `NoRearmOnGlanceShortOfTheSettledTime`, `EachTurnStartsItsOwnHold` |
 | `NoRepeat` | No turn is reported while one is latched. | `SuppressedTurnsDoNotMakeTheGeneralGateStill`, `TurnLatchDoesNotSuppressOtherGesturesAndResetClearsIt` |
 | `TurnRearms` | Something must happen: every latched turn is released, wherever the head settles, so a later turn can be reported (#62). | `TurnRearmsOnceTheHeadHasSettledAway`, `TheSettledPoseWrapsAroundPi` |
@@ -184,15 +239,16 @@ Each mutation, and what TLC found:
 | Mutation | Broke |
 |---|---|
 | `GuardSettleAway = FALSE`: only a return releases, the design before #62 | `TurnRearms`: a turn, then the head held still away, stays latched forever |
-| `GuardHoldAway = FALSE`: a release away needs no hold | `NoRearmOnGlance`, 3 states |
-| `GuardReturn = FALSE`: a return release needs no return | `NoRearmAway`, 4 states |
+| `GuardHoldAway = FALSE`: a release away needs no hold | `ReleaseNeedsStill`, 6 states |
+| `SettleAway` needs `held >= 1`, not `held = 2 \/ ~GuardHoldAway` | `NoRearmOnGlance`, 13 states |
+| `GuardReturn = FALSE`: a return release needs no return | `NoRearmAway`, 13 states |
 | `GuardRepeat = FALSE`: a turn is reported while one is latched | `NoRepeat`, 3 states |
-| `Settle` needs no stillness | `ReleaseNeedsStill`, 4 states |
+| `Settle` needs no stillness | `ReleaseNeedsStill`, 12 states |
 | `Hold` never enabled | `TurnRearms` |
 | No fairness on `Hold` | `TurnRearms` |
 | No fairness on `Settle \/ SettleAway` | `TurnRearms` |
 | No fairness at all | `TurnRearms` |
-| `Hold` writes a `held` outside the type | `TypeOK`, 3 states |
+| `Hold` writes a `held` outside the type | `TypeOK`, 19 states |
 
 `src/gesture_reader.cc` implements the spec in `GestureReportGate`:
 `SuppressTurn` names `Away`, `Return`, `Hold`, `Settle` and `SettleAway`, and
@@ -233,7 +289,7 @@ distinct states, every property holds.
 | Property | What it says | Test |
 |---|---|---|
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
-| `NoReportWhileLearning` | Nothing is reported while the resting pose is being learned. | `NoReportWhileLearningTest` in `test/look_away_test.cc`; `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`; `ExpressionsTest.HasNoRestingPoseWhileItIsLearned` and `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain` |
+| `NoReportWhileLearning` | Nothing is reported while the resting pose is being learned. | `NoReportWhileLearningTest.NothingIsReportedWithoutARestingPose` and `AGapClearsAHoldInProgress` in `test/look_away_test.cc`; `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`; `ExpressionsTest.HasNoRestingPoseWhileItIsLearned` and `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain` |
 | `NoReportBeforeHold` | A nod or a shake, away for less than `hold_ms`, is not reported. | `NoReportBeforeHoldTest`; `LookAwayReaderTest.NodsAreNotALookAway`; `LookAwayReplayTest.RecordedNodsAreNotReported` |
 | `OncePerLook` | One report per look away. | `OncePerLookTest`; `LookAwayReplayTest.EachRecordedLookDownIsReportedOnce`, `EachRecordedTurnAwayIsReportedOnce` |
 | `RearmOnlyAtRest` | The next look is reported only after the head comes back within half the threshold. | `RearmOnlyAtRestTest` |

@@ -1,7 +1,6 @@
 #include "src/look_away_reader.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -22,11 +21,8 @@ std::optional<HeadRotation> PoseOf(const Face& face) {
   PoseMatrix pose{};
   std::ranges::copy(face.pose_column_major, pose.begin());
   const Rotation rotation = RotationFrom(pose);
-  for (const auto& row : rotation.rows) {
-    if (!std::ranges::all_of(
-            row, [](double value) { return std::isfinite(value); })) {
-      return std::nullopt;
-    }
+  if (!IsFiniteRotation(rotation)) {
+    return std::nullopt;
   }
   return HeadRotationFrom(rotation);
 }

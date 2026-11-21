@@ -38,11 +38,18 @@ flow for the eventual app host has not been established by this staging step.
 
 ## Run the development bundle
 
-If you want Facepalm to access your camera, approve the bundled MCP adapter
-once, then start the daemon. Set `APP` to the copied bundle's absolute path.
-`approve` writes a new random token to
-`~/Library/Application Support/Facepalm/clients/mcp`, private to you, and
-prints its path; the daemon listens at `service.sock` in the same folder.
+Open the copied `Facepalm.app` and choose **Turn On Facepalm…** from the 🤦
+menu. It asks for your consent, approves the bundled MCP adapter, and starts
+the daemon as a launchd LaunchAgent,
+`~/Library/LaunchAgents/com.mattyv.facepalm.daemon.plist`, which runs it
+again if it fails and at each login until you choose **Turn Off Facepalm**.
+Turning off stops the daemon, which closes the camera, and removes the
+agent. The daemon's errors go to `~/Library/Logs/facepalm-daemon.log`.
+
+Approving the adapter writes a new random token to
+`~/Library/Application Support/Facepalm/clients/mcp`, private to you; the
+daemon listens at `service.sock` in the same folder. To run the daemon by
+hand instead, in a terminal, set `APP` to the copied bundle's absolute path:
 
 ```shell
 "$APP/Contents/MacOS/facepalm-daemon" approve mcp
@@ -61,9 +68,11 @@ Contents/Resources/node/bin/node Contents/Resources/mcp/main.js
 refused. Another client, such as AI Pair, is approved under its own name.
 
 Choose **Settings** from the 🤦 menu to set the frame rate, enable detectors,
-or adjust gesture confidence and expression tuning. To apply saved settings
-on the next daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"`
-to the daemon command. The dialog shows the path it used. Several approved
+or adjust gesture confidence and expression tuning. Turn Facepalm off and on
+again to apply them; the menu passes the settings file to the daemon when
+there is one. By hand, add
+`--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"` to the
+daemon command. The dialog shows the path it used. Several approved
 MCP connections, such as Claude Desktop's and Claude Code's, can be open at
 once; each receives every interpreted gesture and expression event.
 For Claude Code, see the [bundled plugin instructions](/integrations/claude-code/README.md).

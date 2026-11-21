@@ -55,6 +55,33 @@ a line saying which entry replaced it.
     [#36](https://github.com/mattyv/facepalm/issues/36),
     [#35](https://github.com/mattyv/facepalm/issues/35).
 
+## 2026-11-21: Turn facepalm on and off from its menu, as a user service
+
+-   **Decision:** the menu's **Turn On Facepalm…** asks for the person's
+    consent, approves the bundled MCP adapter, and installs and loads a
+    user service that runs the daemon with `--consent` and the saved
+    settings: a launchd LaunchAgent, `com.mattyv.facepalm.daemon`, on macOS,
+    and a systemd `--user` unit, `facepalm.service`, on Linux. The service
+    manager starts it again after a failure and at each login. **Turn Off
+    Facepalm** unloads it, which stops the daemon and closes the camera,
+    and removes its file. Facepalm is on exactly while that file is there.
+    `specs/UserService.tla` models it.
+-   **Why:** #37 asks for the menu to start the service and give consent,
+    with launchd on macOS and systemd on Linux, and for a daemon that
+    crashes to recover on restart. The service manager already restarts and
+    logs a background process, and a file the menu writes and removes keeps
+    the on and off state where the person can see it.
+-   **Rejected:** the menu running the daemon as its own child, which stops
+    with the menu and would not start at login; restarting after a clean
+    stop too (`KeepAlive = true`, `Restart=always`), which TLC shows adds
+    nothing, since a clean stop only follows unloading; and leaving the
+    file on turning off, which starts the daemon again at the next login.
+-   **Cost:** turning on or off waits for the service manager, so the menu
+    is busy for as long as the daemon takes to stop. Whether macOS grants
+    the camera to a LaunchAgent inside the app bundle without a prompt that
+    names the app has not been checked on a real Mac yet.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37).
+
 ## 2026-11-21: Approve clients by name, and let several in at once
 
 -   **Decision:** an approved client is a token file named for it in a

@@ -23,10 +23,16 @@
 #include <QVBoxLayout>
 #include <array>
 #include <charconv>
+#include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
+#include "src/client_approvals.h"
+#include "src/client_token.h"
 #include "src/settings_document.h"
+#include "src/user_paths.h"
+#include "src/user_service.h"
 
 namespace {
 
@@ -103,6 +109,59 @@ std::optional<ConfigSnapshot> ReadConfig(const QString& path, QString& error) {
     return std::nullopt;
   }
   return ConfigSnapshot{.bytes = bytes};
+}
+
+// The user service (#37): src/user_service.h holds the logic, following
+// specs/UserService.tla; this supplies the install's paths. `on` is what
+// the person asked for; returns an error message, or an empty string.
+QString SwitchService(bool on) {
+  const std::string home = QDir::homePath().toStdString();
+  const std::optional<facepalm::UserPaths> paths =
+      facepalm::PathsFor(home, facepalm::Platform::kLinux);
+  if (!paths) {
+    return QStringLiteral("Your home folder could not be found.");
+  }
+  const std::unique_ptr<facepalm::ApprovalsIo> approvals_io =
+      facepalm::PosixApprovalsIo();
+  facepalm::ClientApprovals approvals(
+      paths->clients,
+      [](const std::string& path) { return facepalm::LoadClientToken(path); },
+      *approvals_io);
+  const std::unique_ptr<facepalm::ServiceIo> io = facepalm::PosixServiceIo();
+  facepalm::UserService service(
+      facepalm::Platform::kLinux, home,
+      [&approvals](std::string_view name, std::string& error) {
+        return approvals.Approve(name, error);
+      },
+      *io);
+  std::string error;
+  if (!on) {
+    return service.TurnOff(error) ? QString() : QString::fromStdString(error);
+  }
+  // The tray's own install first, then the camera build's documented one.
+  const std::optional<facepalm::ServiceProgram> program = facepalm::FindProgram(
+      {QDir::cleanPath(QCoreApplication::applicationDirPath() + "/..")
+           .toStdString(),
+       home + "/.local/facepalm"},
+      ConfigPath().toStdString(), *io);
+  if (!program) {
+    return QStringLiteral(
+        "The Facepalm camera daemon is not installed; see the Linux daemon "
+        "build in Facepalm's docs.");
+  }
+  return service.TurnOn(*program, error) ? QString()
+                                         : QString::fromStdString(error);
+}
+
+bool ServiceIsOn() {
+  const std::unique_ptr<facepalm::ServiceIo> io = facepalm::PosixServiceIo();
+  facepalm::UserService service(
+      facepalm::Platform::kLinux, QDir::homePath().toStdString(),
+      [](std::string_view, std::string&) {
+        return std::optional<std::string>();
+      },
+      *io);
+  return service.IsOn();
 }
 
 QString Number(float value) {
@@ -339,6 +398,36 @@ int main(int argc, char* argv[]) {
   services->setEnabled(false);
   QAction* tools = menu.addAction(QString::fromUtf8(kReplayStatus));
   tools->setEnabled(false);
+  QAction* power = menu.addAction(QString());
+  const auto show_power = [power] {
+    power->setText(ServiceIsOn() ? QStringLiteral("Turn Off Facepalm")
+                                 : QStringLiteral("Turn On Facepalm…"));
+  };
+  show_power();
+  QObject::connect(&menu, &QMenu::aboutToShow, &window, show_power);
+  // Turning on is the person's consent, so it asks first.
+  QObject::connect(power, &QAction::triggered, &window, [&window, show_power] {
+    const bool on = ServiceIsOn();
+    if (!on &&
+        QMessageBox::question(
+            &window, QStringLiteral("Turn on Facepalm?"),
+            QStringLiteral(
+                "Facepalm will use your camera while an app you "
+                "approved, such as Claude, asks how you react, and it "
+                "starts again each time you log in until you turn it "
+                "off. Frames stay on this computer.")) != QMessageBox::Yes) {
+      return;
+    }
+    const QString error = SwitchService(!on);
+    if (!error.isEmpty()) {
+      QMessageBox::warning(
+          &window,
+          on ? QStringLiteral("Facepalm could not be turned off")
+             : QStringLiteral("Facepalm could not be turned on"),
+          error);
+    }
+    show_power();
+  });
   menu.addSeparator();
   QAction* show = menu.addAction(QStringLiteral("Settings…"));
   const auto show_window = [&window] { window.Open(); };
