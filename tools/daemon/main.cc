@@ -46,9 +46,12 @@
 #include "src/linux/v4l2_session.h"
 #else
 #include "src/macos/avfoundation_session.h"
+#include "src/macos/preview_jpeg.h"
 #include "src/macos/screen_context_macos.h"
 #endif
 #include "src/feeling_store.h"
+#include "src/preview_lease.h"
+#include "src/preview_publisher.h"
 #include "src/reaction_feed.h"
 #include "src/service.h"
 #include "src/session_camera.h"
@@ -117,6 +120,35 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 }
 #endif
 
+// Replaces `path` with `bytes` atomically (#37 item 8), as
+// DaemonStatus::Publish does for the camera-in-use indicator: a
+// temporary file in the same directory, renamed over it, so a reader
+// never sees a half-written frame.
+bool WriteFileAtomically(const std::string& path, std::string_view bytes) {
+  const std::string temporary = path + ".tmp";
+  {
+    std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+    file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (!file.good()) {
+      std::remove(temporary.c_str());
+      return false;
+    }
+  }
+  if (std::rename(temporary.c_str(), path.c_str()) != 0) {
+    std::remove(temporary.c_str());
+    return false;
+  }
+  return true;
+}
+
+// Whether `path` names a file that exists, for the preview's request
+// file (#37 item 8): the menu's own explicit ask, polled on every
+// captured frame.
+bool FileExists(const std::string& path) {
+  std::error_code ignored;
+  return std::filesystem::exists(path, ignored);
+}
+
 // The daemon owns all queues and resources until DaemonControl exits. Its
 // methods only forward: the logic is in DaemonControl, which follows
 // specs/DaemonAdmission.tla, and in the sources it wires together.
@@ -129,10 +161,38 @@ class Engine : public DaemonController, public DaemonPipeline {
          std::string model, Config config,
          std::unique_ptr<FeelingStore> feelings,
          const CalibrationProfile* calibration_profile, Post control,
-         Post camera, Post inference, [[maybe_unused]] std::string device = {})
+         Post camera, Post inference, [[maybe_unused]] std::string device = {},
+         std::string preview_request_path = {},
+         std::string preview_frame_path = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
+        preview_request_path_(std::move(preview_request_path)),
+        preview_frame_path_(std::move(preview_frame_path)),
+        preview_lease_([](bool) {}),
+        preview_publisher_(
+            [this] {
+              return !preview_request_path_.empty() &&
+                     FileExists(preview_request_path_);
+            },
+            [](const Frame& frame) -> std::optional<std::string> {
+#ifdef __linux__
+              // The preview's JPEG encoding is macOS-only for now (#37
+              // item 8 follow-up, filed as a Linux gap): nothing is ever
+              // published there, so PreviewLease still tracks the
+              // camera correctly, but no frame ever leaves this stub.
+              (void)frame;
+              return std::nullopt;
+#else
+              constexpr float kPreviewQuality = 0.6F;
+              return EncodePreviewJpeg(frame, kPreviewQuality);
+#endif
+            },
+            [this](const std::string& bytes) {
+              return !preview_frame_path_.empty() &&
+                     WriteFileAtomically(preview_frame_path_, bytes);
+            },
+            preview_lease_),
         screen_source_(config.screen_context_enabled ? MakeScreenSource()
                                                      : nullptr),
         screen_context_reader_(ExpressionTracker::Settings{
@@ -172,7 +232,17 @@ class Engine : public DaemonController, public DaemonPipeline {
         approved_(
             feed_,
             [this](bool joined) {
-              control_queue_([this, joined] { control_.Subscription(joined); });
+              control_queue_([this, joined] {
+                control_.Subscription(joined);
+                // PreviewLease!CameraOpens / CameraCloses (#37 item 8):
+                // the same first-join/last-leave signal the camera's own
+                // subscription already uses.
+                if (joined) {
+                  preview_lease_.CameraOpened();
+                } else {
+                  preview_lease_.CameraClosed();
+                }
+              });
             },
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
@@ -190,11 +260,17 @@ class Engine : public DaemonController, public DaemonPipeline {
 #ifdef __linux__
         capture_(
             std::move(device),
-            [this](const Frame& frame) { pipeline_.OnFrame(frame); },
+            [this](const Frame& frame) {
+              pipeline_.OnFrame(frame);
+              preview_publisher_.OnFrame(frame);
+            },
             [this] { camera_.OnSessionFailed(); }),
 #else
         capture_(
-            [this](const Frame& frame) { pipeline_.OnFrame(frame); },
+            [this](const Frame& frame) {
+              pipeline_.OnFrame(frame);
+              preview_publisher_.OnFrame(frame);
+            },
             [this] { camera_.OnSessionFailed(); },
             [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
             [this](const std::string& id) { camera_.OnDeviceConnected(id); }),
@@ -252,6 +328,10 @@ class Engine : public DaemonController, public DaemonPipeline {
   Post control_queue_;
   std::string model_;
   Config config_;
+  std::string preview_request_path_;
+  std::string preview_frame_path_;
+  PreviewLease preview_lease_;
+  PreviewPublisher preview_publisher_;
   // Outlives any one camera session, unlike MakeFaceReaders' own readers
   // (#61 item 11); nullptr/nullopt with screen_context disabled.
   std::unique_ptr<ScreenSource> screen_source_;
@@ -395,11 +475,14 @@ int main(int argc, char** argv) {
   facepalm::SerialQueue camera;
   facepalm::SerialQueue inference;
   const char* device = std::getenv("FACEPALM_CAMERA_DEVICE");
-  facepalm::Engine engine(std::move(listener), approvals, options->model,
-                          config, std::move(feelings),
-                          calibration_profile ? &*calibration_profile : nullptr,
-                          control.Poster(), camera.Poster(), inference.Poster(),
-                          device != nullptr ? device : "/dev/video0");
+  facepalm::Engine engine(
+      std::move(listener), approvals, options->model, config,
+      std::move(feelings),
+      calibration_profile ? &*calibration_profile : nullptr, control.Poster(),
+      camera.Poster(), inference.Poster(),
+      device != nullptr ? device : "/dev/video0",
+      daemon_paths ? daemon_paths->preview_request : std::string{},
+      daemon_paths ? daemon_paths->preview_frame : std::string{});
   engine.Start();
   int signal_number = 0;
   if (sigwait(&signals, &signal_number) != 0) {
@@ -423,7 +506,10 @@ int main(int argc, char** argv) {
       facepalm::OnQueue(
           dispatch_queue_create("facepalm.camera", DISPATCH_QUEUE_SERIAL)),
       facepalm::OnQueue(
-          dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)));
+          dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)),
+      /*device=*/{},
+      daemon_paths ? daemon_paths->preview_request : std::string{},
+      daemon_paths ? daemon_paths->preview_frame : std::string{});
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
     dispatch_source_t source =

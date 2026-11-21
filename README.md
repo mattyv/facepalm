@@ -78,6 +78,18 @@ made since, each with its reason, are in the
     (below), which adds a `calibrated_screen` field from
     `NearestCalibratedScreen` alongside the uncalibrated `gaze` it already
     reads.
+-   `src/preview_lease`, `src/preview_publisher`, `src/macos/preview_jpeg`:
+    the camera preview (#36, #37, #61 item 8), gated so a frame is ever
+    encoded only while the camera is open and the menu has asked for it
+    by creating `UserPaths::preview_request` (removed to stop).
+    `PreviewLease`, following `specs/PreviewLease.tla`, is the gate: a
+    grant never carries over a camera close. `PreviewPublisher` polls the
+    request file on the frame-capture path already running, and while
+    granted, encodes each frame to JPEG (`src/macos/preview_jpeg`,
+    through ImageIO; Linux has no encoder yet) and writes it to the
+    private `UserPaths::preview_frame`, never to the approved-token
+    service every other client reaches. The menu has no window for this
+    yet (#108).
 -   `src/screen_context`, `src/screen_context_reporter`,
     `src/screen_context_reader`, `src/screen_source`: the screen context a
     reading's `context` carries (#36 item 11 of #61): the frontmost app,
