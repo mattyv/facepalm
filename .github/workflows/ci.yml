@@ -93,10 +93,10 @@ jobs:
           cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
             -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/$MEDIAPIPE_C/include" \
             -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/$MEDIAPIPE_C/lib/libmediapipe.so"
-          cmake --build build-tidy
+          cmake --build build-tidy -- -k 0
           cmake -S . -B build-tidy-menu -G Ninja -DFACEPALM_TIDY=ON \
             -DFACEPALM_LINUX_TRAY=ON -DBUILD_TESTING=OFF
-          cmake --build build-tidy-menu --target facepalm_menu
+          cmake --build build-tidy-menu --target facepalm_menu -- -k 0
       - name: Tests and coverage, with the Linux daemon
         run: |
           bash scripts/coverage.sh \
