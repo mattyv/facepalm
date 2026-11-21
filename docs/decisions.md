@@ -24,6 +24,29 @@ one bats file had not finished after two minutes); bashcov, a Ruby gem
 neither repository uses; and Ubuntu's runner, which does not package kcov.
 Evidence: [#2](https://github.com/mattyv/facepalm/issues/2).
 
+## 2026-11-21: A turn's suppression ends once the head settles anywhere
+
+-   **Decision:** after a turn, later turns stay suppressed until the model
+    reads no gesture for 750 ms with yaw back within ten degrees of the
+    estimated starting yaw, as before, or for 2,000 ms with yaw within ten
+    degrees of wherever the head settled. The pose it settled in becomes the
+    origin, and the next turn is reported. `TurnExcursion.tla` gains the
+    settled hold and a liveness property, `TurnRearms`.
+-   **Why:** the suppression had no bound: someone who turned to a second
+    screen, or settled 15 degrees off, got no turns for as long as they
+    stayed (#62), and looking away (#35) needs turns to keep reporting.
+-   **Rejected:** releasing after the general gate's 750 ms of stillness
+    anywhere, which reports a glance's return as a second turn, the problem
+    the turn latch was made for; and a plain timeout from the turn, which
+    releases mid-movement and can report the same excursion twice.
+-   **Cost:** a head held away for two seconds and then turned back gives two
+    turns, one each way. Two seconds is the limit NHTSA's 2013 visual-manual
+    distraction guidelines set for a single glance, taken from memory and not
+    measured on facepalm's users; a longer glance reports its return.
+-   **Replaces:** the suppression rule in "A turn is one excursion from a
+    starting pose" (2026-11-20).
+-   **Evidence:** [#62](https://github.com/mattyv/facepalm/issues/62).
+
 ## 2026-11-21: Bound camera_probe's recording and fail an incomplete one
 
 The probe's recorder holds at most 30 frame copies waiting to be written
@@ -200,6 +223,9 @@ The rating rejection in this entry is replaced by the feedback decision above.
 -   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
 
 ## 2026-11-20: A turn is one excursion from a starting pose
+
+Its suppression rule is replaced by "A turn's suppression ends once the head
+settles anywhere" (2026-11-21).
 
 -   **Decision:** after a turn, suppress further turns until yaw returns within
     ten degrees of the estimated starting yaw and the model reads no gesture

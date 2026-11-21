@@ -431,6 +431,149 @@ TEST(GestureReportGateTest, ReturnDistanceWrapsAroundPi) {
             Gesture::kTurn);
 }
 
+// A turn the head holds away from its origin, still, for the settled time
+// (2,000 ms, gesture_reader.cc's kSettledAwayMs) is a new posture, not a
+// glance: the pose it settled in becomes the origin and the next turn is
+// reported (#62; TurnExcursion's TurnRearms).
+TEST(GestureReportGateTest, TurnRearmsOnceTheHeadHasSettledAway) {
+  GestureReportGate gate;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 1300, {.yaw = 0.45, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 2300, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kTurn, 2400, {.yaw = 0.2, .window_start_yaw = 0.4});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 2600, {.yaw = 0.0, .window_start_yaw = 0.4}),
+      Gesture::kTurn);
+}
+
+// Held away one ms short of the settled time, the head is still on a
+// glance, and turning back is the same excursion (NoRearmOnGlance).
+TEST(GestureReportGateTest, NoRearmOnGlanceShortOfTheSettledTime) {
+  GestureReportGate gate;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 2299, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kTurn, 2300, {.yaw = 0.2, .window_start_yaw = 0.4});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 2500, {.yaw = 0.0, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+}
+
+// A head that drifts more than ten degrees from where it settled has not
+// settled yet: the hold starts again from the new pose (ReleaseNeedsStill).
+TEST(GestureReportGateTest, ReleaseNeedsStillSoADriftStartsTheHoldAgain) {
+  GestureReportGate gate;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.4, .window_start_yaw = 0.4});
+  // 0.2 radians (11.5 degrees) on: 2,000 ms from 300 would release here.
+  gate.Update(Gesture::kNone, 1300, {.yaw = 0.6, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 3200, {.yaw = 0.6, .window_start_yaw = 0.6});
+  gate.Update(Gesture::kTurn, 3250, {.yaw = 0.6, .window_start_yaw = 0.6});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 3450, {.yaw = 0.7, .window_start_yaw = 0.6}),
+      Gesture::kNone);
+  // Settled again, for the full time, from the next still frame.
+  gate.Update(Gesture::kNone, 3500, {.yaw = 0.6, .window_start_yaw = 0.6});
+  gate.Update(Gesture::kNone, 5500, {.yaw = 0.6, .window_start_yaw = 0.6});
+  gate.Update(Gesture::kTurn, 5600, {.yaw = 0.4, .window_start_yaw = 0.6});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 5800, {.yaw = 0.2, .window_start_yaw = 0.6}),
+      Gesture::kTurn);
+}
+
+// Any gesture the model reads, not only a turn, means the head is not
+// still, so it too starts the hold again.
+TEST(GestureReportGateTest, AnotherGestureWhileSettledAwayStartsTheHoldAgain) {
+  GestureReportGate gate;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNod, 1000, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 1100, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 2400, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kTurn, 2500, {.yaw = 0.2, .window_start_yaw = 0.4});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 2700, {.yaw = 0.0, .window_start_yaw = 0.4}),
+      Gesture::kNone);
+}
+
+// Where the head settled is compared across the wrap at pi, as the origin
+// is: 3.13 and -3.13 radians are 0.02 apart, not 6.26.
+TEST(GestureReportGateTest, TheSettledPoseWrapsAroundPi) {
+  GestureReportGate gate;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 2.8, .window_start_yaw = 2.4});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 3.0, .window_start_yaw = 2.4}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 3.13, .window_start_yaw = 3.13});
+  gate.Update(Gesture::kNone, 2300, {.yaw = -3.13, .window_start_yaw = 3.13});
+  gate.Update(Gesture::kTurn, 2400, {.yaw = 2.9, .window_start_yaw = -3.13});
+  EXPECT_EQ(gate.Update(Gesture::kTurn, 2600,
+                        {.yaw = 2.7, .window_start_yaw = -3.13}),
+            Gesture::kTurn);
+}
+
+// A hold under way when tracking is lost does not carry over to the next
+// turn's excursion.
+TEST(GestureReportGateTest, ResetDropsAHoldUnderWay) {
+  GestureReportGate gate;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.4, .window_start_yaw = 0.4});
+  gate.Reset();
+  gate.Update(Gesture::kTurn, 2000, {.yaw = 0.6, .window_start_yaw = 0.4});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 2200, {.yaw = 0.8, .window_start_yaw = 0.4}),
+      Gesture::kTurn);
+  // Had the hold from 300 survived, this frame would release the turn.
+  gate.Update(Gesture::kNone, 2400, {.yaw = 0.8, .window_start_yaw = 0.8});
+  gate.Update(Gesture::kTurn, 2500, {.yaw = 0.6, .window_start_yaw = 0.8});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 2700, {.yaw = 0.4, .window_start_yaw = 0.8}),
+      Gesture::kNone);
+}
+
+// A hold under way when a turn is released does not carry over to the next
+// turn either: each excursion's hold starts from its own still frames.
+TEST(GestureReportGateTest, EachTurnStartsItsOwnHold) {
+  GestureReportGate gate;
+  gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+  // Returns near the origin and is released there after 750 ms, while the
+  // settled hold that began at 300, at 0.1 radians, is still under way.
+  gate.Update(Gesture::kNone, 300, {.yaw = 0.1, .window_start_yaw = 0.4});
+  gate.Update(Gesture::kNone, 1050, {.yaw = 0.1, .window_start_yaw = 0.1});
+  // The next turn starts from -0.4 radians and ends back at 0.1, where the
+  // old hold began.
+  gate.Update(Gesture::kTurn, 1100, {.yaw = -0.2, .window_start_yaw = -0.4});
+  ASSERT_EQ(
+      gate.Update(Gesture::kTurn, 1300, {.yaw = 0.1, .window_start_yaw = -0.4}),
+      Gesture::kTurn);
+  // 2,000 ms from 300, but only 1,000 ms into this turn's own hold.
+  gate.Update(Gesture::kNone, 1400, {.yaw = 0.1, .window_start_yaw = 0.1});
+  gate.Update(Gesture::kNone, 2400, {.yaw = 0.1, .window_start_yaw = 0.1});
+  gate.Update(Gesture::kTurn, 2500, {.yaw = -0.1, .window_start_yaw = 0.1});
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 2700, {.yaw = -0.3, .window_start_yaw = 0.1}),
+      Gesture::kNone);
+}
+
 TEST(GestureReportGateTest, ResetClearsAPendingCandidate) {
   GestureReportGate gate;
   ASSERT_EQ(gate.Update(Gesture::kNod, 0), Gesture::kNone);

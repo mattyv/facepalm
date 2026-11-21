@@ -48,30 +48,59 @@ constexpr std::int64_t kConfirmMs = 200;
 // gap actually seen.
 constexpr std::int64_t kStillMs = 750;
 // The recorded subject returned within ten degrees of the starting pose (#34).
+// The same ten degrees is how far a head may drift and still count as
+// settled where it is (#62).
 constexpr double kTurnReturnRadians = 10 * std::numbers::pi / 180;
+// How long a head must hold still away from a turn's origin before the pose
+// it settled in becomes the new origin and turns are reported again (#62).
+// A glance away is commonly taken to last under two seconds, the limit
+// NHTSA's visual-manual driver distraction guidelines (2013) set for a
+// single glance; a hold past it is a new posture, and turning back from it
+// is a turn of its own.
+constexpr std::int64_t kSettledAwayMs = 2000;
+
+// The distance between yaws `a` and `b`, in radians, across the wrap at pi.
+double YawDistance(double a, double b) {
+  return std::abs(std::remainder(a - b, 2 * std::numbers::pi));
+}
 
 }  // namespace
 
+// TurnExcursion's Away, Return, Hold, Settle and SettleAway (#34, #62).
 bool GestureReportGate::SuppressTurn(Gesture gesture, std::int64_t timestamp_ms,
                                      TurnPose pose) {
   if (!turn_latched_) {
     return false;
   }
-  const bool near =
-      std::abs(std::remainder(pose.yaw - turn_origin_, 2 * std::numbers::pi)) <=
-      kTurnReturnRadians;
-  if (near && gesture == Gesture::kNone) {
-    if (!turn_settling_) {
-      turn_settling_ = true;
-      turn_settling_ms_ = timestamp_ms;
-    } else if (timestamp_ms - turn_settling_ms_ >= kStillMs) {
-      turn_latched_ = false;
-      turn_settling_ = false;
-    }
-  } else {
+  if (gesture != Gesture::kNone) {
+    // Away: the model reads a gesture, so the head is not still.
     turn_settling_ = false;
+    turn_holding_ = false;
+    return gesture == Gesture::kTurn;
   }
-  return turn_latched_ && gesture == Gesture::kTurn;
+  // Settle: back within ten degrees of the origin, and still for kStillMs.
+  if (YawDistance(pose.yaw, turn_origin_) > kTurnReturnRadians) {
+    turn_settling_ = false;
+  } else if (!turn_settling_) {
+    turn_settling_ = true;
+    turn_settling_ms_ = timestamp_ms;
+  }
+  // Hold: still within ten degrees of where the head settled; a drift past
+  // that starts the hold again from the new pose.
+  if (!turn_holding_ ||
+      YawDistance(pose.yaw, turn_hold_yaw_) > kTurnReturnRadians) {
+    turn_holding_ = true;
+    turn_hold_ms_ = timestamp_ms;
+    turn_hold_yaw_ = pose.yaw;
+  }
+  const bool returned =
+      turn_settling_ && timestamp_ms - turn_settling_ms_ >= kStillMs;
+  // SettleAway: still for kSettledAwayMs, wherever the head settled.
+  const bool settled_away = timestamp_ms - turn_hold_ms_ >= kSettledAwayMs;
+  if (returned || settled_away) {
+    turn_latched_ = false;
+  }
+  return false;
 }
 
 head_gesture::Gesture GestureReportGate::Update(head_gesture::Gesture gesture,
@@ -105,7 +134,10 @@ head_gesture::Gesture GestureReportGate::Update(head_gesture::Gesture gesture,
     if (timestamp_ms - candidate_start_ms_ >= kConfirmMs) {
       episode_open_ = true;
       if (gesture == Gesture::kTurn) {
+        // TurnExcursion's Turn: each excursion's holds start afresh.
         turn_latched_ = true;
+        turn_settling_ = false;
+        turn_holding_ = false;
         turn_origin_ = candidate_origin_;
       }
       has_candidate_ = false;
@@ -125,8 +157,8 @@ void GestureReportGate::Reset() {
   episode_open_ = false;
   has_candidate_ = false;
   is_still_ = false;
+  // Turn clears the holds when it next latches.
   turn_latched_ = false;
-  turn_settling_ = false;
 }
 
 GestureReader::GestureReader(float confidence_threshold)
