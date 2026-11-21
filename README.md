@@ -15,8 +15,10 @@ made since, each with its reason, are in the
 ## What exists
 
 -   `src/mediapipe_shim`: MediaPipe's face landmarker, as one self-contained
-    library with a plain C interface, built by `tools/fixtures/build.sh`.
-    `tools/fixtures/test_shim.sh` tests it against the real model. Its
+    library with a plain C interface, built by `tools/fixtures/build.sh`,
+    on macOS. On Linux, `src/linux/mediapipe_c_shim.cc` gives its face model
+    functions over MediaPipe's own `libmediapipe.so` (#65).
+    `tools/fixtures/test_shim.sh` tests the shim against the real model. Its
     short-range face detector is unused since #34 replaced Nodding Pigeon
     (below); it is still built and tested, since removing it needs a Bazel
     build this environment could not run.
@@ -66,23 +68,41 @@ made since, each with its reason, are in the
 -   `src/reaction_feed`: the readings each client is told about (#36): one
     timeline of interpreted reactions, each with the summary line the person
     sees and the detail the agent gets. A client reads what came since it
-    last looked, or waits for the next reading, and the person can rate a
-    reading 1 to 5. It follows `specs/ReactionFeed.tla`. A client that has
-    just asked a question or made a proposal can instead mark a beat: the
-    feed waits out the beat's window and answers with the readings and one
-    interpretation of them, a feeling, following `specs/FeelingBeat.tla`
-    (#70).
+    last looked, or waits for the next reading. It follows
+    `specs/ReactionFeed.tla`. A client that has just asked a question or
+    made a proposal can instead mark a beat: the feed waits out the beat's
+    window and answers with the readings and one interpretation of them, a
+    feeling, following `specs/FeelingBeat.tla` (#70). The person can then
+    say how they really felt, once per interpretation and within five
+    minutes, following `specs/FeelingFeedback.tla` (#35).
 -   `src/feelings`: the six feelings a reaction is read as, and the only list
     of them: agreement, disagreement, engagement, annoyance, confused and
     unknown. Its generic rule reads a beat's nods as agreement, its shakes
     as disagreement, and brows down or narrowed eyes, held, as confused;
     no cue, cues of different feelings, or a window missing a dropped
     reading read as unknown. No rule gives engagement or annoyance yet; they
-    are there for corrections to name (#35).
+    are there for corrections to name (#35). It also names what a beat
+    showed, the one kind of reaction made during it and the beat's kind,
+    which a correction is counted under.
+-   `src/tuning`: the person's own reads (#35): how many times they picked
+    each feeling for each reaction and kind of beat. A feeling picked at
+    least twice and more than half the time becomes the person's read for
+    it, but only once a held-out check shows it beats the generic rule: each
+    pick in turn is held out and read from the others, and those reads must
+    be right more often than the generic one. Three picks of the same
+    feeling are enough; a split between two is not.
+-   `src/feeling_store`: keeps those counts in one file private to the
+    person, `facepalm/feelings` in `$XDG_CONFIG_HOME` or `~/.config` unless
+    the daemon is given `--feelings-file PATH`. It is the file's only
+    writer: it holds `feelings.lock` while open, so a second daemon cannot
+    open it, and saves one pick at a time by renaming a synced temporary
+    file over it, so a crash leaves the old counts or the new. A pick is
+    answered ok only once the folder is synced too.
 -   `src/service`: the background service's connections (#37), following
     `specs/Service.tla`. Each connection names its client, then reads,
-    waits for a reading, marks a beat, or rates a reading, in the protocol
-    of `src/protocol`: a request is a line of text, and each reply a line of
+    waits for a reading, marks a beat, says how the person felt at one, or
+    forgets every feeling the person gave, in the protocol of
+    `src/protocol`: a request is a line of text, and each reply a line of
     JSON. Stopping ends every connection, even one waiting.
 -   `src/unix_socket`: the service's connections over a Unix domain socket
     that only its user can open, on macOS and Linux; tested on real
@@ -143,6 +163,11 @@ bash scripts/coverage.sh \
 CXX=clang++ cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
 cmake --build build-sanitizers && ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
+# Data races, in a build of its own: ThreadSanitizer cannot share one with
+# AddressSanitizer. Clang on macOS runs it too.
+CXX=clang++ cmake -S . -B build-tsan -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+cmake --build build-tsan && TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-tsan --output-on-failure --no-tests=error
 bats scripts/test specs/test tools/fixtures/test  # Tests for the scripts.
 bash scripts/check_bats.sh        # Every bats assertion ends in || false.
 # On Linux with kcov: every shell script's lines, at 100 percent.
@@ -231,8 +256,12 @@ The adapter's `wait_for_reaction` tool returns the readings since the session
 last looked. Right after the agent asks the person something, it can pass
 `beat` (`question` or `proposal`): the service then watches the next
 `timeout_ms` (1500 by default, at most 10000) and adds `interpretation`, with
-an ID and the feeling the reaction was read as, which is `unknown` when it
-cannot tell. The feeling is advisory, never an answer.
+an ID, the feeling the reaction was read as, which is `unknown` when it
+cannot tell, and `feelings`, every feeling the person can pick instead. The
+feeling is advisory, never an answer. When the person says how they really
+felt, `tell_feeling` takes the interpretation's ID and their pick, sends
+`feel <id> <feeling>`, and Facepalm tunes later reads from it. A client resets
+the person's picks with `reset feelings`.
 
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the

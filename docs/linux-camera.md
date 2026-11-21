@@ -22,11 +22,16 @@ The camera daemon links against the C library directly.
 `scripts/fetch_mediapipe_c.sh` fetches both: the nine headers the face
 landmarker's C API includes, into `include`, and the library, into `lib`. It
 checks every file against `scripts/mediapipe_c.sha256`, and keeps one already
-in place with its hash. CI's `linux` and `sanitizers` jobs build the daemon
-and its Linux units this way (#83).
+in place with its hash. CI's `linux`, `sanitizers` and `thread-sanitizer`
+jobs build the daemon and its Linux units this way (#83).
 
-Set `MODEL` to the checksum-verified face landmarker task used by
-`tools/fixtures/build.sh`.
+Set `MODEL` to the face landmarker task that `tools/fixtures/build.sh` pins:
+`face_landmarker_v2_with_blendshapes.task`, generation `1782184688504388` of
+MediaPipe's test assets, whose SHA-256 is
+`b261925d4aad812b47a0e8d58c1baa1223270a5d1f663d78338bc881c003879d`.
+`build.sh` itself builds the macOS shim and does not run on Linux, where
+`src/linux/mediapipe_c_shim.cc` gives the daemon the face model's C
+functions over `libmediapipe.so`.
 
 ```sh
 bash scripts/fetch_mediapipe_c.sh build-mediapipe-c

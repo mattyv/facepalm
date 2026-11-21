@@ -199,6 +199,42 @@ jobs:
           cmake --build build-sanitizers
           ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
 
+  # ThreadSanitizer cannot share a build with AddressSanitizer, so it has its
+  # own (#66): the service, the feed and the client gate are threaded, and so
+  # is the Linux camera's capture thread (#83).
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    env:
+      CXX: clang++
+      TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1
+      MEDIAPIPE_C: build-mediapipe-c
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-rt-dev libegl1 libgles2 libgmock-dev libgtest-dev \
+            libv4l-dev llvm ninja-build unzip
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.MEDIAPIPE_C }}
+          key: mediapipe-c-${{ hashFiles('scripts/mediapipe_c.sha256') }}
+      - name: Fetch MediaPipe's C headers and library
+        run: bash scripts/fetch_mediapipe_c.sh "$MEDIAPIPE_C"
+      # ThreadSanitizer fails to start under the 32 bits of mmap randomness
+      # that newer kernels default to; 28 is what it supports.
+      - name: Narrow address space randomization
+        run: sudo sysctl vm.mmap_rnd_bits=28
+      - name: Tests with ThreadSanitizer
+        run: |
+          cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" \
+            -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/$MEDIAPIPE_C/include" \
+            -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/$MEDIAPIPE_C/lib/libmediapipe.so"
+          cmake --build build-tsan
+          ctest --test-dir build-tsan --output-on-failure --no-tests=error
+
   # Checks every TLA+ config, with TLC pinned as ai-pair's CI pins it.
   specs:
     runs-on: ubuntu-latest

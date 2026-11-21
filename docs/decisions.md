@@ -7,7 +7,7 @@ a line saying which entry replaced it.
 
 ## 2026-11-21: Build and test the Linux camera's sources in CI
 
--   **Decision:** CI's `linux` and `sanitizers` jobs fetch MediaPipe's C
+-   **Decision:** CI's `linux` and both sanitizer jobs fetch MediaPipe's C
     headers and `libmediapipe.so` with `scripts/fetch_mediapipe_c.sh`, each
     file checked against `scripts/mediapipe_c.sha256` and the folder cached,
     and build the Linux daemon with them. `src/linux/mediapipe_c_shim.cc`
@@ -23,6 +23,82 @@ a line saying which entry replaced it.
     and an interface injected into `V4l2Session` for its system calls, a
     larger seam than the link-time one `test/face_model_test.cc` already
     uses. Evidence: [#83](https://github.com/mattyv/facepalm/issues/83).
+
+## 2026-11-21: The feeling the person picks tunes the next read, in the daemon
+
+-   **Decision:** a client sends `feel <interpretation-id> <feeling>` when
+    the person says how they really felt at a beat. The service takes it only
+    for an interpretation it gave that connection, once, within five minutes,
+    and only a feeling from `src/feelings.h`; it answers `{"ok":true}` or an
+    error. `reset feelings` forgets every pick. Each beat's interpretation
+    also lists every feeling, so clients take the names from the service. The
+    daemon counts picks of each feeling for each reaction and kind of beat, in
+    one file private to the person (`facepalm/feelings` in `$XDG_CONFIG_HOME`
+    or `~/.config`, or `--feelings-file`), which it alone writes: it holds a
+    lock file while open, saves one pick at a time by renaming a synced
+    temporary file over it, and answers ok only once the folder is synced. A
+    feeling picked at least twice and more than half the time is the
+    person's read for that reaction and beat, once a held-out check passes:
+    each pick in turn is held out and read from the others, and those reads
+    must be right more often than the generic rule. Three matching picks are
+    enough. The MCP adapter's `tell_feeling` replaces `rate_reaction`, and
+    `/facepalm:feel` replaces `/facepalm:rate`. `specs/FeelingFeedback.tla`
+    models it.
+-   **Why:** the user chose "pick the feeling" over the 1 to 5 rating, and
+    feelings and their learning in the service, so every client feeds the
+    same corrections (#61). Generic reads first, then light personal tuning
+    (#35): the check keeps a person's picks from changing a read until they
+    would have predicted that person better than the rule.
+-   **Rejected:** the 1 to 5 rating, `rate_reaction`, the ratings file and
+    `specs/RatingPersistence.tla`, which a rating needed. Codex's draft
+    `meaning-model.js`, whose held-out idea this keeps: it learned only
+    agreement and disagreement from nods and shakes, held out the last closed
+    session, which needs a session lifecycle no client has, and compared
+    against the most common label rather than the generic rule; the check
+    here holds out each pick, so plain counts suffice. A machine-learning
+    framework, which a few counts do not need. Keeping summaries, reading IDs
+    or times in the file.
+-   **Cost:** picks never fade; a reset clears them all. A beat with reactions
+    of more than one kind, or with a dropped reading, takes a feeling but
+    teaches nothing, since it cannot say which reaction it was about. A frown
+    already reads as confused, so picking confused for it changes nothing. A
+    save whose folder sync fails is answered with an error, yet its pick is in
+    the file and is read. One daemon at a time can open the file.
+-   **Evidence:** [#35](https://github.com/mattyv/facepalm/issues/35),
+    [#61](https://github.com/mattyv/facepalm/issues/61).
+
+## 2026-11-21: Remove the Linux ELF build of the MediaPipe shim
+
+-   **Decision:** remove the Bazel `libfacepalm_mediapipe.so` target, its
+    ELF export list and the bats test that cross-linked it;
+    `tools/fixtures/build.sh` refuses to run on Linux, naming
+    `docs/linux-camera.md`. This replaces the 2026-11-20 entry "Use an ELF
+    export list for the Linux MediaPipe shim".
+-   **Why:** nothing used it. Since #60, the Linux daemon compiles
+    `src/linux/mediapipe_c_shim.cc` in and links MediaPipe's own
+    `libmediapipe.so` from its 0.10.35 wheel; CMake imports the Bazel shim
+    on macOS only, and no workflow built the `.so`, so its 100 percent rule
+    never ran.
+-   **Rejected:** building and testing the `.so` on CI's Linux, which would
+    add a half-hour Bazel build for a library no Linux build links.
+-   **Evidence:** [#65](https://github.com/mattyv/facepalm/issues/65).
+
+## 2026-11-21: Run the native tests under ThreadSanitizer too
+
+-   **Decision:** a CI job of its own, on Linux, builds the native CTest suite
+    with `-fsanitize=thread` and fails on the first data race it reports.
+    It sets `vm.mmap_rnd_bits=28` first, since ThreadSanitizer does not start
+    under the 32 bits of address space randomization newer kernels use.
+-   **Why:** the service, the feed and the client gate run on threads, and
+    AddressSanitizer and UndefinedBehaviorSanitizer find no data races. With
+    the lock around `connection.done = true` in `Service::Serve` removed,
+    `service_test` failed under ThreadSanitizer with a data race against
+    `AcceptAll`, three runs out of three; with it, the suite is clean.
+-   **Rejected:** adding the flag to the existing sanitizers job, which
+    Clang refuses: ThreadSanitizer cannot be combined with AddressSanitizer.
+-   **Cost:** as with the other sanitizers, only threads the tests start are
+    checked, and only on Linux; the MediaPipe shim is not in the build.
+    Evidence: [#66](https://github.com/mattyv/facepalm/issues/66).
 
 ## 2026-11-21: Skip a degenerate pose's frame in the expression reader
 
@@ -236,6 +312,8 @@ separate portability milestone. [Facepalm service issue #37](https://github.com/
 
 ## 2026-11-20: Use an ELF export list for the Linux MediaPipe shim
 
+Replaced by "Remove the Linux ELF build of the MediaPipe shim" (2026-11-21).
+
 -   **Decision:** build a `.so` on Linux with the same six-function C ABI as
     the macOS dylib, hiding all other symbols with an ELF version script.
 -   **Why:** MediaPipe's internal symbols must not collide with another copy.
@@ -246,6 +324,9 @@ separate portability milestone. [Facepalm service issue #37](https://github.com/
 -   **Evidence:** [#3](https://github.com/mattyv/facepalm/issues/3).
 
 ## 2026-11-20: Store feedback only when explicitly requested
+
+Replaced by "The feeling the person picks tunes the next read, in the daemon"
+(2026-11-21).
 
 -   **Decision:** `--ratings-file` enables a private, single-writer versioned
     JSONL feedback file capped at 10 MiB. A rating succeeds only after its
@@ -443,6 +524,9 @@ settles anywhere" (2026-11-21).
 
 ## 2026-11-18: How reactions reach an agent
 
+Its 1 to 5 rating is replaced by
+"The feeling the person picks tunes the next read, in the daemon" (2026-11-21).
+
 -   **Decision:** facepalm has its own MCP server. Where a client supports
     hooks, reactions are delivered automatically after each agent action; the
     MCP tools are the fallback.
@@ -459,6 +543,10 @@ settles anywhere" (2026-11-21).
 -   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36).
 
 ## 2026-11-18: Generic readings first, light personal tuning after
+
+Its tuning from ratings is replaced by
+"The feeling the person picks tunes the next read, in the daemon" (2026-11-21):
+the person's picked feelings tune the reads.
 
 -   **Decision:** reactions are read with rules that are the same for
     everyone, and tuned for each person from their ratings.

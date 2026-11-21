@@ -41,7 +41,7 @@
 #else
 #include "src/macos/avfoundation_session.h"
 #endif
-#include "src/rating_log.h"
+#include "src/feeling_store.h"
 #include "src/reaction_feed.h"
 #include "src/service.h"
 #include "src/session_camera.h"
@@ -128,17 +128,14 @@ class FeedClients : public Clients {
 class Engine : public DaemonController, public DaemonPipeline {
  public:
   Engine(std::unique_ptr<Listener> listener, std::string token,
-         std::string model, Config config, std::unique_ptr<RatingLog> ratings,
-         Post control, Post camera, Post inference,
-         [[maybe_unused]] std::string device = {})
+         std::string model, Config config,
+         std::unique_ptr<FeelingStore> feelings, Post control, Post camera,
+         Post inference, [[maybe_unused]] std::string device = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
-        ratings_(std::move(ratings)),
-        feed_(kFeedCapacity,
-              [this](const ReactionFeed::Rating& rating) {
-                return ratings_ != nullptr && ratings_->Record(rating);
-              }),
+        feelings_(std::move(feelings)),
+        feed_(kFeedCapacity, *feelings_),
         clients_(feed_),
         approved_(
             feed_, std::move(token),
@@ -147,8 +144,7 @@ class Engine : public DaemonController, public DaemonPipeline {
             },
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
-            },
-            ratings_ != nullptr),
+            }),
         service_(std::move(listener), approved_),
         control_(
             *this, *this, [this] { service_.Stop(); },
@@ -254,7 +250,7 @@ class Engine : public DaemonController, public DaemonPipeline {
   Post control_queue_;
   std::string model_;
   Config config_;
-  std::unique_ptr<RatingLog> ratings_;
+  std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
   ReactionFeed feed_;
   FeedClients clients_;
   ApprovedFeed approved_;
@@ -276,7 +272,7 @@ struct Options {
   std::string model;
   std::string token;
   std::string config;
-  std::string ratings_file;
+  std::string feelings_file;
 };
 
 std::optional<Options> ParseOptions(int argc, char* const* argv) {
@@ -299,8 +295,8 @@ std::optional<Options> ParseOptions(int argc, char* const* argv) {
       value = &options.token;
     } else if (arg == "--config") {
       value = &options.config;
-    } else if (arg == "--ratings-file") {
-      value = &options.ratings_file;
+    } else if (arg == "--feelings-file") {
+      value = &options.feelings_file;
     }
     if (value == nullptr || !value->empty()) {
       return std::nullopt;
@@ -324,7 +320,7 @@ int main(int argc, char** argv) {
     std::fprintf(
         stderr,
         "usage: facepalm-daemon --consent --socket PATH --model PATH "
-        "--client-token-file PATH [--config PATH] [--ratings-file PATH]\n");
+        "--client-token-file PATH [--config PATH] [--feelings-file PATH]\n");
     return 2;
   }
   const auto token = facepalm::LoadClientToken(options->token);
@@ -355,13 +351,17 @@ int main(int argc, char** argv) {
     config = *parsed;
   }
   std::string error;
-  std::unique_ptr<facepalm::RatingLog> ratings;
-  if (!options->ratings_file.empty()) {
-    ratings = facepalm::RatingLog::Open(options->ratings_file, error);
-    if (!ratings) {
-      std::fprintf(stderr, "cannot open feedback file\n");
-      return 2;
-    }
+  const std::string feelings_file =
+      options->feelings_file.empty()
+          ? facepalm::DefaultFeelingsPath(
+                [](const char* name) { return std::getenv(name); })
+          : options->feelings_file;
+  auto feelings = feelings_file.empty()
+                      ? nullptr
+                      : facepalm::FeelingStore::Open(feelings_file, error);
+  if (!feelings) {
+    std::fprintf(stderr, "cannot open feelings file: %s\n", error.c_str());
+    return 2;
   }
   auto listener = facepalm::UnixListener::Create(options->socket, error);
   if (!listener) {
@@ -384,8 +384,8 @@ int main(int argc, char** argv) {
   facepalm::SerialQueue inference;
   const char* device = std::getenv("FACEPALM_CAMERA_DEVICE");
   facepalm::Engine engine(std::move(listener), *token, options->model, config,
-                          std::move(ratings), control.Poster(), camera.Poster(),
-                          inference.Poster(),
+                          std::move(feelings), control.Poster(),
+                          camera.Poster(), inference.Poster(),
                           device != nullptr ? device : "/dev/video0");
   engine.Start();
   int signal_number = 0;
@@ -404,7 +404,7 @@ int main(int argc, char** argv) {
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);
   auto* engine =
       new facepalm::Engine(std::move(listener), *token, options->model, config,
-                           std::move(ratings), facepalm::OnQueue(control),
+                           std::move(feelings), facepalm::OnQueue(control),
                            facepalm::OnQueue(dispatch_queue_create(
                                "facepalm.camera", DISPATCH_QUEUE_SERIAL)),
                            facepalm::OnQueue(dispatch_queue_create(

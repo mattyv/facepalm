@@ -23,7 +23,9 @@ class MockFeed : public Feed {
   MOCK_METHOD(std::optional<Delivery>, Beat,
               (const std::string&, BeatKind, std::chrono::milliseconds),
               (override));
-  MOCK_METHOD(bool, Rate, (const std::string&, std::int64_t, int), (override));
+  MOCK_METHOD(bool, Feel, (const std::string&, std::int64_t, Feeling),
+              (override));
+  MOCK_METHOD(bool, Reset, (const std::string&), (override));
 };
 
 TEST(ApprovedFeedTest, OnlyApprovedClientCanSubscribeAndLeave) {
@@ -62,7 +64,8 @@ TEST(ApprovedFeedTest, OperationsUseOnlyTheAuthorizedFeedIdentity) {
       [&](const std::string& name) { inner.Disconnect(name); });
   EXPECT_FALSE(feed.Read("wrong"));
   EXPECT_FALSE(feed.Wait("wrong", std::chrono::milliseconds(1)));
-  EXPECT_FALSE(feed.Rate("wrong", 1, 4));
+  EXPECT_FALSE(feed.Feel("wrong", 1, Feeling::kAgreement));
+  EXPECT_FALSE(feed.Reset("wrong"));
   EXPECT_FALSE(
       feed.Beat("wrong", BeatKind::kQuestion, std::chrono::milliseconds(1)));
   EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
@@ -73,8 +76,11 @@ TEST(ApprovedFeedTest, OperationsUseOnlyTheAuthorizedFeedIdentity) {
   EXPECT_CALL(inner, Wait("approved-1", std::chrono::milliseconds(4)))
       .WillOnce(testing::Return(Feed::Delivery{}));
   EXPECT_TRUE(feed.Wait("secret", std::chrono::milliseconds(4)));
-  EXPECT_CALL(inner, Rate("approved-1", 3, 5)).WillOnce(testing::Return(true));
-  EXPECT_TRUE(feed.Rate("secret", 3, 5));
+  EXPECT_CALL(inner, Feel("approved-1", 3, Feeling::kConfused))
+      .WillOnce(testing::Return(true));
+  EXPECT_TRUE(feed.Feel("secret", 3, Feeling::kConfused));
+  EXPECT_CALL(inner, Reset("approved-1")).WillOnce(testing::Return(true));
+  EXPECT_TRUE(feed.Reset("secret"));
   EXPECT_CALL(inner, Beat("approved-1", BeatKind::kProposal,
                           std::chrono::milliseconds(6)))
       .WillOnce(testing::Return(Feed::Delivery{}));
@@ -95,24 +101,16 @@ TEST(ApprovedFeedTest, DuplicateApprovalAndIdleDisconnectDoNotRetire) {
   EXPECT_THAT(changes, testing::ElementsAre(true));
 }
 
-TEST(ApprovedFeedTest, RejectedInnerRatingIsReportedToTheClient) {
+TEST(ApprovedFeedTest, ARefusedFeelingOrResetIsReportedToTheClient) {
   MockFeed inner;
   ApprovedFeed feed(inner, "secret", [](bool) {}, [](const std::string&) {});
   EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
   ASSERT_TRUE(feed.Connect("secret"));
-  EXPECT_CALL(inner, Rate("approved-1", 8, 4)).WillOnce(testing::Return(false));
-  EXPECT_FALSE(feed.Rate("secret", 8, 4));
-}
-
-TEST(ApprovedFeedTest, CanRefuseRatingsWhenNoFeedbackSinkExists) {
-  MockFeed inner;
-  ApprovedFeed feed(
-      inner, "secret", [](bool) {},
-      [&](const std::string& name) { inner.Disconnect(name); }, false);
-  EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
-  ASSERT_TRUE(feed.Connect("secret"));
-  EXPECT_CALL(inner, Rate).Times(0);
-  EXPECT_FALSE(feed.Rate("secret", 1, 5));
+  EXPECT_CALL(inner, Feel("approved-1", 8, Feeling::kUnknown))
+      .WillOnce(testing::Return(false));
+  EXPECT_FALSE(feed.Feel("secret", 8, Feeling::kUnknown));
+  EXPECT_CALL(inner, Reset("approved-1")).WillOnce(testing::Return(false));
+  EXPECT_FALSE(feed.Reset("secret"));
 }
 
 }  // namespace
