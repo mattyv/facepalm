@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <vector>
 
 #include "src/head_pose.h"
@@ -496,6 +497,47 @@ TEST_F(ExpressionsTest,
   }
 
   EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// The resting pose, for LookAwayDetector (#35): none until it has been
+// learned, then the pose the head rests at, following one it holds.
+TEST_F(ExpressionsTest, HasNoRestingPoseBeforeTheFirstFrame) {
+  EXPECT_EQ(tracker_.RestingPose(), std::nullopt);
+}
+
+TEST_F(ExpressionsTest, HasNoRestingPoseWhileItIsLearned) {
+  pose_ = {.yaw_degrees = 5, .pitch_degrees = -3};
+  Hold(2.9);
+  EXPECT_EQ(tracker_.RestingPose(), std::nullopt);
+}
+
+TEST_F(ExpressionsTest, HasTheRestingPoseOnceLearned) {
+  pose_ = {.yaw_degrees = 5, .pitch_degrees = -3, .roll_degrees = 2};
+  Rest();
+  ASSERT_TRUE(tracker_.RestingPose().has_value());
+  const HeadRotation resting = tracker_.RestingPose().value_or(HeadRotation{});
+  EXPECT_NEAR(resting.yaw_degrees, 5, 1e-9);
+  EXPECT_NEAR(resting.pitch_degrees, -3, 1e-9);
+  EXPECT_NEAR(resting.roll_degrees, 2, 1e-9);
+}
+
+TEST_F(ExpressionsTest, TheRestingPoseFollowsAPoseHeldForAMinute) {
+  Rest();
+  pose_ = {.yaw_degrees = 30};
+  Hold(5);
+  ASSERT_TRUE(tracker_.RestingPose().has_value());
+  // Still a look away after five seconds.
+  EXPECT_LT(tracker_.RestingPose().value_or(HeadRotation{}).yaw_degrees, 15);
+  Hold(60);
+  ASSERT_TRUE(tracker_.RestingPose().has_value());
+  EXPECT_GT(tracker_.RestingPose().value_or(HeadRotation{}).yaw_degrees, 25);
+}
+
+TEST_F(ExpressionsTest, HasNoRestingPoseAfterAGapUntilItIsLearnedAgain) {
+  Rest();
+  now_ms_ += 3000;
+  Hold(1);
+  EXPECT_EQ(tracker_.RestingPose(), std::nullopt);
 }
 
 TEST(ExpressionNameTest, NamesEachExpression) {

@@ -34,6 +34,8 @@
 #include "src/face_reader.h"
 #include "src/frame_pipeline.h"
 #include "src/gesture_reader.h"
+#include "src/look_away.h"
+#include "src/look_away_reader.h"
 #ifdef __linux__
 #include "src/linux/v4l2_session.h"
 #else
@@ -229,6 +231,18 @@ class Engine : public DaemonController, public DaemonPipeline {
               .settle_ms = config_.expressions_settle_ms,
               .spreads = config_.expressions_spreads,
               .hold_ms = config_.expressions_hold_ms}));
+    }
+    if (config_.looking_away_enabled) {
+      readers.push_back(std::make_unique<LookAwayReader>(
+          ExpressionTracker::Settings{
+              .rise = config_.expressions_smallest_rise,
+              .pose_degrees = config_.expressions_pose_degrees,
+              .pose_range = config_.expressions_pose_range,
+              .settle_ms = config_.expressions_settle_ms,
+              .spreads = config_.expressions_spreads,
+              .hold_ms = config_.expressions_hold_ms},
+          LookAwayDetector::Settings{.degrees = config_.looking_away_degrees,
+                                     .hold_ms = config_.looking_away_hold_ms}));
     }
     FramePipeline::Analyzers analyzers;
     analyzers.push_back(

@@ -104,6 +104,27 @@
       "functions": 100
     }
   },
+  "src/look_away.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/look_away_reader.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/look_away_replay.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/reaction_feed.cc": {
     "unit": {
       "lines": 100,

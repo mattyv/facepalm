@@ -5,6 +5,31 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Read looking away from the resting pose, held a second
+
+-   **Decision:** report `{"gesture":"looking_away"}` once when the head's
+    yaw or pitch stays more than 15 degrees from its resting pose for 1,000
+    ms, and again only after it comes back within half that. The resting
+    pose is `ExpressionTracker`'s, learned from the same faces with the
+    expression settings; nothing is reported while it is being learned.
+    `looking_away.enabled`, `.degrees` and `.hold_ms` are in the config file.
+    `specs/LookAway.tla` models the rule.
+-   **Why:** #35's design reads reactions from head pose and blendshapes
+    judged against the person's own resting state, with no calibration up
+    front. On one person's recordings, replayed through the detector, each
+    prompted look down and each turn the face model kept tracking was
+    reported once, and nods, which stay within about 12 degrees and leave
+    for under half a second, were not.
+-   **Rejected:** reading gaze, which needs eye landmarks no reader uses yet
+    (#61 item 11); counting roll, which is a tilt, not a look away; and a new
+    reaction key, such as `attention`, which the daemon's feed filter and
+    every client would have to learn.
+-   **Cost:** a pose held for long enough, under a minute, becomes the resting
+    pose, so turning back from it is reported as a look away. A face the
+    model loses, as on a wide turn, gives no frames and so no report. The
+    thresholds come from one person's recordings.
+-   **Evidence:** [#35](https://github.com/mattyv/facepalm/issues/35).
+
 ## 2026-11-21: Hold the shell scripts to 100 percent of lines with kcov on Linux
 
 `scripts/coverage_shell.sh` runs every bats test under kcov, in a Debian

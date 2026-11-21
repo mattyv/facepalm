@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -202,6 +203,15 @@ std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
     state.level += level_weight * rise;
   }
   return began;
+}
+
+std::optional<HeadRotation> ExpressionTracker::RestingPose() const {
+  if (!started_ || last_ms_ - started_ms_ < kLearningMs) {
+    return std::nullopt;
+  }
+  return HeadRotation{.yaw_degrees = resting_pose_.at(0),
+                      .pitch_degrees = resting_pose_.at(1),
+                      .roll_degrees = resting_pose_.at(2)};
 }
 
 }  // namespace facepalm
