@@ -85,7 +85,8 @@ void ReactionFeed::DisconnectAndForget(const std::string& client) {
 // ReactionFeed!React, and FeelingBeat!React: the reading keeps the cue its
 // detail gives.
 std::int64_t ReactionFeed::React(std::string summary, std::string detail,
-                                 std::optional<std::int64_t> published_at_ms) {
+                                 std::optional<std::int64_t> published_at_ms,
+                                 std::optional<std::string> context) {
   const std::scoped_lock lock(mutex_);
   const std::int64_t id = next_++;
   const Cue cue = CueOf(detail);
@@ -93,7 +94,8 @@ std::int64_t ReactionFeed::React(std::string summary, std::string detail,
   timeline_.push_back({.reading = {.id = id,
                                    .summary = std::move(summary),
                                    .detail = std::move(detail),
-                                   .published_at_ms = published_at_ms},
+                                   .published_at_ms = published_at_ms,
+                                   .context = std::move(context)},
                        .cue = cue,
                        .sign = sign});
   if (std::ssize(timeline_) > capacity_) {

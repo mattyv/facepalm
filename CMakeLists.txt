@@ -83,6 +83,20 @@ facepalm_unit(expression_reader)
 facepalm_unit(gesture_reader)
 facepalm_unit(look_away)
 facepalm_unit(look_away_reader)
+facepalm_unit(screen_context)
+# Pure computation (SideOf, CoarseGazeFrom), like look_away: head_pose for
+# the rotation type and ReactionFrom's sign convention (#61 item 11).
+target_link_libraries(screen_context PUBLIC head_pose)
+facepalm_unit(screen_context_reporter)
+# The gaze rule and protocol::Quoted are pure computation, so the
+# reporter's tests run them for real; only ScreenSource, the OS seam, is
+# mocked.
+target_link_libraries(screen_context_reporter PUBLIC screen_context protocol)
+facepalm_unit(screen_context_reader)
+# ScreenContextReader's tests run the real ExpressionTracker and head_pose
+# (also pure computation), as expression_reader's and look_away_reader's
+# do, for the same reason.
+target_link_libraries(screen_context_reader PUBLIC expressions head_pose)
 facepalm_unit(head_pose)
 facepalm_unit(head_pose_reader)
 facepalm_unit(head_gesture_model)
@@ -125,10 +139,12 @@ target_link_libraries(calibration_reader PUBLIC calibration head_pose)
 facepalm_unit(calibrate_cli)
 facepalm_unit(session_camera)
 # The daemon's readers are pure computation, so their factory's tests make
-# them for real.
+# them for real. screen_context_reader (#61 item 11) is the one exception:
+# its tests pass it a real ScreenContextReader by reference, as
+# ScreenContextReaderForwarder (face_readers.cc) always wraps one given.
 facepalm_unit(face_readers)
 target_link_libraries(face_readers PUBLIC gesture_reader expression_reader
-  look_away_reader config)
+  look_away_reader screen_context_reader config)
 
 facepalm_unit(gesture_replay)
 target_link_libraries(gesture_replay PUBLIC gesture_reader)
@@ -235,6 +251,17 @@ if(APPLE)
   target_link_libraries(avfoundation_session PUBLIC frame session_camera
     "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
     "-framework Foundation")
+
+  # AppKit calls alone (#61 item 11), needing a real desktop session like
+  # avfoundation_session above; it has no unit tests or coverage floor for
+  # the same reason. ScreenContextReporter, which is tested, takes it
+  # behind ScreenSource.
+  add_library(screen_context_macos src/macos/screen_context_macos.mm)
+  target_compile_options(screen_context_macos PRIVATE -fobjc-arc)
+  target_include_directories(screen_context_macos PUBLIC ${PROJECT_SOURCE_DIR})
+  target_link_libraries(screen_context_macos PUBLIC screen_context
+    "-framework AppKit" "-framework CoreGraphics")
+
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
     config frame_pipeline frame_recorder face_analyzer expression_reader
@@ -260,7 +287,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
     daemon_control daemon_options face_readers feed_clients user_paths avfoundation_session
     camera_controller config frame_pipeline face_analyzer
-    expression_reader gesture_reader look_away_reader reaction_feed feeling_store service
+    expression_reader gesture_reader look_away_reader screen_context_reader
+    screen_context_reporter screen_context_macos reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
@@ -293,12 +321,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   find_package(Threads REQUIRED)
   find_path(V4L2_INCLUDE_DIRECTORY NAMES libv4l2.h REQUIRED)
   find_library(V4L2_LIBRARY NAMES v4l2 libv4l2.so.0 REQUIRED)
+  # X11 and RandR for screen context (#61 item 11): CI's Linux job needs
+  # libx11-dev and libxrandr-dev alongside its existing packages.
+  find_package(X11 REQUIRED)
+  find_library(XRANDR_LIBRARY NAMES Xrandr REQUIRED)
   facepalm_unit(mediapipe_c_shim DIRECTORY linux)
   target_include_directories(mediapipe_c_shim SYSTEM PUBLIC ${FACEPALM_MEDIAPIPE_C_INCLUDE})
   facepalm_unit(v4l2_session DIRECTORY linux)
   target_include_directories(v4l2_session SYSTEM PUBLIC ${V4L2_INCLUDE_DIRECTORY})
   target_link_libraries(v4l2_session PUBLIC Threads::Threads)
-  add_executable(facepalm_daemon tools/daemon/main.cc)
+  # screen_context_linux needs a real X server, like avfoundation_session
+  # needs a real camera, so, unlike the two units above, it has no
+  # facepalm_unit of its own: it goes straight into the daemon.
+  add_executable(facepalm_daemon tools/daemon/main.cc
+    src/linux/screen_context_linux.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
   # face_model calls the shim, and the shim MediaPipe, so each comes after
@@ -306,8 +342,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
     daemon_control daemon_options face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
-    look_away_reader reaction_feed feeling_store service session_camera unix_socket v4l2_session
-    face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
+    look_away_reader screen_context_reader screen_context_reporter screen_context
+    reaction_feed feeling_store service session_camera unix_socket v4l2_session
+    face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
+    ${X11_LIBRARIES} ${XRANDR_LIBRARY})
+  target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/facepalm COMPONENT LinuxCamera)
