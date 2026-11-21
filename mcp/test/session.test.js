@@ -16,6 +16,8 @@ async function fixture(handler, hello = '{"ok":true}\n', address = undefined) {
   const connections = [];
   const server = net.createServer((socket) => {
     connections.push(socket);
+    // A client killed mid-test resets its connection; that is not a failure.
+    socket.on('error', () => {});
     socket.setEncoding('utf8');
     let buffer = '';
     socket.on('data', (chunk) => {
