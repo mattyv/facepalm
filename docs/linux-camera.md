@@ -16,8 +16,13 @@ wheel contains `mediapipe/tasks/c/libmediapipe.so`. Its SHA-256 is
 The camera daemon links against the C library directly. [MediaPipe 0.10.35](https://pypi.org/project/mediapipe/0.10.35/)
 
 Set `MEDIAPIPE_SOURCE` to the checkout, `MEDIAPIPE_LIBRARY` to the extracted
-`libmediapipe.so`, and `MODEL` to the checksum-verified face landmarker task
-used by `tools/fixtures/build.sh`.
+`libmediapipe.so`, and `MODEL` to the face landmarker task that
+`tools/fixtures/build.sh` pins: `face_landmarker_v2_with_blendshapes.task`,
+generation `1782184688504388` of MediaPipe's test assets, whose SHA-256 is
+`b261925d4aad812b47a0e8d58c1baa1223270a5d1f663d78338bc881c003879d`.
+`build.sh` itself builds the macOS shim and does not run on Linux, where
+`src/linux/mediapipe_c_shim.cc` gives the daemon the face model's C
+functions over `libmediapipe.so`.
 
 ```sh
 cmake -S . -B build-linux-camera -G Ninja -DCMAKE_BUILD_TYPE=Release \

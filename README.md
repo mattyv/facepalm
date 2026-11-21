@@ -15,8 +15,10 @@ made since, each with its reason, are in the
 ## What exists
 
 -   `src/mediapipe_shim`: MediaPipe's face landmarker, as one self-contained
-    library with a plain C interface, built by `tools/fixtures/build.sh`.
-    `tools/fixtures/test_shim.sh` tests it against the real model. Its
+    library with a plain C interface, built by `tools/fixtures/build.sh`,
+    on macOS. On Linux, `src/linux/mediapipe_c_shim.cc` gives its face model
+    functions over MediaPipe's own `libmediapipe.so` (#65).
+    `tools/fixtures/test_shim.sh` tests the shim against the real model. Its
     short-range face detector is unused since #34 replaced Nodding Pigeon
     (below); it is still built and tested, since removing it needs a Bazel
     build this environment could not run.
@@ -50,7 +52,9 @@ made since, each with its reason, are in the
     in `src/expressions`, is the mapping from MediaPipe's blendshape scores
     to expressions, judged against the person's own resting face. Its
     defaults were tuned on one person's 80-second recording; the frown
-    (brows down) was the weakest of the five to read reliably.
+    (brows down) was the weakest of the five to read reliably. A face whose
+    pose is degenerate is skipped, as a frame with no face, so that it
+    cannot spoil the resting pose that gates out head movement (#79).
 -   `src/look_away_reader`, `src/look_away`: a `FaceReader` that reacts
     `{"gesture":"looking_away"}` once each time the head stays away from its
     resting pose (#35): yaw or pitch more than 15 degrees from it for a
@@ -154,6 +158,11 @@ bash scripts/coverage.sh          # Each source's own tests, against its floors.
 CXX=clang++ cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
 cmake --build build-sanitizers && ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
+# Data races, in a build of its own: ThreadSanitizer cannot share one with
+# AddressSanitizer. Clang on macOS runs it too.
+CXX=clang++ cmake -S . -B build-tsan -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+cmake --build build-tsan && TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-tsan --output-on-failure --no-tests=error
 bats scripts/test specs/test tools/fixtures/test  # Tests for the scripts.
 bash scripts/check_bats.sh        # Every bats assertion ends in || false.
 # On Linux with kcov: every shell script's lines, at 100 percent.

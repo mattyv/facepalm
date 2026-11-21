@@ -3,8 +3,8 @@ name: Fixtures
 # Builds MediaPipe's face landmarker, and facepalm's shim over it, from source.
 # Checks they reproduce MediaPipe's own expected results, and tests the shim
 # against the real model, and holds facepalm's own adapter over the shim to
-# MediaPipe's results. macOS only for now: the user will add Linux later
-# (#3). A cold build takes half an hour on a runner, so it runs only when
+# MediaPipe's results. macOS only: on Linux, facepalm links MediaPipe's own
+# libmediapipe.so instead (#60, #65). A cold build takes half an hour on a runner, so it runs only when
 # something it builds changes, or by hand. Bazel's compiled outputs are kept
 # between runs, so a warm build compiles only what changed (#15).
 on:
