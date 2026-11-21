@@ -283,12 +283,49 @@ class SettingsDialog : public QDialog {
 
     auto* advanced = new QGridLayout;
     ConfigureForm(*advanced);
-    for (std::size_t i = 0; i < fields_.size(); ++i) {
+    for (std::size_t i = 0; i < kAdvancedFieldCount; ++i) {
       fields_[i] = new QLineEdit(this);
       AddField(*advanced, static_cast<int>(i),
                QString::fromUtf8(kFieldLabels[i]), *fields_[i]);
     }
     layout->addLayout(advanced);
+
+    // Looking away (#35, #79).
+    auto* look_away_heading = new QLabel(QStringLiteral("Looking away"), this);
+    look_away_heading->setFont(font);
+    layout->addWidget(look_away_heading);
+    looking_away_ = new QCheckBox(QStringLiteral("Report looking away"), this);
+    layout->addWidget(looking_away_);
+    auto* look_away_fields = new QGridLayout;
+    ConfigureForm(*look_away_fields);
+    for (std::size_t i = kAdvancedFieldCount; i < kAdvancedFieldCount + 2;
+         ++i) {
+      fields_[i] = new QLineEdit(this);
+      AddField(*look_away_fields, static_cast<int>(i - kAdvancedFieldCount),
+               QString::fromUtf8(kFieldLabels[i]), *fields_[i]);
+    }
+    layout->addLayout(look_away_fields);
+
+    // Screen context (#61 item 11, #79).
+    auto* screen_context_heading =
+        new QLabel(QStringLiteral("Screen context"), this);
+    screen_context_heading->setFont(font);
+    layout->addWidget(screen_context_heading);
+    screen_context_ =
+        new QCheckBox(QStringLiteral("Report screen context"), this);
+    layout->addWidget(screen_context_);
+    screen_context_window_titles_ = new QCheckBox(
+        QStringLiteral("Include window titles (needs Screen Recording access)"),
+        this);
+    layout->addWidget(screen_context_window_titles_);
+    auto* screen_context_fields = new QGridLayout;
+    ConfigureForm(*screen_context_fields);
+    fields_[kAdvancedFieldCount + 2] = new QLineEdit(this);
+    AddField(*screen_context_fields, 0,
+             QString::fromUtf8(kFieldLabels[kAdvancedFieldCount + 2]),
+             *fields_[kAdvancedFieldCount + 2]);
+    layout->addLayout(screen_context_fields);
+
     layout->addStretch();
 
     auto* path_label = new QLabel(path_, this);
@@ -317,6 +354,10 @@ class SettingsDialog : public QDialog {
   }
 
  private:
+  // The first kAdvancedFieldCount entries are the expression tuning grid;
+  // the rest are looking away's and screen context's own numeric fields
+  // (#35, #61 item 11, #79).
+  static constexpr std::size_t kAdvancedFieldCount = 7;
   static constexpr int kWindowWidth = 560;
   static constexpr int kWindowHeight = 610;
   static constexpr int kFormMargin = 24;
@@ -334,7 +375,8 @@ class SettingsDialog : public QDialog {
       "Gesture confidence (0–1)",   "Expression smallest rise (0–1)",
       "Expression spreads (0–100)", "Expression hold (0–5000 ms)",
       "Pose degrees (0–180)",       "Pose range (0–180)",
-      "Pose settle (0–5000 ms)",
+      "Pose settle (0–5000 ms)",    "Degrees (0–180)",
+      "Hold (0–10000 ms)",          "Other-screen degrees (0–180)",
   };
 
   static constexpr std::array kSettingMembers{
@@ -345,6 +387,9 @@ class SettingsDialog : public QDialog {
       &facepalm::MenuSettings::expression_pose_degrees,
       &facepalm::MenuSettings::expression_pose_range,
       &facepalm::MenuSettings::expression_settle_ms,
+      &facepalm::MenuSettings::looking_away_degrees,
+      &facepalm::MenuSettings::looking_away_hold_ms,
+      &facepalm::MenuSettings::screen_context_other_screen_degrees,
   };
 
   static void ConfigureForm(QGridLayout& form) {
@@ -392,6 +437,10 @@ class SettingsDialog : public QDialog {
     fps_->setValue(config.frames_per_second);
     gestures_->setChecked(config.gestures_enabled);
     expressions_->setChecked(config.expressions_enabled);
+    looking_away_->setChecked(config.looking_away_enabled);
+    screen_context_->setChecked(config.screen_context_enabled);
+    screen_context_window_titles_->setChecked(
+        config.screen_context_window_titles_enabled);
     const std::array values{
         Number(config.gesture_confidence_threshold),
         Number(config.expressions_smallest_rise),
@@ -400,6 +449,9 @@ class SettingsDialog : public QDialog {
         Number(config.expressions_pose_degrees),
         Number(config.expressions_pose_range),
         QString::number(config.expressions_settle_ms),
+        Number(config.looking_away_degrees),
+        QString::number(config.looking_away_hold_ms),
+        Number(config.screen_context_other_screen_degrees),
     };
     for (std::size_t i = 0; i < fields_.size(); ++i) {
       fields_[i]->setText(values[i]);
@@ -416,6 +468,10 @@ class SettingsDialog : public QDialog {
     settings.frames_per_second = fps_->value();
     settings.gestures_enabled = gestures_->isChecked();
     settings.expressions_enabled = expressions_->isChecked();
+    settings.looking_away_enabled = looking_away_->isChecked();
+    settings.screen_context_enabled = screen_context_->isChecked();
+    settings.screen_context_window_titles_enabled =
+        screen_context_window_titles_->isChecked();
     for (std::size_t i = 0; i < fields_.size(); ++i) {
       settings.*kSettingMembers[i] = fields_[i]->text().toStdString();
     }
@@ -460,6 +516,9 @@ class SettingsDialog : public QDialog {
   QSpinBox* fps_;
   QCheckBox* gestures_;
   QCheckBox* expressions_;
+  QCheckBox* looking_away_;
+  QCheckBox* screen_context_;
+  QCheckBox* screen_context_window_titles_;
   QPushButton* save_;
   std::array<QLineEdit*, kFieldLabels.size()> fields_{};
 };

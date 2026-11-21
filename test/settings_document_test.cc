@@ -48,6 +48,42 @@ TEST(SettingsDocumentTest, ReplacesUncommentedSettings) {
   EXPECT_TRUE(config.value().expressions_enabled);
 }
 
+TEST(SettingsDocumentTest, UpdatesLookingAwayAndScreenContext) {
+  std::string error;
+  MenuSettings settings;
+  settings.looking_away_enabled = false;
+  settings.looking_away_degrees = "20";
+  settings.looking_away_hold_ms = "1500";
+  settings.screen_context_enabled = false;
+  settings.screen_context_window_titles_enabled = true;
+  settings.screen_context_other_screen_degrees = "9.5";
+  const auto updated = UpdateSettingsDocument("# screen\n", settings, error);
+  ASSERT_TRUE(updated.has_value());
+  const auto config = ParseConfig(updated.value(), error);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_FALSE(config.value().looking_away_enabled);
+  EXPECT_FLOAT_EQ(config.value().looking_away_degrees, 20);
+  EXPECT_EQ(config.value().looking_away_hold_ms, 1500);
+  EXPECT_FALSE(config.value().screen_context_enabled);
+  EXPECT_TRUE(config.value().screen_context_window_titles_enabled);
+  EXPECT_FLOAT_EQ(config.value().screen_context_other_screen_degrees, 9.5F);
+
+  settings.looking_away_degrees = "not a number";
+  EXPECT_FALSE(UpdateSettingsDocument("", settings, error));
+  EXPECT_FALSE(error.empty());
+}
+
+TEST(SettingsDocumentTest, LookingAwayAndScreenContextDefaultOn) {
+  std::string error;
+  const auto updated = UpdateSettingsDocument("", {}, error);
+  ASSERT_TRUE(updated.has_value());
+  const auto config = ParseConfig(updated.value(), error);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_TRUE(config.value().looking_away_enabled);
+  EXPECT_TRUE(config.value().screen_context_enabled);
+  EXPECT_FALSE(config.value().screen_context_window_titles_enabled);
+}
+
 TEST(SettingsDocumentTest, UpdatesAndValidatesAdvancedTuning) {
   std::string error;
   MenuSettings settings;

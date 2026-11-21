@@ -398,8 +398,12 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
     }
     close.waitForFinished(kTimeoutMs);
   }
+  // Looking away's and screen context's own rows (#35, #61 item 11, #79)
+  // made the real dialog taller than the window's own initial resize()
+  // hint; Qt's layout stretches it to fit everything shown, so the upper
+  // bound here is generous rather than pinned to one exact height.
   const bool settings_size =
-      width >= 510 && width <= 600 && height >= 430 && height <= 660;
+      width >= 510 && width <= 600 && height >= 430 && height <= 900;
   const bool exited =
       shown && settings_size && (close_window || close.exitCode() == 0) &&
       WaitUntil([&] { return app.state() == QProcess::NotRunning; }) &&

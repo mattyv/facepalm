@@ -173,8 +173,8 @@ target_link_libraries(calibrate_cli_tool PRIVATE calibrate_cli client_token user
 install(TARGETS gesture_replay_cli calibrate_cli_tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
 install(FILES LICENSE THIRDPARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm COMPONENT Runtime)
 install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
-  mcp/feeling-widget.js mcp/feeling-widget.html mcp/feeling-elicitation.js
-  mcp/package.json mcp/package-lock.json
+  mcp/settings-launcher.js mcp/feeling-widget.js mcp/feeling-widget.html
+  mcp/feeling-elicitation.js mcp/package.json mcp/package-lock.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm/mcp COMPONENT MCP)
 
 if(FACEPALM_LINUX_TRAY)

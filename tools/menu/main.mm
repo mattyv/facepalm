@@ -165,6 +165,12 @@ BOOL ServiceIsOn() {
 @property(nonatomic, strong) NSButton* gestures;
 @property(nonatomic, strong) NSButton* expressions;
 @property(nonatomic, strong) NSMutableArray<NSTextField*>* advanced;
+@property(nonatomic, strong) NSButton* lookingAway;
+@property(nonatomic, strong) NSTextField* lookingAwayDegrees;
+@property(nonatomic, strong) NSTextField* lookingAwayHoldMs;
+@property(nonatomic, strong) NSButton* screenContext;
+@property(nonatomic, strong) NSButton* screenContextWindowTitles;
+@property(nonatomic, strong) NSTextField* screenContextOtherScreenDegrees;
 @property(nonatomic, strong) NSData* loadedData;
 @property(nonatomic) BOOL loadedMissing;
 @end
@@ -316,13 +322,29 @@ BOOL ServiceIsOn() {
     [NSString stringWithFormat:@"%d", config->expressions_settle_ms]
   ];
   for (NSUInteger i = 0; i < tuning.count; ++i) self.advanced[i].stringValue = tuning[i];
+  self.lookingAway.state =
+      config->looking_away_enabled ? NSControlStateValueOn : NSControlStateValueOff;
+  self.lookingAwayDegrees.stringValue = FormatFloat(config->looking_away_degrees);
+  self.lookingAwayHoldMs.stringValue =
+      [NSString stringWithFormat:@"%d", config->looking_away_hold_ms];
+  self.screenContext.state =
+      config->screen_context_enabled ? NSControlStateValueOn : NSControlStateValueOff;
+  self.screenContextWindowTitles.state =
+      config->screen_context_window_titles_enabled ? NSControlStateValueOn : NSControlStateValueOff;
+  self.screenContextOtherScreenDegrees.stringValue =
+      FormatFloat(config->screen_context_other_screen_degrees);
   [NSApp activateIgnoringOtherApps:YES];
   [self.settingsWindow center];
   [self.settingsWindow makeKeyAndOrderFront:nil];
 }
 
 - (void)createSettingsWindow {
-  const NSRect bounds = NSMakeRect(0, 0, 560, 610);
+  // Looking away (#35, #79) and screen context (#61 item 11, #79) add eight
+  // rows below "Advanced tuning"; every row above that keeps its original
+  // distance from the top, shifted up by the extra height, and the config
+  // path and Save button keep their original distance from the bottom.
+  constexpr CGFloat kExtraHeight = 256;
+  const NSRect bounds = NSMakeRect(0, 0, 560, 610 + kExtraHeight);
   self.settingsWindow =
       [[NSWindow alloc] initWithContentRect:bounds
                                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
@@ -334,24 +356,24 @@ BOOL ServiceIsOn() {
   NSTextField* note = [NSTextField
       wrappingLabelWithString:@"Facepalm reads these settings when it starts: turn it off and "
                               @"on again from the menu to apply them."];
-  note.frame = NSMakeRect(24, 548, 512, 44);
+  note.frame = NSMakeRect(24, 548 + kExtraHeight, 512, 44);
   [content addSubview:note];
   NSTextField* fpsLabel = [NSTextField labelWithString:@"Frames per second (1–60)"];
-  fpsLabel.frame = NSMakeRect(24, 510, 300, 24);
+  fpsLabel.frame = NSMakeRect(24, 510 + kExtraHeight, 300, 24);
   [content addSubview:fpsLabel];
-  self.frameRate = [[NSTextField alloc] initWithFrame:NSMakeRect(400, 510, 110, 24)];
+  self.frameRate = [[NSTextField alloc] initWithFrame:NSMakeRect(400, 510 + kExtraHeight, 110, 24)];
   self.frameRate.accessibilityLabel = @"Frames per second";
   [content addSubview:self.frameRate];
   self.gestures = [NSButton checkboxWithTitle:@"Detect head gestures" target:nil action:nil];
-  self.gestures.frame = NSMakeRect(24, 476, 350, 24);
+  self.gestures.frame = NSMakeRect(24, 476 + kExtraHeight, 350, 24);
   [content addSubview:self.gestures];
   self.expressions = [NSButton checkboxWithTitle:@"Detect facial expressions"
                                           target:nil
                                           action:nil];
-  self.expressions.frame = NSMakeRect(24, 444, 350, 24);
+  self.expressions.frame = NSMakeRect(24, 444 + kExtraHeight, 350, 24);
   [content addSubview:self.expressions];
   NSTextField* tuningTitle = [NSTextField labelWithString:@"Advanced tuning (next start)"];
-  tuningTitle.frame = NSMakeRect(24, 408, 350, 24);
+  tuningTitle.frame = NSMakeRect(24, 408 + kExtraHeight, 350, 24);
   tuningTitle.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
   [content addSubview:tuningTitle];
   NSArray<NSString*>* labels = @[
@@ -361,7 +383,7 @@ BOOL ServiceIsOn() {
   ];
   self.advanced = [NSMutableArray array];
   for (NSUInteger i = 0; i < labels.count; ++i) {
-    const CGFloat y = 376 - static_cast<CGFloat>(i) * 32;
+    const CGFloat y = 376 + kExtraHeight - static_cast<CGFloat>(i) * 32;
     NSTextField* label = [NSTextField labelWithString:labels[i]];
     label.frame = NSMakeRect(24, y, 350, 24);
     [content addSubview:label];
@@ -370,6 +392,45 @@ BOOL ServiceIsOn() {
     [self.advanced addObject:field];
     [content addSubview:field];
   }
+  NSTextField* lookingAwayTitle = [NSTextField labelWithString:@"Looking away (#35)"];
+  lookingAwayTitle.frame = NSMakeRect(24, 408, 350, 24);
+  lookingAwayTitle.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+  [content addSubview:lookingAwayTitle];
+  self.lookingAway = [NSButton checkboxWithTitle:@"Report looking away" target:nil action:nil];
+  self.lookingAway.frame = NSMakeRect(24, 376, 350, 24);
+  [content addSubview:self.lookingAway];
+  NSTextField* lookingAwayDegreesLabel = [NSTextField labelWithString:@"Degrees (0–180)"];
+  lookingAwayDegreesLabel.frame = NSMakeRect(24, 344, 350, 24);
+  [content addSubview:lookingAwayDegreesLabel];
+  self.lookingAwayDegrees = [[NSTextField alloc] initWithFrame:NSMakeRect(400, 344, 110, 24)];
+  self.lookingAwayDegrees.accessibilityLabel = @"Looking away degrees";
+  [content addSubview:self.lookingAwayDegrees];
+  NSTextField* lookingAwayHoldLabel = [NSTextField labelWithString:@"Hold (0–10000 ms)"];
+  lookingAwayHoldLabel.frame = NSMakeRect(24, 312, 350, 24);
+  [content addSubview:lookingAwayHoldLabel];
+  self.lookingAwayHoldMs = [[NSTextField alloc] initWithFrame:NSMakeRect(400, 312, 110, 24)];
+  self.lookingAwayHoldMs.accessibilityLabel = @"Looking away hold milliseconds";
+  [content addSubview:self.lookingAwayHoldMs];
+  NSTextField* screenContextTitle = [NSTextField labelWithString:@"Screen context (#61 item 11)"];
+  screenContextTitle.frame = NSMakeRect(24, 280, 350, 24);
+  screenContextTitle.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+  [content addSubview:screenContextTitle];
+  self.screenContext = [NSButton checkboxWithTitle:@"Report screen context" target:nil action:nil];
+  self.screenContext.frame = NSMakeRect(24, 248, 350, 24);
+  [content addSubview:self.screenContext];
+  self.screenContextWindowTitles =
+      [NSButton checkboxWithTitle:@"Include window titles (needs Screen Recording access)"
+                           target:nil
+                           action:nil];
+  self.screenContextWindowTitles.frame = NSMakeRect(24, 216, 460, 24);
+  [content addSubview:self.screenContextWindowTitles];
+  NSTextField* otherScreenLabel = [NSTextField labelWithString:@"Other-screen degrees (0–180)"];
+  otherScreenLabel.frame = NSMakeRect(24, 184, 350, 24);
+  [content addSubview:otherScreenLabel];
+  self.screenContextOtherScreenDegrees =
+      [[NSTextField alloc] initWithFrame:NSMakeRect(400, 184, 110, 24)];
+  self.screenContextOtherScreenDegrees.accessibilityLabel = @"Other-screen degrees";
+  [content addSubview:self.screenContextOtherScreenDegrees];
   NSTextField* configPath = [NSTextField wrappingLabelWithString:SettingsURL().path];
   configPath.frame = NSMakeRect(24, 64, 512, 50);
   configPath.selectable = YES;
@@ -415,6 +476,14 @@ BOOL ServiceIsOn() {
       .expression_pose_degrees = Utf8Bytes(self.advanced[4].stringValue),
       .expression_pose_range = Utf8Bytes(self.advanced[5].stringValue),
       .expression_settle_ms = Utf8Bytes(self.advanced[6].stringValue),
+      .looking_away_enabled = self.lookingAway.state == NSControlStateValueOn,
+      .looking_away_degrees = Utf8Bytes(self.lookingAwayDegrees.stringValue),
+      .looking_away_hold_ms = Utf8Bytes(self.lookingAwayHoldMs.stringValue),
+      .screen_context_enabled = self.screenContext.state == NSControlStateValueOn,
+      .screen_context_window_titles_enabled =
+          self.screenContextWindowTitles.state == NSControlStateValueOn,
+      .screen_context_other_screen_degrees =
+          Utf8Bytes(self.screenContextOtherScreenDegrees.stringValue),
   };
   const auto updated = facepalm::UpdateSettingsDocument(
       std::string_view(current.length == 0 ? "" : static_cast<const char*>(current.bytes),
