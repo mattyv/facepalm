@@ -484,6 +484,7 @@ int main(int argc, char* argv[]) {
   // The camera-in-use indicator (#37 item 8): its own, faster timer so the
   // tray settles within the two seconds it is asked to, independent of the
   // slower daemon-reachability check above.
+  constexpr int kCameraStatusIntervalMs = 1000;
   const QString status_path = StatusPath();
   const auto refresh_camera_status = [=] {
     camera_status->setText(facepalm::ReadCameraStatus(status_path.toStdString())
@@ -494,7 +495,7 @@ int main(int argc, char* argv[]) {
   QTimer camera_status_timer;
   QObject::connect(&camera_status_timer, &QTimer::timeout, &window,
                    refresh_camera_status);
-  camera_status_timer.start(1000);
+  camera_status_timer.start(kCameraStatusIntervalMs);
 
   if (!QSystemTrayIcon::isSystemTrayAvailable()) {
     show_window();
