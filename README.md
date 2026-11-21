@@ -37,7 +37,7 @@ made since, each with its reason, are in the
     frame and gives the face it found, or that there was none, to every
     `FaceReader`.
 -   `src/head_pose_reader`: a `FaceReader` that reacts with the head's yaw,
-    pitch and roll.
+    pitch and roll, and with nothing for a face whose pose is degenerate.
 -   `src/gesture_reader`, `src/head_gesture_model`: a `FaceReader` that runs
     Idiap's CCDbHG head-gesture model (#34, replacing Nodding Pigeon) and
     reacts once to each nod, shake, tilt, turn or up/down. `head_gesture_model`
@@ -66,7 +66,9 @@ made since, each with its reason, are in the
     that only its user can open, on macOS and Linux; tested on real
     sockets.
 -   `src/reaction`: the reaction to one face, its head's yaw, pitch and roll
-    to a tenth of a degree, as JSON text.
+    to a tenth of a degree, as JSON text; none for a degenerate pose matrix,
+    such as all zeros or one holding NaN or infinity, whose angles JSON
+    cannot hold (#44).
 -   `src/head_pose`: yaw, pitch and roll in degrees from MediaPipe's facial
     transformation matrix, which is stored column by column and carries a
     uniform scale. Its test checks against MediaPipe's own expected matrix
@@ -295,6 +297,12 @@ for every frame to be written before it exits, prints `recorded_frames`,
 `recording_failed` and `recording_dropped`, and exits with 1 when any
 frame is missing from the recording (#41). Those frames
 are images of whoever sat at the camera: keep them out of the repository.
+Replay them with `face_landmarker_fixtures --recording
+<directory>/timestamps.txt <model> <directory>/frame_*.png`, which runs each
+frame at its own capture time, so a 15 fps recording plays at its own speed
+and a dropped frame keeps its gap (#42); it refuses a frame with no line in
+`timestamps.txt`, and times that do not increase. `--video` instead runs
+images 33 ms apart.
 Every frame with a face also prints its gesture channels as
 `gesture_raw <timestamp_ms> <18 values>` (head_gesture::RawFrame, the model's
 own input), and once that frame's window is ready, its class probabilities
@@ -305,7 +313,9 @@ has what a replay needs.
 as that many frames, for a face held still in front of the camera.
 `face_model_check --gesture <model> <frame.png>...` runs the head-gesture
 model over those images as frames of one video, 33 ms apart, and prints the
-last window's gesture and probabilities.
+last window's gesture and probabilities; with `--recording <timestamps.txt>`
+before the model, it runs a recording's frames at their capture times
+instead.
 
 For energy, run `powermetrics` alongside it in another terminal, and read
 `camera_probe`'s line:
@@ -321,7 +331,10 @@ v0.10.35, and a small tool that writes its landmarks, blendshapes and
 transformation matrix for each image as JSON. These are the reference that
 facepalm's own face pipeline is tested against. Building it needs Bazel
 (`brew install bazelisk`) and takes ten minutes or more the first time;
-everything it fetches and builds goes in `build-mediapipe/`.
+everything it fetches and builds goes in `build-mediapipe/`. The tool reads a
+recording's `timestamps.txt` with `src/frame_times.cc`, which facepalm's own
+build unit-tests; `build.sh` links `src` into MediaPipe's workspace as the
+package `//src` for it.
 
 ```shell
 bash tools/fixtures/build.sh
