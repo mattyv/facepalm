@@ -13,13 +13,15 @@ readonly TLC_COMMAND
 
 main() {
   local meta status=0 cfg name out code
+  local -a arguments
   meta="$(mktemp -d)"
   for cfg in ./*.cfg; do
     name="${cfg#./}"
     name="${name%.cfg}"
     code=0
-    out="$("${TLC_COMMAND[@]}" -workers auto -cleanup -metadir "${meta}" \
-      -config "${name}.cfg" "${name%%_*}.tla" 2>&1)" || code=$?
+    arguments=(-workers auto -cleanup -metadir "${meta}")
+    arguments+=(-config "${name}.cfg" "${name%%_*}.tla")
+    out="$("${TLC_COMMAND[@]}" "${arguments[@]}" 2>&1)" || code=$?
     if ((code == 0)) && [[ "${out}" == *'No error has been found'* ]]; then
       printf '%-32s pass\n' "${name}.cfg"
     else

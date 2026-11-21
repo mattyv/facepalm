@@ -21,14 +21,16 @@ main() {
   if ((${#files[@]} == 0)); then
     return 0
   fi
-  awk '
-    /^[ \t]+(\[\[|\(\().*(\]\]|\)\))[ \t]*$/ {
-      printf "%s:%d: end the assertion with || false\n", FILENAME, FNR \
-        > "/dev/stderr"
-      bad = 1
-    }
-    END { exit bad }
-  ' "${files[@]}"
+  local program
+  read -r -d '' program <<'AWK' || true
+/^[ \t]+(\[\[|\(\().*(\]\]|\)\))[ \t]*$/ {
+  printf "%s:%d: end the assertion with || false\n", FILENAME, FNR \
+    > "/dev/stderr"
+  bad = 1
+}
+END { exit bad }
+AWK
+  awk "${program}" "${files[@]}"
 }
 
 main "$@"

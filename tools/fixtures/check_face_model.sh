@@ -20,8 +20,9 @@ readonly MODEL="${DATA}/face_landmarker_v2_with_blendshapes.task"
 readonly FIXTURES="${WORK}/mediapipe/bazel-bin/facepalm_fixtures"
 readonly TOOL="${FIXTURES}/face_landmarker_fixtures"
 # The face's values in order, without the image's path or blendshape names.
-readonly VALUES='.[0] | .landmarks[][], (.blendshapes | to_entries[].value),
-  .pose_column_major[]'
+VALUES='.[0] | .landmarks[][], (.blendshapes | to_entries[].value),'
+VALUES+=' .pose_column_major[]'
+readonly VALUES
 
 main() {
   if (($# != 1)); then

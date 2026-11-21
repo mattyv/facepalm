@@ -11,6 +11,9 @@ readonly BUILD="${ROOT}/build-coverage"
 readonly PROFILES="${BUILD}/profiles"
 readonly THRESHOLDS="${ROOT}/coverage_thresholds.json"
 readonly MEASURES=(lines branches functions)
+SUMMARY='.data[0].files[0].summary | [.lines, .branches, .functions]'
+SUMMARY+=' | map(if .count == 0 then 100 else .percent end) | @tsv'
+readonly SUMMARY
 
 #######################################
 # Prints the path of an LLVM tool that matches the compiler: xcrun's on macOS.
@@ -32,7 +35,7 @@ llvm_tool() {
 # percentages. A measure with nothing to count, such as branches in
 # straight-line code, is 100.
 # Globals:
-#   BUILD, PROFILES, ROOT
+#   BUILD, PROFILES, ROOT, SUMMARY
 # Arguments:
 #   The unit's name, such as head_pose.
 #######################################
@@ -44,10 +47,7 @@ measure() {
     -o "${PROFILES}/${unit}.profdata"
   "${cov}" export -summary-only -instr-profile="${PROFILES}/${unit}.profdata" \
     "${BUILD}/${unit}_test" "${ROOT}/src/${unit}.cc" \
-    | jq -r '.data[0].files[0].summary
-      | [.lines, .branches, .functions]
-      | map(if .count == 0 then 100 else .percent end) | @tsv' \
-      >"${PROFILES}/${unit}.tsv"
+    | jq -r "${SUMMARY}" >"${PROFILES}/${unit}.tsv"
 }
 
 #######################################
@@ -59,11 +59,11 @@ measure() {
 #######################################
 check_unit() {
   local file="src/$1.cc" i floor
-  local -a actual
+  local -a actual query
   read -r -a actual <"${PROFILES}/$1.tsv"
   for i in "${!MEASURES[@]}"; do
-    floor="$(jq -r --arg f "${file}" --arg m "${MEASURES[i]}" \
-      '.[$f].unit[$m] // 100' "${THRESHOLDS}")"
+    query=(-r --arg f "${file}" --arg m "${MEASURES[i]}")
+    floor="$(jq "${query[@]}" '.[$f].unit[$m] // 100' "${THRESHOLDS}")"
     if awk -v a="${actual[i]}" -v f="${floor}" 'BEGIN { exit !(a < f) }'; then
       echo "${file}: ${MEASURES[i]} ${actual[i]}% is below ${floor}%"
     fi
