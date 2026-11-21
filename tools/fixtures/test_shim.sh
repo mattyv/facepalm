@@ -23,16 +23,21 @@ readonly BAZEL="${BAZEL:-bazelisk}"
 #   One line per shortfall.
 #######################################
 shortfalls() {
-  awk -v source="${SOURCE}" '$1 == source {
-    split("regions functions lines branches", names, " ")
-    for (i = 1; i <= 4; i++) {
-      cover = $(1 + 3 * i)
-      if (cover != "100.00%" && cover != "-") {
-        printf "%s: %s %s\n", source, names[i], cover
-      }
+  local program
+  read -r -d '' program <<'AWK' || true
+$1 == source {
+  split("regions functions lines branches", names, " ")
+  for (i = 1; i <= 4; i++) {
+    cover = $(1 + 3 * i)
+    if (cover != "100.00%" && cover != "-") {
+      printf "%s: %s %s\n", source, names[i], cover
     }
-    found = 1
-  } END { if (!found) printf "%s: not in the report\n", source }' <<<"$1"
+  }
+  found = 1
+}
+END { if (!found) printf "%s: not in the report\n", source }
+AWK
+  awk -v source="${SOURCE}" "${program}" <<<"$1"
 }
 
 main() {
@@ -58,8 +63,9 @@ main() {
   xcrun llvm-profdata merge -o "${profiles}/merged.profdata" \
     "${profiles}"/*.profraw
   local report missing
-  report="$(xcrun llvm-cov report "./${TEST}" \
-    -instr-profile="${profiles}/merged.profdata")"
+  local -a arguments=(report "./${TEST}")
+  arguments+=("-instr-profile=${profiles}/merged.profdata")
+  report="$(xcrun llvm-cov "${arguments[@]}")"
   missing="$(shortfalls "${report}")"
   if [[ -n "${missing}" ]]; then
     echo "${missing}" >&2

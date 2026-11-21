@@ -162,3 +162,10 @@ TOOL
   [[ "${output}" == *"missing input:"*"ui"* ]] || false
   [[ ! -e "${WORK}/Facepalm.app" ]] || false
 }
+
+@test "prints its usage without six arguments" {
+  run bash "${WORK}/scripts/build_app.sh" "${WORK}/ui"
+  [[ "${status}" -eq 2 ]] || false
+  [[ "${output}" == 'usage: build_app.sh '* ]] || false
+  [[ ! -e "${WORK}/Facepalm.app" ]] || false
+}

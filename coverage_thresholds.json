@@ -188,6 +188,76 @@
       "functions": 100
     }
   },
+  "integrations/claude-code/facepalm-claude.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "scripts/build_app.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "scripts/check_app_links.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "scripts/check_bats.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "scripts/coverage.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "scripts/coverage_shell.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "scripts/download_tlc.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "scripts/install_app.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "specs/check.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "tools/fixtures/build.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "tools/fixtures/check_face_model.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "tools/fixtures/check_portrait.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "tools/fixtures/check_shim.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "tools/fixtures/test_shim.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
   "src/frame_times.cc": {
     "unit": {
       "lines": 100,

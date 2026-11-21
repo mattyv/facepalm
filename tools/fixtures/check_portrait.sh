@@ -27,11 +27,16 @@ readonly MATRIX_MARGIN=0.04
 #   The count of values outside the margin.
 #######################################
 outside() {
-  paste -d ' ' "$2" "$3" | awk -v margin="$1" '{
-    if ($1 == "" || $2 == "") { count++; next }
-    d = $1 - $2; if (d < 0) d = -d
-    if (d > margin) count++
-  } END { print count + 0 }'
+  local program
+  read -r -d '' program <<'AWK' || true
+{
+  if ($1 == "" || $2 == "") { count++; next }
+  d = $1 - $2; if (d < 0) d = -d
+  if (d > margin) count++
+}
+END { print count + 0 }
+AWK
+  paste -d ' ' "$2" "$3" | awk -v margin="$1" "${program}"
 }
 
 main() {
