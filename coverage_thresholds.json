@@ -229,5 +229,12 @@
     "shell": {
       "lines": 76
     }
+  },
+  "src/frame_times.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
   }
 }

@@ -20,6 +20,16 @@ file had not finished after two minutes); bashcov, a Ruby gem neither
 repository uses; and Ubuntu's runner, which does not package kcov. Evidence:
 [#2](https://github.com/mattyv/facepalm/issues/2).
 
+## 2026-11-21: Send no head-angle reaction for a degenerate pose
+
+When the face's transformation matrix has no rotation to read (all zeros, or
+holding NaN or infinity), the head-pose reader sends nothing for that frame,
+rather than JSON holding `nan`, which no client can parse. The other readers
+still see the face. Rejected: sending `null` angles, which every client would
+have to handle for a case of no use to it, and sending zeros, which reads as
+a head facing the camera. Evidence:
+[#44](https://github.com/mattyv/facepalm/issues/44).
+
 ## 2026-11-21: Remove only facepalm's own socket at the socket path
 
 At startup, facepalm still replaces a socket that nothing answers on, so it

@@ -24,8 +24,8 @@ readonly ASSETS="${ASSETS_HOST}/mediapipe-assets/tasks/testdata/vision"
 readonly BAZEL="${BAZEL:-bazelisk}"
 
 #######################################
-# Clones MediaPipe at the pinned commit, patches it, and links the tool and
-# the shim in.
+# Clones MediaPipe at the pinned commit, patches it, and links the tool, the
+# shim and facepalm's sources in.
 #######################################
 checkout() {
   if [[ ! -d "${MEDIAPIPE}" ]]; then
@@ -41,6 +41,7 @@ checkout() {
   fi
   ln -sfn "${HERE}" "${MEDIAPIPE}/facepalm_fixtures"
   ln -sfn "${ROOT}/src/mediapipe_shim" "${MEDIAPIPE}/facepalm_shim"
+  ln -sfn "${ROOT}/src" "${MEDIAPIPE}/src"
 }
 
 #######################################
