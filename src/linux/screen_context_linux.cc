@@ -4,6 +4,7 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -23,8 +24,10 @@ std::optional<Window> ActiveWindowOf(Display* display) {
   }
   Atom type = None;
   int format = 0;
+  // NOLINTBEGIN(google-runtime-int): XGetWindowProperty's own out-param type.
   unsigned long count = 0;
   unsigned long after = 0;
+  // NOLINTEND(google-runtime-int)
   unsigned char* data = nullptr;
   const int status = XGetWindowProperty(display, DefaultRootWindow(display),
                                         active, 0, 1, False, XA_WINDOW, &type,
@@ -66,10 +69,12 @@ std::optional<std::string> TitleOf(Display* display, Window window) {
   if (net_name != None) {
     Atom type = None;
     int format = 0;
+    // NOLINTBEGIN(google-runtime-int): XGetWindowProperty's own out-param type.
     unsigned long count = 0;
     unsigned long after = 0;
+    // NOLINTEND(google-runtime-int)
     unsigned char* data = nullptr;
-    constexpr long kLongestTitleWords = 1024;
+    constexpr std::int64_t kLongestTitleWords = 1024;
     const int status = XGetWindowProperty(
         display, window, net_name, 0, kLongestTitleWords, False,
         AnyPropertyType, &type, &format, &count, &after, &data);
@@ -85,7 +90,7 @@ std::optional<std::string> TitleOf(Display* display, Window window) {
   }
   char* name = nullptr;
   if (XFetchName(display, window, &name) != 0 && name != nullptr) {
-    const std::string title(name);
+    std::string title(name);
     XFree(name);
     if (!title.empty()) {
       return title;

@@ -56,7 +56,7 @@ class MockV4l2 {
 
 MockV4l2* v4l2 = nullptr;
 
-constexpr char kDevice[] = "/dev/video9";
+constexpr const char* kDevice = "/dev/video9";
 constexpr int kFd = 7;
 constexpr int kFramesPerSecond = 15;
 constexpr std::uint64_t kAttempt = 4;
@@ -76,9 +76,12 @@ struct Received {
   std::uint64_t attempt;
 };
 
-// The format a driver settles on, in RGB24.
-v4l2_pix_format Rgb(std::uint32_t width, std::uint32_t height,
-                    std::uint32_t bytes_per_line, std::uint32_t size) {
+// The format a driver settles on, in RGB24. The parameters follow
+// v4l2_pix_format's own field order.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+constexpr v4l2_pix_format Rgb(std::uint32_t width, std::uint32_t height,
+                              std::uint32_t bytes_per_line,
+                              std::uint32_t size) {
   v4l2_pix_format pix{};
   pix.width = width;
   pix.height = height;
@@ -91,9 +94,7 @@ v4l2_pix_format Rgb(std::uint32_t width, std::uint32_t height,
 // A 2x2 RGB24 image with two bytes of padding at the end of each row.
 constexpr std::uint32_t kSide = 2;
 constexpr std::uint32_t kLine = 8;
-const v4l2_pix_format kSmall = Rgb(kSide, kSide, kLine, kLine* kSide);
-const std::vector<std::uint8_t> kSmallRgb = {1, 2, 3, 4,  5,  6,  0xEE, 0xEE,
-                                             7, 8, 9, 10, 11, 12, 0xEE, 0xEE};
+constexpr v4l2_pix_format kSmall = Rgb(kSide, kSide, kLine, kLine* kSide);
 
 // Answers VIDIOC_S_FMT with `pix`, as a driver adjusts the format it is given.
 auto Settles(v4l2_pix_format pix) {
@@ -103,8 +104,10 @@ auto Settles(v4l2_pix_format pix) {
   };
 }
 
-// Fills the read buffer with `bytes` and returns how many there were.
+// Fills the read buffer with `bytes` and returns how many there were. A
+// failed allocation would end the test run, which is fine.
 auto Delivers(const std::vector<std::uint8_t>& bytes) {
+  // NOLINTNEXTLINE(bugprone-exception-escape)
   return [bytes](int, void* buffer, std::size_t) {
     std::memcpy(buffer, bytes.data(), bytes.size());
     return static_cast<ssize_t>(bytes.size());
@@ -256,6 +259,8 @@ TEST_F(V4l2SessionTest, StartFailsWithoutADevice) {
   EXPECT_FALSE(session_->Start(kFramesPerSecond, kAttempt));
 }
 
+// Checks every field Start asks the driver to configure.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(V4l2SessionTest, StartAsksForVgaRgbAtTheFrameRate) {
   Configured();
   v4l2_format asked{};
@@ -297,11 +302,13 @@ TEST_F(V4l2SessionTest, StartFailsWhileCapturing) {
 }
 
 TEST_F(V4l2SessionTest, CopiesEachFrameAsBgraStampedWithItsAttempt) {
+  const std::vector<std::uint8_t> small_rgb = {1, 2, 3, 4,  5,  6,  0xEE, 0xEE,
+                                               7, 8, 9, 10, 11, 12, 0xEE, 0xEE};
   Configured();
   Settling(kSmall);
   EXPECT_CALL(mock_, Read(kFd, _, kSmall.sizeimage))
-      .WillOnce(Delivers(kSmallRgb))
-      .WillOnce(Delivers(kSmallRgb))
+      .WillOnce(Delivers(small_rgb))
+      .WillOnce(Delivers(small_rgb))
       .WillRepeatedly(FailsWith(EAGAIN));
   EXPECT_CALL(mock_, Poll(_, _, _)).WillRepeatedly(NothingYet);
 
@@ -319,6 +326,8 @@ TEST_F(V4l2SessionTest, CopiesEachFrameAsBgraStampedWithItsAttempt) {
   EXPECT_THAT(frames_[1].timestamp_ms, Gt(first.timestamp_ms));
 }
 
+// Checks every field the short read's wait polls and times.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(V4l2SessionTest, AShortReadWaitsForTheDevice) {
   Configured();
   Settling(kSmall);
@@ -493,10 +502,12 @@ INSTANTIATE_TEST_SUITE_P(
                   .pix = Small(&v4l2_pix_format::height, 0)},
         BadFormat{.name = "TooTall",
                   .pix = Rgb(1, kMaxDimension + 1, 3, 3 * (kMaxDimension + 1))},
-        BadFormat{.name = "LinesTooShort",
-                  .pix = Small(&v4l2_pix_format::bytesperline, kSide * 3 - 1)},
-        BadFormat{.name = "ImageTooSmall",
-                  .pix = Small(&v4l2_pix_format::sizeimage, kLine* kSide - 1)},
+        BadFormat{
+            .name = "LinesTooShort",
+            .pix = Small(&v4l2_pix_format::bytesperline, (kSide * 3) - 1)},
+        BadFormat{
+            .name = "ImageTooSmall",
+            .pix = Small(&v4l2_pix_format::sizeimage, (kLine * kSide) - 1)},
         BadFormat{.name = "ImageTooLarge",
                   .pix = Rgb(kMaxDimension, kMaxDimension, kMaxDimension * 3,
                              kMaxImage + 1)}),
@@ -550,7 +561,8 @@ int v4l2_open(const char* file, int oflag, ...) {
 
 int v4l2_close(int fd) { return facepalm::v4l2->Close(fd); }
 
-// NOLINTNEXTLINE(google-runtime-int): libv4l2's own signature.
+// libv4l2's own signature.
+// NOLINTNEXTLINE(google-runtime-int,bugprone-easily-swappable-parameters)
 int v4l2_ioctl(int fd, unsigned long int request, ...) {
   std::va_list arguments;
   va_start(arguments, request);

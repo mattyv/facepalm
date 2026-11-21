@@ -6,9 +6,12 @@ on:
   pull_request:
 
 jobs:
-  # Style checks run on macOS only, with Homebrew's LLVM: clang-format and
-  # clang-tidy versions differ between releases, and these match the ones
-  # developers run locally.
+  # clang-format runs here only, with Homebrew's LLVM: its version differs
+  # between releases, and this matches what developers run locally. The
+  # linux job below runs clang-tidy too, over the sources this job cannot
+  # build, with the same Homebrew LLVM version installed from apt.llvm.org,
+  # so a finding does not depend on which job happens to see a shared file
+  # first.
   macos:
     runs-on: macos-26
     steps:
@@ -50,7 +53,15 @@ jobs:
   # against MediaPipe's C headers and libmediapipe.so, pinned by
   # scripts/mediapipe_c.sha256 and cached (#83). The tests fake MediaPipe and
   # libv4l2, so no camera is opened; libmediapipe.so needs EGL and GLES to
-  # link.
+  # link. clang-tidy also runs here (#88): it is the only job that builds
+  # src/linux/*, test/linux/* and the Linux branches of tools/daemon/main.cc,
+  # and, with FACEPALM_LINUX_TRAY, the Linux tray menu in
+  # tools/menu/main_linux.cc. qt6-base-dev is for that menu's headers alone;
+  # FACEPALM_TIDY applies to every target this job configures, so it also
+  # re-checks the sources the macos job already covers, with the same
+  # Homebrew LLVM major version installed from apt.llvm.org (clang-tidy-23
+  # here tracks `brew install llvm`'s current major there; bump both
+  # together).
   linux:
     runs-on: ubuntu-latest
     env:
@@ -63,13 +74,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             bats clang jq libegl1 libgles2 libgmock-dev libgtest-dev \
-            libv4l-dev libx11-dev libxrandr-dev llvm ninja-build unzip
+            libv4l-dev libx11-dev libxrandr-dev llvm ninja-build \
+            qt6-base-dev unzip
       - uses: actions/cache@v6
         with:
           path: ${{ env.MEDIAPIPE_C }}
           key: mediapipe-c-${{ hashFiles('scripts/mediapipe_c.sha256') }}
       - name: Fetch MediaPipe's C headers and library
         run: bash scripts/fetch_mediapipe_c.sh "$MEDIAPIPE_C"
+      - name: clang-tidy
+        run: |
+          curl --fail --silent --show-error --location \
+            -o /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 23
+          sudo apt-get install -y clang-tidy-23
+          sudo ln -sf /usr/bin/clang-tidy-23 /usr/local/bin/clang-tidy
+          export PATH="/usr/local/bin:$PATH"
+          cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
+            -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/$MEDIAPIPE_C/include" \
+            -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/$MEDIAPIPE_C/lib/libmediapipe.so"
+          cmake --build build-tidy -- -k 0
+          cmake -S . -B build-tidy-menu -G Ninja -DFACEPALM_TIDY=ON \
+            -DFACEPALM_LINUX_TRAY=ON -DBUILD_TESTING=OFF
+          cmake --build build-tidy-menu --target facepalm_menu -- -k 0
       - name: Tests and coverage, with the Linux daemon
         run: |
           bash scripts/coverage.sh \

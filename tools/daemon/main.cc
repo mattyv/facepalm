@@ -71,7 +71,7 @@ class SerialQueue {
   }
 
  private:
-  void Run(std::stop_token stop) {
+  void Run(const std::stop_token& stop) {
     for (;;) {
       std::function<void()> task;
       {
@@ -89,7 +89,7 @@ class SerialQueue {
   std::mutex mutex_;
   std::condition_variable_any ready_;
   std::queue<std::function<void()>> pending_;
-  std::jthread worker_{[this](std::stop_token stop) { Run(stop); }};
+  std::jthread worker_{[this](const std::stop_token& stop) { Run(stop); }};
 };
 #else
 Post OnQueue(dispatch_queue_t queue) {
@@ -220,7 +220,7 @@ class Engine : public DaemonController, public DaemonPipeline {
   void Closed() override { controller_.OnClosed(); }
   void DeviceLost() override { controller_.OnDeviceLost(); }
   void DeviceBack() override { controller_.OnDeviceBack(); }
-  CameraController::State State() const override {
+  [[nodiscard]] CameraController::State State() const override {
     return controller_.CurrentState();
   }
   void Open() override { pipeline_.OnCameraOpen(); }
@@ -303,7 +303,8 @@ int main(int argc, char** argv) {
       std::span<const char* const>(argv + 1, argc - 1),
       facepalm::PathsFor(home != nullptr ? home : "", facepalm::kThisPlatform));
   if (!options) {
-    std::fputs(facepalm::kDaemonUsage.data(), stderr);
+    std::fwrite(facepalm::kDaemonUsage.data(), 1, facepalm::kDaemonUsage.size(),
+                stderr);
     return 2;
   }
   if (options->command != facepalm::DaemonOptions::Command::kRun) {
