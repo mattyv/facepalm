@@ -54,6 +54,13 @@ facepalm_unit(expressions)
 facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
 facepalm_unit(feelings)
+facepalm_unit(tuning)
+# The feelings are pure computation, so the tuning's tests run them for real.
+target_link_libraries(tuning PUBLIC feelings)
+# The tuning is pure computation, so the store's tests run it for real; its
+# POSIX calls are its own, and its tests run them on a real folder too.
+facepalm_unit(feeling_store)
+target_link_libraries(feeling_store PUBLIC tuning)
 facepalm_unit(frame)
 facepalm_unit(frame_pipeline)
 facepalm_unit(frame_recorder)
@@ -76,8 +83,6 @@ facepalm_unit(reaction_feed)
 # The feelings and their rule are pure computation, so the feed's tests run
 # them for real.
 target_link_libraries(reaction_feed PUBLIC feelings)
-facepalm_unit(rating_log)
-target_link_libraries(rating_log PUBLIC protocol)
 facepalm_unit(protocol)
 target_link_libraries(protocol PUBLIC feelings)
 facepalm_unit(service)
@@ -221,7 +226,7 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     INSTALL_RPATH "@executable_path/../Frameworks")
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
     avfoundation_session camera_controller config frame_pipeline face_analyzer
-    expression_reader gesture_reader look_away_reader reaction_feed rating_log service
+    expression_reader gesture_reader look_away_reader reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
@@ -258,7 +263,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     ${FACEPALM_MEDIAPIPE_C_INCLUDE} ${V4L2_INCLUDE_DIRECTORY})
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
-    look_away_reader reaction_feed rating_log service session_camera unix_socket face_model Threads::Threads
+    look_away_reader reaction_feed feeling_store service session_camera unix_socket face_model Threads::Threads
     ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"
@@ -291,5 +296,5 @@ endif()
 if(BUILD_TESTING)
   add_executable(mcp_service_fixture EXCLUDE_FROM_ALL
     test/fixtures/mcp_service_fixture.cc)
-  target_link_libraries(mcp_service_fixture PRIVATE service reaction_feed rating_log unix_socket)
+  target_link_libraries(mcp_service_fixture PRIVATE service reaction_feed feeling_store unix_socket)
 endif()

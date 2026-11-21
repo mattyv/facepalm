@@ -5,12 +5,13 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
 #include "src/feed.h"
+#include "src/feeling_store.h"
 #include "src/feelings.h"
-#include "src/rating_log.h"
 #include "src/reaction_feed.h"
 #include "src/service.h"
 #include "src/unix_socket.h"
@@ -53,9 +54,11 @@ class AnnouncingFeed : public facepalm::Feed {
     beating_.clear();
     return delivery;
   }
-  bool Rate(const std::string& client, std::int64_t id, int score) override {
-    return feed_.Rate(client, id, score);
+  bool Feel(const std::string& client, std::int64_t interpretation,
+            facepalm::Feeling feeling) override {
+    return feed_.Feel(client, interpretation, feeling);
   }
+  bool Reset(const std::string& client) override { return feed_.Reset(client); }
 
   // Returns once the beat announced, if any, has opened its window.
   void AwaitBeat() {
@@ -79,49 +82,46 @@ class AnnouncingFeed : public facepalm::Feed {
 
 }  // namespace
 
-// A deterministic service controlled by stdin, for the cross-process MCP test.
+// A deterministic service controlled by stdin, for the cross-process MCP and
+// tuning tests: `fixture SOCKET FEELINGS_FILE`. Each "react" line makes a
+// nod; "react DETAIL" makes the reaction whose JSON is DETAIL, such as
+// {"expression":"brows_down"}.
 // NOLINTNEXTLINE(misc-const-correctness)
 int main(int argc, char** argv) try {
-  if (argc != 2 && argc != 3) {
+  if (argc != 3) {
     return 2;
   }
   std::string error;
+  const auto feelings = facepalm::FeelingStore::Open(argv[2], error);
+  if (!feelings) {
+    std::cerr << error << '\n';
+    return 1;
+  }
   auto listener = facepalm::UnixListener::Create(argv[1], error);
   if (!listener) {
     std::cerr << error << '\n';
     return 1;
   }
-  std::unique_ptr<facepalm::RatingLog> ratings;
-  if (argc == 3) {
-    ratings = facepalm::RatingLog::Open(argv[2], error);
-    if (!ratings) {
-      return 1;
-    }
-  }
   std::mutex output_mutex;
-  facepalm::ReactionFeed feed(10, [&](const auto& rating) {
-    if (ratings && !ratings->Record(rating)) {
-      return false;
-    }
-    const std::scoped_lock lock(output_mutex);
-    std::cout << "rated " << rating.client << ' ' << rating.id << ' '
-              << rating.score << '\n'
-              << std::flush;
-    return true;
-  });
+  facepalm::ReactionFeed feed(10, *feelings);
   AnnouncingFeed announcing(feed, output_mutex);
   facepalm::Service service(std::move(listener), announcing);
   service.Start();
   std::cout << "ready" << '\n' << std::flush;
   std::string command;
+  constexpr std::string_view kReact = "react";
   while (std::getline(std::cin, command)) {
-    if (command != "react") {
+    if (!command.starts_with(kReact)) {
       return 2;
     }
+    const std::string detail = command == kReact
+                                   ? std::string(R"({"gesture":"nod"})")
+                                   : command.substr(kReact.size() + 1);
     announcing.AwaitBeat();
     constexpr std::int64_t kSyntheticPublishedMs = 1763658000123;
-    const auto id = feed.React("synthetic nod", R"({"gesture":"nod"})",
-                               kSyntheticPublishedMs);
+    const auto id =
+        feed.React("synthetic " + std::string(facepalm::SignOf(detail)), detail,
+                   kSyntheticPublishedMs);
     const std::scoped_lock lock(output_mutex);
     std::cout << "reacted " << id << '\n' << std::flush;
   }

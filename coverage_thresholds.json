@@ -181,13 +181,6 @@
       "functions": 100
     }
   },
-  "src/rating_log.cc": {
-    "unit": {
-      "lines": 100,
-      "branches": 100,
-      "functions": 100
-    }
-  },
   "src/settings_document.cc": {
     "unit": {
       "lines": 100,
@@ -266,6 +259,20 @@
     }
   },
   "src/frame_times.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/tuning.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/feeling_store.cc": {
     "unit": {
       "lines": 100,
       "branches": 100,
