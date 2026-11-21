@@ -149,6 +149,20 @@ bool FileExists(const std::string& path) {
   return std::filesystem::exists(path, ignored);
 }
 
+// `daemon_paths` is empty only when `--home` names a directory
+// `UserPaths::PathsFor` does not recognize; the preview is then simply
+// off, the same as if the menu never asked. A function of its own keeps
+// this check out of main()'s own branching.
+std::string PreviewRequestPath(
+    const std::optional<facepalm::UserPaths>& daemon_paths) {
+  return daemon_paths ? daemon_paths->preview_request : std::string{};
+}
+
+std::string PreviewFramePath(
+    const std::optional<facepalm::UserPaths>& daemon_paths) {
+  return daemon_paths ? daemon_paths->preview_frame : std::string{};
+}
+
 // The daemon owns all queues and resources until DaemonControl exits. Its
 // methods only forward: the logic is in DaemonControl, which follows
 // specs/DaemonAdmission.tla, and in the sources it wires together.
@@ -475,14 +489,13 @@ int main(int argc, char** argv) {
   facepalm::SerialQueue camera;
   facepalm::SerialQueue inference;
   const char* device = std::getenv("FACEPALM_CAMERA_DEVICE");
-  facepalm::Engine engine(
-      std::move(listener), approvals, options->model, config,
-      std::move(feelings),
-      calibration_profile ? &*calibration_profile : nullptr, control.Poster(),
-      camera.Poster(), inference.Poster(),
-      device != nullptr ? device : "/dev/video0",
-      daemon_paths ? daemon_paths->preview_request : std::string{},
-      daemon_paths ? daemon_paths->preview_frame : std::string{});
+  facepalm::Engine engine(std::move(listener), approvals, options->model,
+                          config, std::move(feelings),
+                          calibration_profile ? &*calibration_profile : nullptr,
+                          control.Poster(), camera.Poster(), inference.Poster(),
+                          device != nullptr ? device : "/dev/video0",
+                          facepalm::PreviewRequestPath(daemon_paths),
+                          facepalm::PreviewFramePath(daemon_paths));
   engine.Start();
   int signal_number = 0;
   if (sigwait(&signals, &signal_number) != 0) {
@@ -507,9 +520,8 @@ int main(int argc, char** argv) {
           dispatch_queue_create("facepalm.camera", DISPATCH_QUEUE_SERIAL)),
       facepalm::OnQueue(
           dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)),
-      /*device=*/{},
-      daemon_paths ? daemon_paths->preview_request : std::string{},
-      daemon_paths ? daemon_paths->preview_frame : std::string{});
+      /*device=*/{}, facepalm::PreviewRequestPath(daemon_paths),
+      facepalm::PreviewFramePath(daemon_paths));
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
     dispatch_source_t source =
