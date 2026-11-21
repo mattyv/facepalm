@@ -5,6 +5,76 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Report the screen context a reaction was read in
+
+-   **Decision:** every reading, when `screen_context.enabled` (default on),
+    carries a `context` object: `active_app` (the frontmost app's name),
+    `window_title` (only with `screen_context.window_titles_enabled`, default
+    off), `mouse` (`x`/`y`), and `gaze` (`this_screen`, `other_screen`,
+    `away` or `unknown`). Gaze comes from the same head pose and resting pose
+    LookAwayReader already reads, with no new calibration (#61 item 12 is
+    separate): within `screen_context.other_screen_degrees` (default 7.5,
+    half of `looking_away.degrees`) of the resting pose is `this_screen`;
+    past `looking_away.degrees` is `away`; between the two, a turn toward a
+    screen the platform's arrangement places on that side is
+    `other_screen`, and one with no screen known that way, or a pose not
+    yet learned, is `unknown`. Monitors are placed only left or right of the
+    one the camera is assumed to face; pitch alone, and monitors stacked
+    above or below, are not modeled. `src/screen_context.{h,cc}` is the pure
+    rule (`CoarseGazeFrom`, `SideOf`), tested directly with no mock, as it
+    has no lifecycle to spec. `src/screen_context_reader.{h,cc}` is a
+    `FaceReader` that, like `LookAwayReader`, keeps its own
+    `ExpressionTracker` for the resting pose, behind a mutex: it is read
+    from the daemon's control thread while frames update it on the
+    inference thread, which is also why it is a long-lived member of
+    `Engine` rather than one of `MakeAnalyzers`' own per-session readers
+    (`ScreenContextReaderForwarder` bridges the two). `src/screen_source.h`
+    is the mockable OS seam `src/screen_context_reporter.{h,cc}` builds the
+    `context` JSON from: `MacosScreenSource` (AppKit: `NSWorkspace`,
+    `NSScreen`, `NSEvent`, and `CGWindowListCopyWindowInfo` for a title,
+    which needs the Screen Recording permission) and `LinuxScreenSource`
+    (X11, reachable through XWayland where a Wayland session runs one).
+    Nothing from a window's pixels, and no screenshot, is read; only these
+    fields leave the process, as JSON text, like every other reaction.
+-   **Why:** #61's design (item 11) asks what screen and window was active,
+    where the mouse was, and a coarse "this screen, another screen, or
+    away" gaze, each so a client can line a reaction up with what the
+    person was looking at. Window titles are opt-in because they can hold
+    private text and need a permission; the rest needs none.
+-   **Rejected:** eye-landmark gaze (needs landmarks no reader uses yet,
+    and calibration against the camera's position, which #35's entry below
+    already deferred to this item); merging `context` into a reading's
+    `detail`, which would change the exact JSON `CueOf` (`src/feelings.h`)
+    matches and silently break the feelings rule; a second reading just for
+    context, which would double what a client sees per gesture and spend
+    the feed's capacity and "missed" accounting on it.
+-   **Linux's verified limit:** under a GNOME Wayland session, `XWayland`
+    does not give an X11 client the real global mouse position (Mutter
+    keeps Wayland coordinates from X11 clients; see the 2014 GNOME report
+    discussed on Wayland's own mailing list) and sets `_NET_ACTIVE_WINDOW`
+    to `None` once a native Wayland window has focus (found fixing Wine's
+    own XWayland integration, 2025). Rather than report a stale or partial
+    answer, `LinuxScreenSource` reads the mouse and the active app as
+    `nullopt` whenever `WAYLAND_DISPLAY` is set, whatever an XWayland
+    socket says; RandR's monitor geometry is a separate subsystem XWayland
+    still forwards, and is read either way. This needs verifying by hand
+    against a real GNOME Wayland session (not done in this change) and
+    against a plain X11 session on Linux, neither of which this agent's
+    environment can run.
+-   **Cost:** the `other_screen` reading never tells which of several
+    screens on the same side the person looks at, and a monitor stacked
+    above or below the camera's screen is never `other_screen`, only
+    `this_screen`, `away` or `unknown`. The platform sources
+    (`src/macos/screen_context_macos.mm`, `src/linux/screen_context_linux.cc`)
+    need a real desktop session and so, like
+    `src/macos/avfoundation_session`, have no unit tests or coverage floor;
+    `ScreenContextReporter`, which is tested, takes each behind
+    `ScreenSource`. The Linux build now also needs `libx11-dev` and
+    `libxrandr-dev`; CI's Linux job (#83) needs them added alongside its
+    existing packages.
+-   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36),
+    [#61](https://github.com/mattyv/facepalm/issues/61) item 11.
+
 ## 2026-11-21: Turn facepalm on and off from its menu, as a user service
 
 -   **Decision:** the menu's **Turn On Facepalm…** asks for the person's
