@@ -161,7 +161,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential ca-certificates cmake dbus-daemon dpkg-dev file git \
-            libgmock-dev ninja-build qt6-base-dev qt6-wayland xauth xdotool xvfb
+            libgmock-dev ninja-build qt6-base-dev qt6-wayland x11-utils xauth \
+            xdotool xvfb
       - uses: actions/checkout@v7
       - name: Build and exercise Linux tray
         run: |
