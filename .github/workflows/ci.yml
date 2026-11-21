@@ -45,19 +45,40 @@ jobs:
       - name: Tests and coverage
         run: bash scripts/coverage.sh
 
+  # Also builds the Linux camera daemon and tests its two Linux sources,
+  # against MediaPipe's C headers and libmediapipe.so, pinned by
+  # scripts/mediapipe_c.sha256 and cached (#83). The tests fake MediaPipe and
+  # libv4l2, so no camera is opened; libmediapipe.so needs EGL and GLES to
+  # link.
   linux:
     runs-on: ubuntu-latest
     env:
       CXX: clang++
+      MEDIAPIPE_C: build-mediapipe-c
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bats clang jq libgmock-dev libgtest-dev llvm ninja-build
-      - name: Tests and coverage
-        run: bash scripts/coverage.sh
+            bats clang jq libegl1 libgles2 libgmock-dev libgtest-dev \
+            libv4l-dev llvm ninja-build unzip
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.MEDIAPIPE_C }}
+          key: mediapipe-c-${{ hashFiles('scripts/mediapipe_c.sha256') }}
+      - name: Fetch MediaPipe's C headers and library
+        run: bash scripts/fetch_mediapipe_c.sh "$MEDIAPIPE_C"
+      - name: Tests and coverage, with the Linux daemon
+        run: |
+          bash scripts/coverage.sh \
+            -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/$MEDIAPIPE_C/include" \
+            -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/$MEDIAPIPE_C/lib/libmediapipe.so"
+      - name: Check the daemon loads and rejects an invalid invocation
+        run: |
+          status=0
+          build-coverage/facepalm-daemon || status=$?
+          test "$status" -eq 2
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -149,38 +170,58 @@ jobs:
             -DSMOKE_ROOT="${RUNNER_TEMP}/facepalm-deb-smoke" \
             -DINSTALL_PACKAGE=ON -P test/deb_smoke.cmake
 
+  # With the Linux camera's units too, as the linux job builds them.
   sanitizers:
     runs-on: ubuntu-latest
     env:
       CXX: clang++
+      MEDIAPIPE_C: build-mediapipe-c
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang libclang-rt-dev libgmock-dev libgtest-dev llvm ninja-build
+            clang libclang-rt-dev libegl1 libgles2 libgmock-dev libgtest-dev \
+            libv4l-dev llvm ninja-build unzip
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.MEDIAPIPE_C }}
+          key: mediapipe-c-${{ hashFiles('scripts/mediapipe_c.sha256') }}
+      - name: Fetch MediaPipe's C headers and library
+        run: bash scripts/fetch_mediapipe_c.sh "$MEDIAPIPE_C"
       - name: Tests with AddressSanitizer and UndefinedBehaviorSanitizer
         run: |
           cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" \
+            -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/$MEDIAPIPE_C/include" \
+            -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/$MEDIAPIPE_C/lib/libmediapipe.so"
           cmake --build build-sanitizers
           ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
 
   # ThreadSanitizer cannot share a build with AddressSanitizer, so it has its
-  # own (#66): the service, the feed and the client gate are threaded.
+  # own (#66): the service, the feed and the client gate are threaded, and so
+  # is the Linux camera's capture thread (#83).
   thread-sanitizer:
     runs-on: ubuntu-latest
     env:
       CXX: clang++
       TSAN_OPTIONS: halt_on_error=1 second_deadlock_stack=1
+      MEDIAPIPE_C: build-mediapipe-c
     steps:
       - uses: actions/checkout@v7
       - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang libclang-rt-dev libgmock-dev libgtest-dev llvm ninja-build
+            clang libclang-rt-dev libegl1 libgles2 libgmock-dev libgtest-dev \
+            libv4l-dev llvm ninja-build unzip
+      - uses: actions/cache@v6
+        with:
+          path: ${{ env.MEDIAPIPE_C }}
+          key: mediapipe-c-${{ hashFiles('scripts/mediapipe_c.sha256') }}
+      - name: Fetch MediaPipe's C headers and library
+        run: bash scripts/fetch_mediapipe_c.sh "$MEDIAPIPE_C"
       # ThreadSanitizer fails to start under the 32 bits of mmap randomness
       # that newer kernels default to; 28 is what it supports.
       - name: Narrow address space randomization
@@ -188,7 +229,9 @@ jobs:
       - name: Tests with ThreadSanitizer
         run: |
           cmake -S . -B build-tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" \
+            -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/$MEDIAPIPE_C/include" \
+            -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/$MEDIAPIPE_C/lib/libmediapipe.so"
           cmake --build build-tsan
           ctest --test-dir build-tsan --output-on-failure --no-tests=error
 
