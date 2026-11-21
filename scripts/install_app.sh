@@ -1,5 +1,6 @@
 #!/bin/bash
-# Copies a staged app without replacing an existing installation or launching it.
+# Copies a staged app without replacing an existing installation or
+# launching it.
 set -euo pipefail
 if [[ "$#" -ne 2 ]] || [[ ! -f "$1/Contents/MacOS/facepalm-daemon" ]] \
   || [[ ! -d "$2" ]]; then

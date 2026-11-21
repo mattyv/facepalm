@@ -64,7 +64,7 @@ or adjust gesture confidence and expression tuning. To apply saved settings
 on the next daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"`
 to the daemon command. The dialog shows the path it used. Use one approved MCP
 connection at a time. It receives interpreted gesture and expression events.
-For Claude Code, see the [bundled plugin instructions](../integrations/claude-code/README.md).
+For Claude Code, see the [bundled plugin instructions](/integrations/claude-code/README.md).
 To save ratings locally, add `--ratings-file PATH` with a private file path.
 The owner-only JSONL file stores the summary, reading ID, timestamps and
 score, up to 10 MiB. The daemon rejects ratings when the option is absent,

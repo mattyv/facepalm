@@ -14,7 +14,8 @@ teardown() {
   run bash "${BATS_TEST_DIRNAME}/../install_app.sh" \
     "${WORK}/Facepalm.app" "${WORK}/destination"
   [[ "${status}" -eq 0 ]] || false
-  [[ -f "${WORK}/destination/Facepalm.app/Contents/MacOS/facepalm-daemon" ]] || false
+  [[ -f "${WORK}/destination/Facepalm.app/Contents/MacOS/facepalm-daemon" ]] \
+    || false
 }
 
 @test "never overwrites an existing installation" {

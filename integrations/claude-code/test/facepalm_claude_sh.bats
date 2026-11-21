@@ -20,7 +20,7 @@ teardown() {
   rm -rf "${WORK}"
 }
 
-@test "creates a private per-run socket directory and cleans it after Claude exits" {
+@test "makes a private per-run socket directory, removed after Claude exits" {
   run bash "${BATS_TEST_DIRNAME}/../facepalm-claude.sh"
   [[ "${status}" -eq 7 ]] || false
   socket="$(cat "${RECORD}")"
