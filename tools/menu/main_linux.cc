@@ -102,6 +102,10 @@ constexpr auto kSettingsRequest = "settings";
 // instance is listening.
 class QtSingleInstanceIo : public facepalm::SingleInstanceIo {
  public:
+  // `lock_path` and `socket_path` are two different files this instance
+  // owns outright, and the one call site below names its arguments the
+  // same way, so a swap would be visible there.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   QtSingleInstanceIo(const QString& lock_path, QString socket_path)
       : lock_(lock_path), socket_path_(std::move(socket_path)) {}
 
