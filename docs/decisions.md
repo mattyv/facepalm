@@ -5,6 +5,63 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: The camera preview stays in, to the menu alone, started by hand
+
+-   **Decision:** the camera preview ships (#61's 2026-11-21 decision log
+    reverses the rule that no image ever leaves the service), but only
+    this far: a JPEG of the camera, encoded in the daemon
+    (`src/macos/preview_jpeg.mm`, through ImageIO) and written to a
+    private per-user file, `UserPaths::preview_frame`, that only the
+    menu is expected to read. No frame is ever sent over the
+    approved-token service (`src/service.cc`, `src/approved_feed.h`)
+    that MCP, AI Pair or any other client reaches: that service has no
+    verb for a preview, and never will, so an image can leave the daemon
+    only by a process on the same machine, as the same user, directly
+    reading the file (the same boundary #89's client tokens and #61 item
+    8's camera-in-use indicator already accept: privacy to the service's
+    clients, not to every other program the person's own account could
+    run). Nothing is encoded or written unless both the camera is open
+    and the menu has asked for it by creating `UserPaths::preview_request`
+    (removed to stop): `src/preview_lease.cc`, following
+    `specs/PreviewLease.tla`, is the gate, and a grant never carries over
+    a camera close, so turning the preview off and on, or the camera off
+    and on, always needs a fresh ask from the menu. The request file is
+    polled on the frame-capture path already running at the camera's own
+    rate, not a new timer; an unopened menu, or a closed one, asks for
+    nothing and nothing is ever encoded.
+-   **Why:** #61's 2026-11-21 decision log: "Preview and settings is a
+    good thing" (the user, on being shown the salvaged design) keeps the
+    preview, but #37's Fable plan narrows what the earlier draft did:
+    "the preview sent JPEG frames out of the daemon -- keep it only to
+    the local menu app over the user-only socket, never to MCP/agents,
+    explicitly started by the user, with an indicator while it runs." A
+    file in the already-private per-user directory needs no new socket
+    or token to reach only the menu, the same reasoning #61 item 8's
+    status indicator used.
+-   **Rejected:** Codex's `fix/delivery-audit` design
+    (`8ea3d8b`/`ada5311`/`5757ad1`/`97af5ac`), which served live frames
+    over a second socket (`PreviewTransport.tla`) with its own token and
+    instance secret, and which the daemon could serve to any approved
+    client, MCP included, once one asked; streaming automatically
+    whenever the camera opened, rather than only once the menu asks, which
+    would encode and write frames nobody is watching; and reusing the
+    main approved-token socket for the request/frame exchange, which
+    would put a preview verb within reach of every other approved
+    client, not only the menu.
+-   **Cost:** the preview is macOS-only for now, and nothing in the menu
+    yet lets a person actually turn it on: `src/macos/preview_jpeg.mm` is
+    the only encoder (the daemon's Linux build links `preview_lease` and
+    `preview_publisher`, so the lease and the request/frame files behave
+    identically, but the encode step always returns nothing there), and
+    neither the macOS menu nor the Linux tray has a window that creates
+    `UserPaths::preview_request` and shows `UserPaths::preview_frame`.
+    Filed as [#108](https://github.com/mattyv/facepalm/issues/108) rather
+    than fixed here.
+-   **Evidence:** [#61](https://github.com/mattyv/facepalm/issues/61),
+    [#37](https://github.com/mattyv/facepalm/issues/37),
+    [#36](https://github.com/mattyv/facepalm/issues/36),
+    [#108](https://github.com/mattyv/facepalm/issues/108).
+
 ## 2026-11-21: A QLockFile claim plus a QLocalServer handoff for the Linux tray's single instance
 
 -   **Decision:** `tools/menu/main_linux.cc` claims a `QLockFile` at
