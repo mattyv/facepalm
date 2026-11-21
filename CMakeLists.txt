@@ -273,8 +273,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "@executable_path/../Frameworks")
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
-    daemon_control daemon_options face_readers feed_clients user_paths avfoundation_session
-    camera_controller config frame_pipeline face_analyzer
+    daemon_control daemon_options daemon_status face_readers feed_clients user_paths
+    avfoundation_session camera_controller config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
     screen_context_reporter screen_context_macos reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe "-framework CoreFoundation")
@@ -328,7 +328,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   # face_model calls the shim, and the shim MediaPipe, so each comes after
   # the one that calls it.
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
-    daemon_control daemon_options face_readers feed_clients user_paths
+    daemon_control daemon_options daemon_status face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader screen_context_reader screen_context_reporter screen_context
     reaction_feed feeling_store service session_camera unix_socket v4l2_session
