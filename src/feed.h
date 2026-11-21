@@ -20,6 +20,10 @@ class Feed {
     std::string summary;  // The one line the person sees.
     std::string detail;   // The full interpreted context, as JSON.
     std::optional<std::int64_t> published_at_ms = std::nullopt;
+    // What the screen showed at the moment of the reading (#61 item 11):
+    // active app, mouse and coarse gaze, as JSON text, when
+    // Config::screen_context_enabled; nullopt otherwise.
+    std::optional<std::string> context = std::nullopt;
   };
 
   // How a beat's reaction was read (specs/FeelingBeat.tla).

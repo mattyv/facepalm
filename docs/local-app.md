@@ -35,6 +35,9 @@ The installer refuses to replace an existing `Facepalm.app`; remove or move an
 old installation yourself if appropriate. It does not start Facepalm. This is
 not a Developer ID-signed or notarized distribution, and the camera permission
 flow for the eventual app host has not been established by this staging step.
+The same is true of the Screen Recording permission `screen_context`'s window
+titles need: with `screen_context.window_titles_enabled` on, a window title
+reads as absent until the eventual app host has it.
 
 ## Run the development bundle
 

@@ -132,6 +132,27 @@
       "functions": 100
     }
   },
+  "src/screen_context.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/screen_context_reporter.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/screen_context_reader.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/look_away_replay.cc": {
     "unit": {
       "lines": 100,

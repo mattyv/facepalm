@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 
 #include "src/camera_controller.h"
@@ -17,19 +18,27 @@ namespace facepalm {
 // are not.
 class FeedClients : public Clients {
  public:
-  // ReactionFeed::React: the reading's summary, its detail, and when it was
-  // published, in milliseconds since the Unix epoch.
+  // ReactionFeed::React: the reading's summary, its detail, when it was
+  // published, in milliseconds since the Unix epoch, and its screen context
+  // (#61 item 11), when `context`'s provider gives one.
   using React = std::function<void(std::string summary, std::string detail,
-                                   std::int64_t published_ms)>;
+                                   std::int64_t published_ms,
+                                   std::optional<std::string> context)>;
   // Milliseconds since the Unix epoch.
   using Clock = std::function<std::int64_t()>;
+  // What the screen showed at the moment of a reading (#61 item 11), asked
+  // fresh for each one it delivers. FeedClients does not know what a
+  // context is or where it comes from; nullptr (the default) never
+  // provides one.
+  using ContextProvider = std::function<std::optional<std::string>()>;
 
-  FeedClients(React react, Clock now);
+  FeedClients(React react, Clock now, ContextProvider context = nullptr);
   void Deliver(const ClientId& client, const Reaction& reaction) override;
 
  private:
   React react_;
   Clock now_;
+  ContextProvider context_;
 };
 
 // The system clock, in milliseconds since the Unix epoch.

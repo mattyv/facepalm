@@ -36,10 +36,16 @@
 #include "src/face_readers.h"
 #include "src/feed_clients.h"
 #include "src/frame_pipeline.h"
+#include "src/screen_context.h"
+#include "src/screen_context_reader.h"
+#include "src/screen_context_reporter.h"
+#include "src/screen_source.h"
 #ifdef __linux__
+#include "src/linux/screen_context_linux.h"
 #include "src/linux/v4l2_session.h"
 #else
 #include "src/macos/avfoundation_session.h"
+#include "src/macos/screen_context_macos.h"
 #endif
 #include "src/feeling_store.h"
 #include "src/reaction_feed.h"
@@ -98,6 +104,18 @@ Post OnQueue(dispatch_queue_t queue) {
 
 #endif
 
+// The platform's ScreenSource (#61 item 11): AVFoundation's sibling,
+// AppKit, on macOS; X11, through XWayland where one runs, on Linux.
+#ifdef __linux__
+std::unique_ptr<ScreenSource> MakeScreenSource() {
+  return std::make_unique<LinuxScreenSource>();
+}
+#else
+std::unique_ptr<ScreenSource> MakeScreenSource() {
+  return std::make_unique<MacosScreenSource>();
+}
+#endif
+
 // The daemon owns all queues and resources until DaemonControl exits. Its
 // methods only forward: the logic is in DaemonControl, which follows
 // specs/DaemonAdmission.tla, and in the sources it wires together.
@@ -111,15 +129,42 @@ class Engine : public DaemonController, public DaemonPipeline {
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
+        screen_source_(config.screen_context_enabled ? MakeScreenSource()
+                                                     : nullptr),
+        screen_context_reader_(ExpressionTracker::Settings{
+            .rise = config.expressions_smallest_rise,
+            .pose_degrees = config.expressions_pose_degrees,
+            .pose_range = config.expressions_pose_range,
+            .settle_ms = config.expressions_settle_ms,
+            .spreads = config.expressions_spreads,
+            .hold_ms = config.expressions_hold_ms}),
+        reporter_(
+            screen_source_
+                ? std::optional<ScreenContextReporter>(ScreenContextReporter(
+                      *screen_source_,
+                      GazeSettings{
+                          .other_screen_degrees =
+                              config.screen_context_other_screen_degrees,
+                          .away_degrees = config.looking_away_degrees},
+                      config.screen_context_window_titles_enabled))
+                : std::nullopt),
         feelings_(std::move(feelings)),
         status_path_(std::move(status_path)),
         feed_(kFeedCapacity, *feelings_),
         clients_(
             [this](std::string summary, std::string detail,
-                   std::int64_t published_ms) {
-              feed_.React(std::move(summary), std::move(detail), published_ms);
+                   std::int64_t published_ms,
+                   std::optional<std::string> context) {
+              feed_.React(std::move(summary), std::move(detail), published_ms,
+                          std::move(context));
             },
-            UnixMilliseconds),
+            UnixMilliseconds,
+            [this] {
+              return reporter_ ? std::make_optional(reporter_->Json(
+                                     screen_context_reader_.Pose(),
+                                     screen_context_reader_.RestingPose()))
+                               : std::nullopt;
+            }),
         approved_(
             feed_,
             [this](bool joined) {
@@ -201,7 +246,9 @@ class Engine : public DaemonController, public DaemonPipeline {
     }
     FramePipeline::Analyzers analyzers;
     analyzers.push_back(std::make_unique<FaceAnalyzer>(
-        std::move(model), MakeFaceReaders(config_)));
+        std::move(model),
+        MakeFaceReaders(config_,
+                        screen_source_ ? &screen_context_reader_ : nullptr)));
     return analyzers;
   }
 
@@ -220,6 +267,11 @@ class Engine : public DaemonController, public DaemonPipeline {
   Post control_queue_;
   std::string model_;
   Config config_;
+  // Outlives any one camera session, unlike MakeFaceReaders' own readers
+  // (#61 item 11); nullptr/nullopt with screen_context disabled.
+  std::unique_ptr<ScreenSource> screen_source_;
+  ScreenContextReader screen_context_reader_;
+  std::optional<ScreenContextReporter> reporter_;
   std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
   std::string status_path_;
   ReactionFeed feed_;
