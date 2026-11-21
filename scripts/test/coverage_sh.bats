@@ -11,15 +11,22 @@ setup() {
   for tool in cmake ctest llvm-profdata; do
     printf '#!/bin/bash\n' >"${WORK}/bin/${tool}"
   done
-  # Stands in for "xcrun --find <tool>", answering with the tool on the PATH.
+  # Stands in for "xcrun --find <tool>", answering with the tool on the PATH,
+  # and for uname, answering Linux unless a test says otherwise.
   cat >"${WORK}/bin/xcrun" <<'EOF'
 #!/bin/bash
+echo "$2" >>"${WORK}/xcrun.log"
 echo "$2"
+EOF
+  cat >"${WORK}/bin/uname" <<'EOF'
+#!/bin/bash
+echo "${FAKE_UNAME:-Linux}"
 EOF
   printf '#!/bin/bash\ncat "%s"\n' "${WORK}/summary.json" \
     >"${WORK}/bin/llvm-cov"
   chmod +x "${WORK}"/bin/*
   PATH="${WORK}/bin:${PATH}"
+  export WORK
   floors '"src/head_pose.cc":
     {"unit": {"lines": 100, "branches": 100, "functions": 100}}'
 }
@@ -94,4 +101,18 @@ summary() {
   summary 10 100 4 100 2 100
   run bash "${WORK}/repo/scripts/coverage.sh"
   [[ "${status}" -eq 0 ]] || false
+}
+
+@test "finds the LLVM tools through xcrun on macOS" {
+  summary 10 100 4 100 2 100
+  FAKE_UNAME=Darwin run bash "${WORK}/repo/scripts/coverage.sh"
+  [[ "${status}" -eq 0 ]] || false
+  [[ "$(<"${WORK}/xcrun.log")" == $'llvm-profdata\nllvm-cov' ]] || false
+}
+
+@test "runs the LLVM tools from the PATH elsewhere" {
+  summary 10 100 4 100 2 100
+  run bash "${WORK}/repo/scripts/coverage.sh"
+  [[ "${status}" -eq 0 ]] || false
+  [[ ! -e "${WORK}/xcrun.log" ]] || false
 }

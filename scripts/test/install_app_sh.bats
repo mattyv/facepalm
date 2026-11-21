@@ -42,3 +42,10 @@ TOOL
   [[ "${status}" -ne 0 ]] || false
   [[ ! -e "${WORK}/destination/Facepalm.app" ]] || false
 }
+
+@test "prints its usage when the destination is not a directory" {
+  run bash "${BATS_TEST_DIRNAME}/../install_app.sh" \
+    "${WORK}/Facepalm.app" "${WORK}/missing"
+  [[ "${status}" -eq 2 ]] || false
+  [[ "${output}" == 'usage: install_app.sh '* ]] || false
+}
