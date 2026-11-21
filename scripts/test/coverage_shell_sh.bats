@@ -90,10 +90,11 @@ report() {
 }
 
 @test "fails, naming the script, when its lines are below its floor" {
-  report / "${REPO}/a.sh" '2:1 3:0'
+  report / "${REPO}/a.sh" '2:1 3:0 10:0'
   run bash "${REPO}/scripts/coverage_shell.sh"
   [[ "${status}" -eq 1 ]] || false
-  [[ "${output}" == *'a.sh: lines 50.00% is below 100%'* ]] || false
+  [[ "${output}" == *'a.sh: lines 33.33% is below 100%, missing 3,10'* ]] \
+    || false
 }
 
 @test "holds a script to the floor listed for it" {

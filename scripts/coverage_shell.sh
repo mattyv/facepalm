@@ -14,8 +14,8 @@ readonly OUT="${ROOT}/build-shell-coverage"
 readonly THRESHOLDS="${ROOT}/coverage_thresholds.json"
 
 #######################################
-# Prints "script covered total" for each script in the list file that kcov
-# saw, counting a line covered when any copy of the script ran it.
+# Prints "script line covered" for each line of each listed script that kcov
+# saw: covered is 1 when any copy of the script ran the line, else 0.
 # Arguments:
 #   A file listing the scripts, one a line; kcov's Cobertura reports.
 #######################################
@@ -44,10 +44,8 @@ tally() {
     END {
       for (key in lines) {
         split(key, parts, SUBSEP)
-        total[parts[1]]++
-        covered[parts[1]] += (key in hit)
+        print parts[1], parts[2], (key in hit)
       }
-      for (name in total) print name, covered[name], total[name]
     }
   ' "$@"
 }
@@ -58,7 +56,8 @@ main() {
   mkdir -p "${OUT}"
   git ls-files '*.sh' >"${OUT}/scripts.txt"
   git ls-files '*.bats' >"${OUT}/tests.txt"
-  local tests run script counts covered total percent floor shortfalls=''
+  local tests run script counts covered total missed percent floor
+  local shortfalls=''
   local -a reports=()
   while IFS= read -r tests; do
     run="${OUT}/runs/${tests//\//_}"
@@ -71,22 +70,25 @@ main() {
   while IFS= read -r run; do
     reports+=("${run}")
   done <"${OUT}/reports.txt"
-  tally "${OUT}/scripts.txt" "${reports[@]}" >"${OUT}/tally.txt"
+  tally "${OUT}/scripts.txt" "${reports[@]}" | sort -k1,1 -k2,2n \
+    >"${OUT}/tally.txt"
   while IFS= read -r script; do
-    counts="$(awk -v s="${script}" '$1 == s { print $2, $3 }' \
-      "${OUT}/tally.txt")"
+    counts="$(awk -v s="${script}" '$1 == s { t++; c += $3 }
+      $1 == s && !$3 { m = m (m == "" ? "" : ",") $2 }
+      END { if (t) print c, t, m }' "${OUT}/tally.txt")"
     if [[ -z "${counts}" ]]; then
       shortfalls+="${script}: no test ran it"$'\n'
       continue
     fi
-    read -r covered total <<<"${counts}"
+    read -r covered total missed <<<"${counts}"
     percent="$(awk -v c="${covered}" -v t="${total}" \
       'BEGIN { printf "%.2f", 100 * c / t }')"
     echo "${script} lines ${percent}% (${covered} of ${total})"
     floor="$(jq -r --arg f "${script}" '.[$f].shell.lines // 100' \
       "${THRESHOLDS}")"
     if awk -v a="${percent}" -v f="${floor}" 'BEGIN { exit !(a < f) }'; then
-      shortfalls+="${script}: lines ${percent}% is below ${floor}%"$'\n'
+      shortfalls+="${script}: lines ${percent}% is below ${floor}%,"
+      shortfalls+=" missing ${missed}"$'\n'
     fi
   done <"${OUT}/scripts.txt"
   if [[ -n "${shortfalls}" ]]; then

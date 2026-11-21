@@ -96,6 +96,11 @@ jobs:
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Shell coverage
         run: bash scripts/coverage_shell.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: shell-coverage
+          path: build-shell-coverage
 
   debian-package:
     runs-on: ubuntu-latest
