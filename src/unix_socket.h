@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,10 +61,19 @@ class UnixStream : public Stream {
   std::optional<std::string> ReadLine() override;
   void WriteLine(std::string_view line) override;
   void Shutdown() override;
+  bool AwaitHangUp() override;
+  void EndAwaitHangUp() override;
 
  private:
   const int fd_;
   std::string pending_;  // Bytes read past the last line returned.
+  // EndAwaitHangUp writes to wake_write_ to end the poll in AwaitHangUp;
+  // -1 when the pipe could not be made, so nothing is watched.
+  int wake_read_ = -1;
+  int wake_write_ = -1;
+  std::mutex mutex_;
+  int ends_ = 0;     // Under mutex_: ends an AwaitHangUp has yet to see.
+  int noticed_ = 0;  // Under mutex_: awaits that ended on their own.
 };
 
 }  // namespace facepalm

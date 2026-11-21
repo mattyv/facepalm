@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -13,12 +14,19 @@
 
 namespace facepalm {
 
-// One approved secret admits one client; the inner feed never sees the secret.
+// The feed for the clients Service let in with an approved token (#37),
+// following specs/DaemonAdmission.tla. Each connection is a session of its
+// own in the inner feed, which forgets it once it leaves, and every session
+// reads the same readings. The camera has one subscription for them all:
+// `changed` is told true when the first client joins and false when the
+// last one leaves (GuardFirstLast).
 class ApprovedFeed : public Feed {
  public:
-  ApprovedFeed(Feed& feed, std::string token, std::function<void(bool)> changed,
+  ApprovedFeed(Feed& feed, std::function<void(bool)> changed,
                std::function<void(const std::string&)> retire);
+  // DaemonAdmission!Join.
   bool Connect(const std::string& client) override;
+  // DaemonAdmission!Disconnect.
   void Disconnect(const std::string& client) override;
   std::optional<Delivery> Read(const std::string& client) override;
   std::optional<Delivery> Wait(const std::string& client,
@@ -30,14 +38,15 @@ class ApprovedFeed : public Feed {
   bool Reset(const std::string& client) override;
 
  private:
+  // The client's session, or "" when it is not connected.
+  std::string Session(const std::string& client);
+
   Feed& feed_;
-  const std::string token_;
   std::function<void(bool)> changed_;
   std::function<void(const std::string&)> retire_;
   std::mutex mutex_;
-  std::string session_;             // Under mutex_; empty when disconnected.
-  std::uint64_t next_session_ = 0;  // Under mutex_.
-  std::string Session(const std::string& client);
+  std::map<std::string, std::string> sessions_;  // Under mutex_.
+  std::uint64_t next_session_ = 0;               // Under mutex_.
 };
 
 }  // namespace facepalm
