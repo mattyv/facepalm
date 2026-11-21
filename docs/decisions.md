@@ -5,6 +5,51 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Watching /dev with inotify for a camera connecting or disconnecting on Linux, not a udev monitor
+
+-   **Decision:** `V4l2Session` takes the same `on_disconnected`/
+    `on_connected` callbacks `AvFoundationSession` already does (#111,
+    #13), and a `HotplugMonitor&` it asks, once, to call them: a seam, so
+    `V4l2SessionTest` fakes the interface rather than linking a real watch,
+    the way `CaptureSession` itself already seams the device calls out of
+    `SessionCamera`'s own tests. `V4l2InotifyMonitor`
+    (`src/linux/v4l2_hotplug.{h,cc}`) is the real one: once asked to start,
+    it watches `/dev` with `inotify_init1`/`inotify_add_watch` for
+    `IN_CREATE`/`IN_DELETE`, filtered to the same four
+    `/dev/video0`-`/dev/video3` nodes item 10 of #61 already chose to
+    probe for `Configure` and `List`, rather than opening a udev monitor's
+    netlink socket to learn of every video node udev knows about. Each
+    node that appears is opened and queried the same way `Configure`/`List`
+    already do, to find its id (`v4l2_capability.bus_info`) and keep it
+    whether it is attached now; one that disappears is reported by that
+    same cached id, since a gone node cannot be queried for it anymore.
+    Chosen over udev because it adds no library (`libv4l-dev`, already a
+    dependency, is all `V4l2InotifyMonitor` needs) and because its own
+    OS calls (`inotify_init1`, `inotify_add_watch`, `select`, `read`) fake
+    at link time the same way `v4l2_open`/`v4l2_ioctl`/`v4l2_close` already
+    do for `V4l2Session`, so `test/linux/v4l2_hotplug_test.cc` covers the
+    real watch loop with no real directory and no real camera, which a
+    udev monitor's richer event properties would not obviously improve on
+    for what this needs: an id already known the way `Configure`/`List`
+    find one. `specs/CameraLifecycle.tla` already models a camera
+    connecting or disconnecting platform-agnostically
+    (`DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack`,
+    `CapturesOnlyChosenDevice`), proved against both the default and the
+    other device chosen (item 10 of #61, #13), so this is Linux's missing
+    implementation of an action the spec already covers, not a model
+    change: `CameraLifecycle.tla`/`.cfg` are untouched, and
+    `specs/check.sh` still passes every config unchanged (specs/README.md's
+    own table is updated to name the new Linux test, not its results).
+-   **Also decided:** `V4l2Session`'s constructor asks `HotplugMonitor::Start`
+    once, so the watch begins immediately and runs for the daemon's own
+    lifetime, independent of `Configure`/`Start`/`Stop`'s own per-attempt
+    lifecycle, the same way `AvFoundationSession`'s `NSNotificationCenter`
+    observers are set up once in its constructor and torn down in its
+    destructor. A node already attached when the watch starts fires
+    nothing, matching AVFoundation's own notifications, which do not fire
+    for what is already connected either: `Configure`'s own probe is what
+    tells `SessionCamera` about a camera already there.
+
 ## 2026-11-21: Choosing the camera by a stable ID, never silently switching, and retrying a denied permission or a failed start
 
 -   **Decision:** A camera is a `CameraDevice{id, name, built_in}`

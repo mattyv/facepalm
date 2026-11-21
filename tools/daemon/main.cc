@@ -45,6 +45,7 @@
 #include "src/screen_source.h"
 #ifdef __linux__
 #include "src/linux/screen_context_linux.h"
+#include "src/linux/v4l2_hotplug.h"
 #include "src/linux/v4l2_session.h"
 #else
 #include "src/macos/avfoundation_session.h"
@@ -216,7 +217,10 @@ class Engine : public DaemonController, public DaemonPipeline {
         capture_(
             config_.camera_device_id,
             [this](const Frame& frame) { pipeline_.OnFrame(frame); },
-            [this] { camera_.OnSessionFailed(); }),
+            [this] { camera_.OnSessionFailed(); },
+            [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
+            [this](const std::string& id) { camera_.OnDeviceConnected(id); },
+            hotplug_monitor_),
 #else
         capture_(
             config_.camera_device_id,
@@ -311,6 +315,10 @@ class Engine : public DaemonController, public DaemonPipeline {
   Service service_;
   DaemonControl control_;
 #ifdef __linux__
+  // Declared before capture_, which asks it to start watching in its own
+  // constructor (#111): a member's constructor runs in declaration order,
+  // never initializer-list order.
+  V4l2InotifyMonitor hotplug_monitor_;
   V4l2Session capture_;
 #else
   AvFoundationSession capture_;

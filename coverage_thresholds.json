@@ -349,6 +349,13 @@
       "functions": 100
     }
   },
+  "src/linux/v4l2_hotplug.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/linux/v4l2_session.cc": {
     "unit": {
       "lines": 100,

@@ -1,0 +1,154 @@
+#include "src/linux/v4l2_hotplug.h"
+
+#include <fcntl.h>
+#include <libv4l2.h>
+#include <linux/videodev2.h>
+#include <sys/inotify.h>
+#include <sys/select.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstring>
+#include <map>
+#include <optional>
+#include <stop_token>
+#include <string>
+#include <thread>
+#include <utility>
+
+namespace facepalm {
+namespace {
+
+// The four nodes item 10 of #61 already chose to probe for Configure and
+// List (docs/decisions.md): most systems put each camera on a low-numbered
+// node, and opendir has no seam a test can replace, as v4l2_open,
+// v4l2_ioctl and v4l2_close do (duplicated from v4l2_session.cc rather than
+// shared, so each file's test covers its own copy alone, #111).
+constexpr int kProbedNodes = 4;
+constexpr char kDevDirectory[] = "/dev";
+// How long one wait for an inotify event blocks before checking
+// stop_requested again, the same way SessionCamera's capture loop polls
+// its device at a bounded interval.
+constexpr std::chrono::milliseconds kPollInterval{200};
+constexpr std::size_t kEventBufferSize = 4096;
+
+std::string NodePath(int index) { return "/dev/video" + std::to_string(index); }
+std::string NodeName(int index) { return "video" + std::to_string(index); }
+
+// The probed node `name` names, or nothing when it is not one of them: an
+// unrelated entry under /dev is not a camera this session could ever pick.
+std::optional<int> ProbedNode(const std::string& name) {
+  for (int index = 0; index < kProbedNodes; ++index) {
+    if (name == NodeName(index)) {
+      return index;
+    }
+  }
+  return std::nullopt;
+}
+
+// The node at `path`'s id (its v4l2_capability's own bus_info, #13), or
+// nothing when it does not open or query: the same two reasons Configure
+// and List already skip a node for.
+std::optional<std::string> IdOf(const std::string& path) {
+  const int fd = v4l2_open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+  if (fd < 0) {
+    return std::nullopt;
+  }
+  v4l2_capability cap{};
+  const bool queried = v4l2_ioctl(fd, VIDIOC_QUERYCAP, &cap) == 0;
+  v4l2_close(fd);
+  if (!queried) {
+    return std::nullopt;
+  }
+  return std::string(reinterpret_cast<const char*>(cap.bus_info));
+}
+
+}  // namespace
+
+void V4l2InotifyMonitor::Start(std::function<void(std::string)> on_disconnected,
+                               std::function<void(std::string)> on_connected) {
+  watcher_ = std::jthread(
+      [this, on_disconnected = std::move(on_disconnected),
+       on_connected = std::move(on_connected)](const std::stop_token& stop) {
+        Watch(stop, on_disconnected, on_connected);
+      });
+}
+
+// specs/CameraLifecycle.tla's DeviceLost, DeviceBack, OtherDeviceLost and
+// OtherDeviceBack (#111): watches /dev for a probed node appearing or
+// disappearing, since Configure and List only see what is attached right
+// now, with no notification for a change afterward, unlike AVFoundation's
+// own observers on macOS. Only a change after this call fires a callback
+// (`known` is seeded from an initial scan, silently); after that, a node
+// that opens and queries fires `on_connected`, and one this watcher had
+// identified disappearing fires `on_disconnected` with the same id, so
+// SessionCamera's own OnDeviceConnected/OnDeviceDisconnected can tell
+// whether it is the camera in use the same way it already does for macOS
+// (#13).
+void V4l2InotifyMonitor::Watch(
+    const std::stop_token& stop,
+    const std::function<void(std::string)>& on_disconnected,
+    const std::function<void(std::string)>& on_connected) {
+  const int notify = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+  if (notify < 0) {
+    return;
+  }
+  if (inotify_add_watch(notify, kDevDirectory, IN_CREATE | IN_DELETE) < 0) {
+    close(notify);
+    return;
+  }
+  std::map<std::string, std::string> known;
+  for (int index = 0; index < kProbedNodes; ++index) {
+    if (const std::optional<std::string> id = IdOf(NodePath(index))) {
+      known[NodePath(index)] = *id;
+    }
+  }
+  std::array<std::byte, kEventBufferSize> buffer;
+  while (!stop.stop_requested()) {
+    fd_set descriptors;
+    FD_ZERO(&descriptors);
+    FD_SET(notify, &descriptors);
+    timeval wait{
+        .tv_sec = 0,
+        .tv_usec = static_cast<suseconds_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(kPollInterval)
+                .count()),
+    };
+    if (select(notify + 1, &descriptors, nullptr, nullptr, &wait) <= 0) {
+      continue;
+    }
+    const auto count = read(notify, buffer.data(), buffer.size());
+    if (count <= 0) {
+      break;
+    }
+    std::size_t offset = 0;
+    while (offset < static_cast<std::size_t>(count)) {
+      inotify_event header{};
+      std::memcpy(&header, buffer.data() + offset, sizeof(header));
+      const auto* name = reinterpret_cast<const char*>(buffer.data() + offset +
+                                                       sizeof(header));
+      if (const std::optional<int> index = ProbedNode(name)) {
+        const std::string path = NodePath(*index);
+        if ((header.mask & IN_CREATE) != 0) {
+          if (const std::optional<std::string> id = IdOf(path)) {
+            known[path] = *id;
+            on_connected(*id);
+          }
+        } else if ((header.mask & IN_DELETE) != 0) {
+          const auto found = known.find(path);
+          if (found != known.end()) {
+            on_disconnected(found->second);
+            known.erase(found);
+          }
+        }
+      }
+      offset += sizeof(header) + header.len;
+    }
+  }
+  close(notify);
+}
+
+}  // namespace facepalm

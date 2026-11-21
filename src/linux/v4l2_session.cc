@@ -69,12 +69,20 @@ void CopyBgra(const v4l2_pix_format& format, const std::uint8_t* rgb,
 
 }  // namespace
 
-V4l2Session::V4l2Session(std::string device_id,
-                         std::function<void(const Frame&)> on_frame,
-                         std::function<void()> on_session_failed)
+// specs/CameraLifecycle.tla's DeviceLost, DeviceBack, OtherDeviceLost and
+// OtherDeviceBack (#111): `hotplug` is asked to watch for them, the way
+// AVFoundation's own notifications already do for AvFoundationSession.
+V4l2Session::V4l2Session(
+    std::string device_id, std::function<void(const Frame&)> on_frame,
+    std::function<void()> on_session_failed,
+    std::function<void(const std::string&)> on_disconnected,
+    std::function<void(const std::string&)> on_connected,
+    HotplugMonitor& hotplug)
     : device_id_(std::move(device_id)),
       on_frame_(std::move(on_frame)),
-      on_session_failed_(std::move(on_session_failed)) {}
+      on_session_failed_(std::move(on_session_failed)) {
+  hotplug.Start(std::move(on_disconnected), std::move(on_connected));
+}
 
 V4l2Session::~V4l2Session() { Stop(); }
 

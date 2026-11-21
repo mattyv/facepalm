@@ -10,6 +10,7 @@
 
 #include "src/camera_directory.h"
 #include "src/frame.h"
+#include "src/linux/v4l2_hotplug.h"
 #include "src/session_camera.h"
 
 namespace facepalm {
@@ -23,10 +24,18 @@ namespace facepalm {
 // non-empty `device_id` is matched by List's own `id`, a v4l2_capability's
 // `bus_info`, which stays the same across a reboot, unlike the node number
 // (`/dev/videoN`) a camera happens to land on.
+//
+// `on_disconnected` and `on_connected` are the callbacks AvFoundationSession
+// already takes (#111, #13): `hotplug` is asked to call them, over inotify
+// rather than AVFoundation's own notifications. The caller owns `hotplug`
+// and keeps it alive at least as long as this session.
 class V4l2Session final : public CaptureSession {
  public:
   V4l2Session(std::string device_id, std::function<void(const Frame&)> on_frame,
-              std::function<void()> on_session_failed);
+              std::function<void()> on_session_failed,
+              std::function<void(const std::string&)> on_disconnected,
+              std::function<void(const std::string&)> on_connected,
+              HotplugMonitor& hotplug);
   ~V4l2Session() override;
   V4l2Session(const V4l2Session&) = delete;
   V4l2Session& operator=(const V4l2Session&) = delete;

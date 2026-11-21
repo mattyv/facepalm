@@ -91,5 +91,6 @@ node "$app/share/facepalm/mcp/main.js"
 
 Several approved clients can be connected at once, and each gets every
 reaction. `facepalm-daemon revoke mcp` removes the approval. Stop the daemon
-with Ctrl+C to revoke consent. If the selected camera is unplugged, reconnect it
-and restart the daemon to resume capture.
+with Ctrl+C to revoke consent. If the selected camera is unplugged, the daemon
+notices over `/dev`'s own inotify events and reopens it once it is plugged
+back in, with no restart needed (#111).
