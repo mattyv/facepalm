@@ -7,8 +7,10 @@
 (* (specs/ReactionFeed.tla). Only a token the person approved is let in,   *)
 (* and several connections may show the same one: each names itself, so   *)
 (* two sessions of one approved app are two clients (#37).                 *)
-(* The peer can hang up at any time. A thread blocked in a wait is not     *)
-(* reading its socket, so it notices a hang-up only once the wait ends.    *)
+(* The peer can hang up at any time. A thread blocked in a wait or a beat  *)
+(* is not reading its socket, so a watcher notices the hang-up and         *)
+(* disconnects the client, which ends the wait at once: a client gone does *)
+(* not hold its session, and the camera, until the wait times out.         *)
 (* Stopping the service closes every connection and must not hang on a     *)
 (* waiting one.                                                            *)
 (*                                                                         *)
@@ -28,29 +30,32 @@ CONSTANTS
     GuardUniqueNames,      \* A name already connected is refused.
     GuardLeaveOnClose,     \* A closed connection's client leaves the feed.
     GuardStopWakes,        \* Stopping ends every wait at once.
-    GuardRefuseWhenStopping \* No connection is accepted once stopping.
+    GuardRefuseWhenStopping, \* No connection is accepted once stopping.
+    GuardHangUpWakes       \* A hang-up during a wait ends the wait.
 
 VARIABLES
     server,  \* "running", "stopping" or "stopped".
     conn,    \* conn[k]: "free", "open", "named", "waiting" or "closing".
     name,    \* name[k]: the client name connection k gave, or None.
     token,   \* token[k]: the token connection k showed, or None.
+    hung,    \* hung[k]: whether connection k's peer has hung up.
     feed     \* The client names connected to the feed.
 
-vars == <<server, conn, name, token, feed>>
+vars == <<server, conn, name, token, hung, feed>>
 
 Live == {"open", "named", "waiting", "closing"}
 
 Init ==
     /\ server = "running" /\ conn = [k \in Conns |-> "free"]
     /\ name = [k \in Conns |-> None] /\ token = [k \in Conns |-> None]
+    /\ hung = [k \in Conns |-> FALSE]
     /\ feed = {}
 
 Accept(k) ==
     /\ conn[k] = "free"
     /\ (server = "running" \/ (~GuardRefuseWhenStopping /\ server = "stopping"))
     /\ conn' = [conn EXCEPT ![k] = "open"]
-    /\ UNCHANGED <<server, name, token, feed>>
+    /\ UNCHANGED <<server, name, token, hung, feed>>
 
 \* Whether a hello naming n with token t is refused.
 Refused(n, t) ==
@@ -63,31 +68,40 @@ Hello(k, n, t) ==
     /\ conn[k] = "open"
     /\ IF Refused(n, t)
           THEN /\ conn' = [conn EXCEPT ![k] = "closing"]
-               /\ UNCHANGED <<name, token, feed>>
+               /\ UNCHANGED <<name, token, hung, feed>>
           ELSE /\ conn' = [conn EXCEPT ![k] = "named"]
                /\ name' = [name EXCEPT ![k] = n]
                /\ token' = [token EXCEPT ![k] = t]
                /\ feed' = feed \cup {n}
-    /\ UNCHANGED server
+    /\ UNCHANGED <<server, hung>>
 
 \* The thread blocks in ReactionFeed's Wait.
 Wait(k) ==
     /\ conn[k] = "named" /\ server = "running"
     /\ conn' = [conn EXCEPT ![k] = "waiting"]
-    /\ UNCHANGED <<server, name, token, feed>>
+    /\ UNCHANGED <<server, name, token, hung, feed>>
 
-\* A reading, or the wait's timeout, ends it.
+\* A reading, or the wait's timeout, ends it; the thread then reads its
+\* socket, and finds a hang-up there.
 Answered(k) ==
     /\ conn[k] = "waiting"
-    /\ conn' = [conn EXCEPT ![k] = "named"]
+    /\ conn' = [conn EXCEPT ![k] = IF hung[k] THEN "closing" ELSE "named"]
+    /\ UNCHANGED <<server, name, token, hung, feed>>
+
+\* The peer hangs up. A thread reading its socket ends; a waiting one is
+\* not reading, so only the watcher can notice.
+HangUp(k) ==
+    /\ conn[k] \in {"open", "named", "waiting"} /\ ~hung[k]
+    /\ hung' = [hung EXCEPT ![k] = TRUE]
+    /\ conn' = [conn EXCEPT ![k] = IF @ = "waiting" THEN @ ELSE "closing"]
     /\ UNCHANGED <<server, name, token, feed>>
 
-\* The peer hangs up. A waiting thread is not reading, so it is unaffected
-\* until its wait ends.
-HangUp(k) ==
-    /\ conn[k] \in {"open", "named"}
+\* The watcher sees the hang-up during the wait and disconnects the client,
+\* which ends the wait (GuardHangUpWakes).
+Noticed(k) ==
+    /\ GuardHangUpWakes /\ conn[k] = "waiting" /\ hung[k]
     /\ conn' = [conn EXCEPT ![k] = "closing"]
-    /\ UNCHANGED <<server, name, token, feed>>
+    /\ UNCHANGED <<server, name, token, hung, feed>>
 
 \* The connection's thread ends: its client leaves the feed, and its slot is
 \* free again.
@@ -96,6 +110,7 @@ Closed(k) ==
     /\ conn' = [conn EXCEPT ![k] = "free"]
     /\ name' = [name EXCEPT ![k] = None]
     /\ token' = [token EXCEPT ![k] = None]
+    /\ hung' = [hung EXCEPT ![k] = FALSE]
     /\ feed' = IF GuardLeaveOnClose /\ name[k] # None
                   THEN feed \ {name[k]} ELSE feed
     /\ UNCHANGED server
@@ -109,31 +124,34 @@ Stop ==
                   ELSE IF conn[k] = "waiting" /\ ~GuardStopWakes
                      THEN "waiting"
                   ELSE "closing"]
-    /\ UNCHANGED <<name, token, feed>>
+    /\ UNCHANGED <<name, token, hung, feed>>
 
 Stopped ==
     /\ server = "stopping" /\ \A k \in Conns : conn[k] = "free"
     /\ server' = "stopped"
-    /\ UNCHANGED <<conn, name, token, feed>>
+    /\ UNCHANGED <<conn, name, token, hung, feed>>
 
 Next ==
     \/ Stop \/ Stopped
     \/ \E k \in Conns :
-          \/ Accept(k) \/ Wait(k) \/ Answered(k) \/ HangUp(k) \/ Closed(k)
+          \/ Accept(k) \/ Wait(k) \/ Answered(k) \/ HangUp(k) \/ Noticed(k)
+          \/ Closed(k)
           \/ \E n \in Names, t \in Tokens : Hello(k, n, t)
 
-\* Only the shutdown's own steps and the threads' closing are fair. Answered
-\* is not: a wait may last its whole timeout, so stopping cannot rely on it.
+\* Only the shutdown's own steps, the watchers and the threads' closing are
+\* fair. Answered is not: a wait may last its whole timeout, so neither
+\* stopping nor a hang-up can rely on it.
 Spec ==
     /\ Init /\ [][Next]_vars
     /\ WF_vars(Stopped)
-    /\ \A k \in Conns : WF_vars(Closed(k))
+    /\ \A k \in Conns : WF_vars(Closed(k)) /\ WF_vars(Noticed(k))
 
 TypeOK ==
     /\ server \in {"running", "stopping", "stopped"}
     /\ conn \in [Conns -> {"free"} \cup Live]
     /\ name \in [Conns -> Names \cup {None}]
     /\ token \in [Conns -> Tokens \cup {None}]
+    /\ hung \in [Conns -> BOOLEAN]
     /\ feed \subseteq Names
 
 \* No two connections speak for the same client, so they cannot share one
@@ -171,4 +189,7 @@ CanAccept ==
 
 \* Liveness: stopping always finishes.
 StopEnds == server = "stopping" ~> server = "stopped"
+\* Liveness: a connection whose peer hung up is closed, and its client
+\* gone from the feed, even in the middle of a wait.
+HangUpEnds == \A k \in Conns : hung[k] ~> conn[k] = "free"
 ==============================================================================
