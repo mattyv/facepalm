@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <numbers>
 #include <span>
 #include <vector>
@@ -194,6 +195,32 @@ TEST(GestureReaderTest, ReactsToATiltOnceItStarts) {
   EXPECT_THAT(again, IsEmpty());
 }
 
+// A degenerate pose (all zeros, #85) is skipped rather than fed into the
+// window, the way #73, #78 and #81 skip one: unskipped, Face{}'s NaN
+// channels would poison every prediction the window makes for as long as
+// the frame stays within its one-second lookback, and the tilt below,
+// confirming right where the degenerate frame lands, would never be
+// reported.
+TEST(GestureReaderTest, ADegeneratePoseIsSkippedRatherThanPoisoningTheWindow) {
+  GestureReader reader(0.5F);
+  constexpr double kFrameSeconds = 1.0 / 15.0;
+  constexpr int kDegenerateFrame = 50;  // Inside the tilt's confirm window.
+  std::vector<Reaction> all;
+  for (int i = 0; i < kFeedFrames; ++i) {
+    std::vector<Reaction> reactions;
+    if (i == kDegenerateFrame) {
+      reader.OnFace(Face{}, 224, 224, FeedTimestampMs(0, i), reactions);
+    } else {
+      const double t = i * kFrameSeconds;
+      const std::array<double, 3> angles = Tilt(t);
+      reader.OnFace(FaceAt(angles[0], angles[1], angles[2]), 224, 224,
+                    FeedTimestampMs(0, i), reactions);
+    }
+    all.insert(all.end(), reactions.begin(), reactions.end());
+  }
+  EXPECT_THAT(all, ElementsAre(R"({"gesture":"tilt"})"));
+}
+
 TEST(GestureReaderTest, OnNoFaceDropsTheWindowAndTheReportedGesture) {
   GestureReader reader(0.5F);
   ASSERT_THAT(FeedTrack(reader, Tilt), ElementsAre(R"({"gesture":"tilt"})"));
@@ -350,6 +377,38 @@ TEST(GestureReportGateTest, TurnWaitsForReturnAndStillnessBeforeRearming) {
   EXPECT_EQ(
       gate.Update(Gesture::kTurn, 5500, {.yaw = 0.4, .window_start_yaw = 0.05}),
       Gesture::kTurn);
+}
+
+// A non-finite yaw (#85) must not read as near the origin: unguarded, the
+// distance test's > comparison is false for NaN the same as it is for
+// "within range", so none frames with a NaN yaw release the latch the same
+// way a genuine return does, against TurnExcursion's NoRearmAway. Verified
+// by a scratch test in the Fable review of the 2026-11-21 merges (#61): a
+// gate fed NaN-yaw none frames for 800 ms reported a second turn.
+TEST(GestureReportGateTest, NoRearmFromANonFiniteYaw) {
+  GestureReportGate gate;
+  using head_gesture::Gesture;
+  constexpr double kNan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 0, {.yaw = 0.3, .window_start_yaw = 0.0}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 200, {.yaw = 0.4, .window_start_yaw = 0.0}),
+      Gesture::kTurn);
+
+  // 800ms of none frames, yaw unreadable throughout.
+  for (std::int64_t ms = 300; ms <= 1100; ms += 100) {
+    gate.Update(Gesture::kNone, ms, {.yaw = kNan, .window_start_yaw = kNan});
+  }
+
+  // Still latched: a second turn, confirmed the same way the first was,
+  // stays suppressed rather than reported.
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 1200, {.yaw = 0.4, .window_start_yaw = kNan}),
+      Gesture::kNone);
+  EXPECT_EQ(
+      gate.Update(Gesture::kTurn, 1400, {.yaw = 0.5, .window_start_yaw = kNan}),
+      Gesture::kNone);
 }
 
 TEST(GestureReportGateTest,

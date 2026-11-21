@@ -37,6 +37,15 @@ HeadRotation HeadRotationFrom(const Rotation& rotation);
 // translation dropped.
 Rotation RotationFrom(const PoseMatrix& pose);
 
+// Whether every entry of `rotation` is finite. A degenerate pose (all
+// zeros, NaN or infinity) fails this: dividing out a zero scale, or a
+// NaN or infinite transformation matrix, leaves entries that are not
+// finite, and from a finite rotation every yaw, pitch and roll
+// HeadRotationFrom reads is finite too (#44, #85). The one check
+// reaction.cc, expression_reader.cc, look_away_reader.cc, gesture_reader.cc
+// and camera_probe.cc each need before trusting a rotation.
+bool IsFiniteRotation(const Rotation& rotation);
+
 }  // namespace facepalm
 
 #endif  // FACEPALM_SRC_HEAD_POSE_H_
