@@ -11,11 +11,16 @@
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/config.h"
+#include "src/daemon_status.h"
 #include "src/settings_document.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
 
 namespace {
+// How often the menu rereads the camera-in-use file (#37 item 8):
+// comfortably under the two seconds the indicator is asked to settle in.
+constexpr NSTimeInterval kCameraStatusInterval = 1.0;
+
 NSURL* SettingsURL() {
   const char* xdg = std::getenv("XDG_CONFIG_HOME");
   NSString* base = (xdg != nullptr && *xdg != '\0')
@@ -37,6 +42,15 @@ std::string Utf8Bytes(NSString* text) {
   NSData* data = [text dataUsingEncoding:NSUTF8StringEncoding];
   if (data.length == 0) return {};
   return {static_cast<const char*>(data.bytes), data.length};
+}
+
+// Whether the camera is in use, from the daemon's status file
+// (src/daemon_status.h): a missing file, as when Facepalm is off, reads
+// as off.
+BOOL CameraInUse() {
+  const std::optional<facepalm::UserPaths> paths =
+      facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
+  return paths && facepalm::ReadCameraStatus(paths->status) ? YES : NO;
 }
 
 NSString* ErrorMessage(const std::string& error) {
@@ -144,6 +158,8 @@ BOOL ServiceIsOn() {
 @property(nonatomic) BOOL openSettingsOnLaunch;
 @property(nonatomic, strong) NSStatusItem* statusItem;
 @property(nonatomic, strong) NSMenuItem* power;
+@property(nonatomic, strong) NSMenuItem* cameraStatus;
+@property(nonatomic, strong) NSTimer* cameraStatusTimer;
 @property(nonatomic, strong) NSWindow* settingsWindow;
 @property(nonatomic, strong) NSTextField* frameRate;
 @property(nonatomic, strong) NSButton* gestures;
@@ -161,11 +177,11 @@ BOOL ServiceIsOn() {
   [self.statusItem.button setAccessibilityLabel:@"Facepalm"];
   self.statusItem.button.toolTip = @"Facepalm";
   NSMenu* menu = [[NSMenu alloc] initWithTitle:@"Facepalm"];
-  NSMenuItem* status = [[NSMenuItem alloc] initWithTitle:@"Camera status unavailable"
-                                                  action:nil
-                                           keyEquivalent:@""];
-  status.enabled = NO;
-  [menu addItem:status];
+  self.cameraStatus = [[NSMenuItem alloc] initWithTitle:@"Camera status unavailable"
+                                                 action:nil
+                                          keyEquivalent:@""];
+  self.cameraStatus.enabled = NO;
+  [menu addItem:self.cameraStatus];
   self.power = [[NSMenuItem alloc] initWithTitle:@"Turn On Facepalm…"
                                           action:@selector(switchPower:)
                                    keyEquivalent:@""];
@@ -185,7 +201,23 @@ BOOL ServiceIsOn() {
   menu.delegate = self;
   self.statusItem.menu = menu;
   [self menuNeedsUpdate:menu];
+  // The camera-in-use indicator (#37 item 8) refreshes on its own timer, so
+  // it shows up to date even while the dropdown is closed, not only when
+  // menuNeedsUpdate runs on opening it.
+  [self refreshCameraStatus];
+  self.cameraStatusTimer = [NSTimer scheduledTimerWithTimeInterval:kCameraStatusInterval
+                                                            target:self
+                                                          selector:@selector(refreshCameraStatus)
+                                                          userInfo:nil
+                                                           repeats:YES];
   if (self.openSettingsOnLaunch) [self openSettings:nil];
+}
+
+// CameraStatus!Poll, on the menu's own timer (#37 item 8).
+- (void)refreshCameraStatus {
+  const BOOL on = CameraInUse();
+  self.cameraStatus.title = on ? @"Camera on" : @"Camera off";
+  self.statusItem.button.toolTip = on ? @"Facepalm — camera on" : @"Facepalm";
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)application
@@ -211,6 +243,7 @@ BOOL ServiceIsOn() {
 - (void)menuNeedsUpdate:(NSMenu*)menu {
   (void)menu;
   self.power.title = ServiceIsOn() ? @"Turn Off Facepalm" : @"Turn On Facepalm…";
+  [self refreshCameraStatus];
 }
 
 // Turning on is the person's consent, so it asks first; turning off does not.

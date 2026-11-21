@@ -194,6 +194,58 @@ properties they break:
 The model does not cover launchd or systemd themselves, nor macOS's camera
 permission for a LaunchAgent, which only a run on a real Mac shows.
 
+## `CameraStatus`: the camera-in-use indicator
+
+Models #61 item 8's indicator, as `src/daemon_status.cc` implements it. The
+daemon publishes whether the camera is in use to a status file beside its
+socket (`UserPaths::status`, #89's per-user directory: no second token or
+path), rewritten atomically whenever a client joins or leaves
+(`DaemonAdmission`'s own transitions, taken as given here) and once more
+at startup, so a file a previous crash left stale does not linger. The
+menu or tray rereads the file on its own one-second timer, independent of
+the daemon.
+
+The model splits in two, each its own config, because TLC found that one
+property cannot honestly cover both normal running and a crash: a crash
+timed to land between a change and the next poll can make the display
+miss that one change for good, correctly, since the camera the display
+never caught really did go off in the crash. `CameraStatus.cfg` (no
+crash) checks that the display always catches up during normal running.
+`CameraStatus_Crash.cfg` adds one crash and checks that the file is never
+stale while the daemon is running, which is what the startup republish
+is for.
+
+| Config | Properties | Distinct states |
+|---|---|---|
+| `CameraStatus.cfg` | `CameraOnLeadsToDisplayOn`, `CameraOffLeadsToDisplayOff` | 4 |
+| `CameraStatus_Crash.cfg` | `NeverStaleWhileRunning` | 13 |
+
+Each mutation, and what TLC found:
+
+| Mutation | Config | Broke |
+|---|---|---|
+| `GuardPublishOnChange = FALSE`: a subscription change is never published | `CameraStatus.cfg` | `CameraOnLeadsToDisplayOn` and `CameraOffLeadsToDisplayOff` |
+| `GuardPollRefreshes = FALSE`: the menu never rereads the file | `CameraStatus.cfg` | Deadlock: once a change is pending, nothing is left enabled to observe it |
+| `GuardPublishOnRestart = FALSE`: the daemon does not republish at startup | `CameraStatus_Crash.cfg` | `NeverStaleWhileRunning` |
+| `GuardPublishOnChange = FALSE` | `CameraStatus_Crash.cfg` | `NeverStaleWhileRunning` too: a later change while running never corrects the file either |
+
+`src/daemon_status.cc` implements `Publish` and `Poll` as the free
+functions `PublishCameraStatus` and `ReadCameraStatus`; the same mutations,
+made to the code, fail the tests named for them:
+
+| Mutation to `DaemonStatus` | Fails |
+|---|---|
+| `PublishCameraStatus` never replaces the file | `PublishTest.WritesOn`, `PublishTest.WritesOff`, `PublishTest.ReplacesWhatWasThereAtomically` |
+| The temporary file is left in place rather than renamed | `PublishTest.ReplacesWhatWasThereAtomically` |
+| `ReadCameraStatus` reads a missing file as on rather than off | `ReadTest.AMissingFileIsOff` |
+| The daemon never republishes at `Engine::Start` | Checked by reading `tools/daemon/main.cc`, which has no unit test of its own (`main.cc` is wiring only, as its other callers are); `Start` calls `PublishStatus(false)` before `service_.Start()`, naming the action it stands for |
+
+`ReadTest.APublishFromAnotherThreadIsSeenWithinTwoSeconds` is the
+acceptance check outside the model: a real thread publishes after a short
+delay, and a real clock bounds how long a poller may take to see it,
+standing for the menu's own one-second timer settling inside the two
+seconds the indicator is asked to.
+
 ## `FeedWaitRetirement`: canceled wait ownership
 
 The bounded model checks eight states, with one old wait and one successor,

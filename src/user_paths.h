@@ -25,6 +25,7 @@ struct UserPaths {
   std::string directory;
   std::string socket;   // The service's socket, in `directory`.
   std::string clients;  // One token file per approved client, in `directory`.
+  std::string status;   // The camera-in-use status file (#37 item 8).
   // The saved calibration profile (#36, #35, item 12 of #61), in
   // `directory`, if a session has ever finished one.
   std::string calibration;

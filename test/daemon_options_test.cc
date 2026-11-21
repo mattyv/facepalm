@@ -18,6 +18,7 @@ std::optional<UserPaths> Home() {
   return UserPaths{.directory = "/h/fp",
                    .socket = "/h/fp/service.sock",
                    .clients = "/h/fp/c",
+                   .status = "/h/fp/status",
                    .calibration = "/h/fp/calibration"};
 }
 
@@ -49,24 +50,40 @@ TEST(DaemonOptionsTest, RunsWithTheDefaultPaths) {
   EXPECT_THAT(options.clients, Eq("/h/fp/c"));
   EXPECT_THAT(options.config, Eq(""));
   EXPECT_THAT(options.feelings_file, Eq(""));
+  EXPECT_THAT(options.status, Eq("/h/fp/status"));
 }
 
 TEST(DaemonOptionsTest, RunsWithEveryPathGiven) {
-  const DaemonOptions options =
-      Parsed({"--model", "m", "--socket", "s", "--clients", "c", "--config",
-              "f.conf", "--feelings-file", "f.counts", "--consent"},
-             std::nullopt);
+  const DaemonOptions options = Parsed(
+      {"--model", "m", "--socket", "s", "--clients", "c", "--config", "f.conf",
+       "--feelings-file", "f.counts", "--status", "u", "--consent"},
+      std::nullopt);
 
   EXPECT_THAT(options.socket, Eq("s"));
   EXPECT_THAT(options.clients, Eq("c"));
   EXPECT_THAT(options.config, Eq("f.conf"));
   EXPECT_THAT(options.feelings_file, Eq("f.counts"));
+  EXPECT_THAT(options.status, Eq("u"));
 }
 
 TEST(DaemonOptionsTest, AGivenSocketOverridesTheDefault) {
   EXPECT_THAT(
       Parsed({"--consent", "--model", "m", "--socket", "s"}, Home()).socket,
       Eq("s"));
+}
+
+TEST(DaemonOptionsTest, AGivenStatusPathOverridesTheDefault) {
+  EXPECT_THAT(
+      Parsed({"--consent", "--model", "m", "--status", "u"}, Home()).status,
+      Eq("u"));
+}
+
+TEST(DaemonOptionsTest, RunningWithNoHomeHasNoStatusFileByDefault) {
+  EXPECT_THAT(
+      Parsed({"--consent", "--model", "m", "--socket", "s", "--clients", "c"},
+             std::nullopt)
+          .status,
+      Eq(""));
 }
 
 TEST(DaemonOptionsTest, RunningNeedsConsentAModelAndPaths) {

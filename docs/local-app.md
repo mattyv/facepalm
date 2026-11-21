@@ -47,7 +47,14 @@ the daemon as a launchd LaunchAgent,
 `~/Library/LaunchAgents/com.mattyv.facepalm.daemon.plist`, which runs it
 again if it fails and at each login until you choose **Turn Off Facepalm**.
 Turning off stops the daemon, which closes the camera, and removes the
-agent. The daemon's errors go to `~/Library/Logs/facepalm-daemon.log`.
+agent. The daemon's errors go to `~/Library/Logs/facepalm-daemon.log`. The 🤦
+menu's disabled **Camera** line reads **Camera on** within a couple of
+seconds of a client subscribing, and **Camera off** once the last one
+leaves (#61 item 8); it rereads the daemon's status file,
+`~/Library/Application Support/Facepalm/status`, on its own timer, so it
+shows this even while the dropdown was closed when the camera started.
+Running the daemon by hand with no `--status` flag skips writing it, and
+the indicator then reads as off throughout.
 
 Approving the adapter writes a new random token to
 `~/Library/Application Support/Facepalm/clients/mcp`, private to you; the
