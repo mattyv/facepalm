@@ -28,6 +28,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/frame.h"
+#include "src/linux/v4l2_hotplug.h"
 #include "src/session_camera.h"
 
 namespace facepalm {
@@ -40,10 +41,23 @@ using ::testing::Eq;
 using ::testing::Gt;
 using ::testing::InSequence;
 using ::testing::IsEmpty;
+using ::testing::NiceMock;
 using ::testing::Optional;
 using ::testing::Return;
 using ::testing::SizeIs;
 using ::testing::StrEq;
+using ::testing::StrictMock;
+
+// HotplugMonitor is V4l2Session's own collaborator for #111; this fakes it,
+// so V4l2SessionTest needs no real inotify watch. v4l2_hotplug_test.cc holds
+// V4l2InotifyMonitor, the real one, to the same interface.
+class MockHotplugMonitor : public HotplugMonitor {
+ public:
+  MOCK_METHOD(void, Start,
+              (std::function<void(std::string)> on_disconnected,
+               std::function<void(std::string)> on_connected),
+              (override));
+};
 
 // The libv4l2 calls and the poll the session makes, as a mock. v4l2_ioctl's
 // two requests get a method each.
@@ -188,7 +202,8 @@ class V4l2SessionTest : public ::testing::Test {
           const std::scoped_lock lock(mutex_);
           ++failures_;
           changed_.notify_all();
-        });
+        },
+        [](const std::string&) {}, [](const std::string&) {}, hotplug_);
   }
 
   void TearDown() override {
@@ -233,12 +248,47 @@ class V4l2SessionTest : public ::testing::Test {
   }
 
   ::testing::StrictMock<MockV4l2> mock_;
+  // Nice, not strict: almost no test here cares that V4l2Session asks it to
+  // watch (#111); WiresHotplugCallbacksToTheGivenOnes below does, with its
+  // own strict instance.
+  NiceMock<MockHotplugMonitor> hotplug_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::vector<Received> frames_;
   int failures_ = 0;
   std::unique_ptr<V4l2Session> session_;
 };
+
+// specs/CameraLifecycle.tla's DeviceLost, DeviceBack, OtherDeviceLost and
+// OtherDeviceBack (#111): V4l2Session asks the given HotplugMonitor to
+// start watching with exactly the callbacks it was given, the way
+// AvFoundationSession wires AVFoundation's own notifications straight to
+// SessionCamera's OnDeviceDisconnected/OnDeviceConnected.
+TEST_F(V4l2SessionTest, WiresHotplugCallbacksToTheGivenOnes) {
+  StrictMock<MockHotplugMonitor> hotplug;
+  std::function<void(std::string)> started_disconnected;
+  std::function<void(std::string)> started_connected;
+  EXPECT_CALL(hotplug, Start(_, _))
+      .WillOnce([&](std::function<void(std::string)> on_disconnected,
+                    std::function<void(std::string)> on_connected) {
+        started_disconnected = std::move(on_disconnected);
+        started_connected = std::move(on_connected);
+      });
+  std::optional<std::string> disconnected;
+  std::optional<std::string> connected;
+
+  const V4l2Session session(
+      /*device_id=*/"", [](const Frame&) {}, [] {},
+      [&](const std::string& id) { disconnected = id; },
+      [&](const std::string& id) { connected = id; }, hotplug);
+
+  ASSERT_TRUE(started_disconnected);
+  ASSERT_TRUE(started_connected);
+  started_disconnected("lost");
+  started_connected("back");
+  EXPECT_THAT(disconnected, Optional(std::string("lost")));
+  EXPECT_THAT(connected, Optional(std::string("back")));
+}
 
 TEST_F(V4l2SessionTest, PermissionIsLeftToTheDevice) {
   EXPECT_THAT(session_->CurrentPermission(),
@@ -270,7 +320,8 @@ TEST_F(V4l2SessionTest, ConfigureGivesNothingWhenNoNodeOpens) {
 
 TEST_F(V4l2SessionTest, ConfigureGivesNothingWhenNoNodeMatchesTheChoice) {
   session_ = std::make_unique<V4l2Session>(
-      "usb-0000:00:14.0-1", [](const Frame&) {}, [] {});
+      "usb-0000:00:14.0-1", [](const Frame&) {}, [] {},
+      [](const std::string&) {}, [](const std::string&) {}, hotplug_);
   // The remaining three nodes (kProbedNodes in v4l2_session.cc) do not
   // open at all; declared first, so the more specific expectation below
   // matches the first call. Without RetiresOnSaturation, GoogleMock
@@ -302,7 +353,8 @@ TEST_F(V4l2SessionTest, ConfigureSkipsANodeThatDoesNotQuery) {
 
 TEST_F(V4l2SessionTest, ConfigureMatchesTheChosenDeviceAmongSeveral) {
   session_ = std::make_unique<V4l2Session>(
-      "usb-0000:00:14.0-1", [](const Frame&) {}, [] {});
+      "usb-0000:00:14.0-1", [](const Frame&) {}, [] {},
+      [](const std::string&) {}, [](const std::string&) {}, hotplug_);
   {
     InSequence order;
     EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));

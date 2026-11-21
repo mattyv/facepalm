@@ -450,6 +450,7 @@ clears it. `CameraLifecycle.cfg` chooses the default device; the symmetric
 | `NoEventToStranger` | A reaction reaches only a subscribed client. | `NoEventToStrangerTest` |
 | `DeadHelperHoldsNoCamera` | A dead helper holds no camera. | `DeadHelperHoldsNoCameraTest`: a restarted helper is a new controller, which starts closed |
 | `CapturesOnlyChosenDevice` | The device captures only while the device the person chose is attached (#13). | `SessionCameraTest.IgnoresAnotherCameraDisconnecting`, `IgnoresAnotherCameraConnecting`; held to the spec by reading for `AvFoundationSession::Configure` and `V4l2Session::Configure`'s own identity match, which `V4l2SessionTest.ConfigureMatchesTheChosenDeviceAmongSeveral` and `ConfigureGivesNothingWhenNoNodeMatchesTheChoice` exercise directly |
+| `DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack` on Linux | A camera connecting or disconnecting while the daemon runs reaches `SessionCamera` on Linux too, the way AVFoundation's own notifications already do on macOS (#111). | `V4l2SessionTest.WiresHotplugCallbacksToTheGivenOnes` holds `V4l2Session` to asking the given `HotplugMonitor` to watch with exactly the callbacks it was given; `V4l2HotplugTest`'s `ANewCameraFiresOnConnected`, `AKnownCameraDisconnects` and the rest hold `V4l2InotifyMonitor`, the real watch over inotify, to finding and reporting a node's id the same way `Configure`/`List` do |
 | `CanOpen` | Something must happen: a wanted, closed camera can start opening, once neither the device nor a denied permission or failed start (#52) stands in the way. | `WantedOpensTest`, `RetriesTest` |
 | `RevokingCloses` | Revoking consent leads to the camera being closed. | `RevokingClosesTest` |
 | `LastLeaveCloses` | No subscribers leads to the camera being closed. | `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` |
@@ -521,6 +522,21 @@ and the thread stamps each frame with the attempt it was started for:
 `StoppingEndsCaptureWithoutAFailure` in `test/linux/v4l2_session_test.cc`
 hold it to `Capture` (#83).
 
+`DeviceLost`, `DeviceBack`, `OtherDeviceLost` and `OtherDeviceBack`
+themselves had no Linux implementation at all until #111:
+`V4l2Session`'s constructor never received the callbacks
+`AvFoundationSession`'s already did, so a camera connecting or
+disconnecting while the daemon ran went unnoticed on Linux. It now takes
+the same two callbacks, and a `HotplugMonitor&` (`src/linux/v4l2_hotplug.h`)
+it asks, once, to call them; `V4l2InotifyMonitor`, the real one, watches
+`/dev` with inotify for the same four nodes `Configure`/`List` already
+probe (docs/decisions.md), reusing their own open-and-query to find a
+node's id. `WiresHotplugCallbacksToTheGivenOnes` in
+`test/linux/v4l2_session_test.cc` holds `V4l2Session` to asking a fake
+`HotplugMonitor` correctly; `test/linux/v4l2_hotplug_test.cc` holds
+`V4l2InotifyMonitor` itself to the interface, with inotify faked at link
+time the same way libv4l2 already is.
+
 | Mutation to `SessionCamera`, `FramePipeline` or `V4l2Session` | Fails |
 |---|---|
 | A start for a closed attempt runs | `SessionCameraTest.StartsNothingWhenPermissionIsGrantedAfterClose`, `StartsOnlyForTheCurrentAttempt`, `ARefusalAfterCloseReportsNothing` |
@@ -529,6 +545,9 @@ hold it to `Capture` (#83).
 | `SessionCamera::Start` clamps into one collapsed range instead of the nearest of several | `SessionCameraFrameRateTest.AsksForTheNearerOfTwoSeparateRanges`, `HandlesARangeRoundedOutwardFromAFixedRate`, `PicksTheClosestAmongSeveralRanges` (#43) |
 | `V4l2Session::Configure` matches any node instead of the chosen device's id | `V4l2SessionTest.ConfigureGivesNothingWhenNoNodeMatchesTheChoice`, `ConfigureMatchesTheChosenDeviceAmongSeveral` (#13) |
 | `V4l2Session::Configure`/`List` do not skip a node that does not query | `V4l2SessionTest.ConfigureSkipsANodeThatDoesNotQuery`, `ListSkipsANodeThatDoesNotQuery` |
+| `V4l2Session` does not ask the given `HotplugMonitor` to watch, or not with the callbacks it was given | `V4l2SessionTest.WiresHotplugCallbacksToTheGivenOnes` (#111) |
+| `V4l2InotifyMonitor` fires `on_connected` for a node already attached when the watch starts | `V4l2HotplugTest.InitialScanProbesAllFourNodesWithoutFiringAnyCallback` (#111) |
+| `V4l2InotifyMonitor` does not filter by the four probed node names, firing for an unrelated entry under /dev | `V4l2HotplugTest.AnUnrelatedNameIsIgnored` (#111) |
 
 ## `FramePipeline`: how a frame reaches the face model
 
