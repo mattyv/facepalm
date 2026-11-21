@@ -21,6 +21,43 @@ a line saying which entry replaced it.
     add a half-hour Bazel build for a library no Linux build links.
 -   **Evidence:** [#65](https://github.com/mattyv/facepalm/issues/65).
 
+## 2026-11-21: Run the native tests under ThreadSanitizer too
+
+-   **Decision:** a CI job of its own, on Linux, builds the native CTest suite
+    with `-fsanitize=thread` and fails on the first data race it reports.
+    It sets `vm.mmap_rnd_bits=28` first, since ThreadSanitizer does not start
+    under the 32 bits of address space randomization newer kernels use.
+-   **Why:** the service, the feed and the client gate run on threads, and
+    AddressSanitizer and UndefinedBehaviorSanitizer find no data races. With
+    the lock around `connection.done = true` in `Service::Serve` removed,
+    `service_test` failed under ThreadSanitizer with a data race against
+    `AcceptAll`, three runs out of three; with it, the suite is clean.
+-   **Rejected:** adding the flag to the existing sanitizers job, which
+    Clang refuses: ThreadSanitizer cannot be combined with AddressSanitizer.
+-   **Cost:** as with the other sanitizers, only threads the tests start are
+    checked, and only on Linux; the MediaPipe shim is not in the build.
+    Evidence: [#66](https://github.com/mattyv/facepalm/issues/66).
+
+## 2026-11-21: Skip a degenerate pose's frame in the expression reader
+
+-   **Decision:** the expression reader drops a face whose transformation
+    matrix has no rotation to read, as it would a frame with no face: no
+    scores are judged and nothing is learned from it. The looking-away
+    reader already did the same.
+-   **Why:** averaged into `ExpressionTracker`'s resting pose, one such
+    frame left it NaN until the next gap of more than two seconds, and the
+    pose gate never shut: with a degenerate frame before it, a smile held
+    while the head turned 25 degrees away was reported, where without one
+    it was not.
+-   **Rejected:** judging the frame's scores with the pose left out, which
+    would let scores the pose has moved through ungated; and having
+    `ExpressionTracker` ignore a non-finite pose itself, where
+    `ReactionFrom` and the looking-away reader check the matrix as they
+    read the pose from it, and this reader now does the same.
+-   **Narrows:** the 2026-11-21 entry for #44, which left the other readers
+    seeing such a face. Evidence:
+    [#79](https://github.com/mattyv/facepalm/issues/79).
+
 ## 2026-11-21: Read a reaction as a feeling when a client marks a beat
 
 A client that has just asked a question or made a proposal sends
