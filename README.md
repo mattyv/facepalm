@@ -64,6 +64,20 @@ made since, each with its reason, are in the
     less than a second and are not reported. A pose held for long enough,
     under a minute, becomes the resting pose, so turning back from it reads
     as a look away of its own. `specs/LookAway.tla` models the rule.
+-   `src/calibration`, `src/calibration_store`, `src/calibration_reader`: an
+    optional calibration session (#36, #35, item 12 of #61), started,
+    stepped and cancelled over the protocol's `calibrate` line: it records
+    the resting pose and, for each screen, the head pose at its centre and
+    four corners, then saves them to a private file the daemon owns.
+    `CalibrationController`, in `src/calibration`, is the session;
+    `src/calibration_store` saves and loads the file; `src/calibration_reader`
+    is the `FaceReader` that feeds it each frame's pose, as
+    `LookAwayReader` does its detector. `calibrate_cli` drives one for
+    testing. `specs/Calibration.tla` models the lifecycle. Once saved, the
+    daemon loads the profile and gives it to `ScreenContextReporter`
+    (below), which adds a `calibrated_screen` field from
+    `NearestCalibratedScreen` alongside the uncalibrated `gaze` it already
+    reads.
 -   `src/screen_context`, `src/screen_context_reporter`,
     `src/screen_context_reader`, `src/screen_source`: the screen context a
     reading's `context` carries (#36 item 11 of #61): the frontmost app,
@@ -155,6 +169,9 @@ made since, each with its reason, are in the
     only a reading that was shown can be rated (#36).
 -   `specs/Service.tla`: the service's connections, unique client names,
     and a shutdown that cannot hang on a waiting connection (#37).
+-   `specs/Calibration.tla`: the optional calibration session's lifecycle,
+    including the camera going away mid-session, checked with TLC before
+    the session's code (#36, #35, item 12 of #61).
 
 ## Build and test
 
@@ -239,7 +256,7 @@ and package the desktop tools.
 ```shell
 cmake -S . -B build-debian -G Ninja -DBUILD_TESTING=OFF \
   -DCMAKE_BUILD_TYPE=Release -DFACEPALM_LINUX_TRAY=ON
-cmake --build build-debian --target facepalm_menu gesture_replay_cli
+cmake --build build-debian --target facepalm_menu gesture_replay_cli calibrate_cli_tool
 cpack --config build-debian/CPackConfig.cmake -B build-debian/package
 ```
 
@@ -284,6 +301,18 @@ feeling is advisory, never an answer. When the person says how they really
 felt, `tell_feeling` takes the interpretation's ID and their pick, sends
 `feel <id> <feeling>`, and Facepalm tunes later reads from it. A client resets
 the person's picks with `reset feelings`.
+
+Where the host renders interactive widgets ([MCP
+Apps](https://github.com/modelcontextprotocol/ext-apps)), `show_feeling_card`
+shows the person a "How were you feeling just then?" card for a beat's
+interpretation: one button per feeling, in the order `feelings` lists them,
+Facepalm's own read already highlighted, and one click either way, which
+sends `tell_feeling` itself. The card never names the gesture, the
+interpretation's ID, or any basis, eligibility or retention detail; a second
+click is refused. A host without MCP Apps gets the tool's text instead, with
+the same `id`, `feeling` and `feelings` to act on directly. See [local macOS
+app staging](docs/local-app.md) for the Claude Desktop configuration that
+renders the card.
 
 Where the host cannot render a widget but supports MCP elicitation, such as
 the Claude Code terminal, `ask_feeling` asks the same question as a form: one

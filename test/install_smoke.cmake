@@ -27,7 +27,7 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -S "${SOURCE_DIR}" -B "${build}" -G N
   -DCMAKE_INSTALL_PREFIX=${prefix} RESULT_VARIABLE result)
 check_result("${result}" "production configure without GTest")
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${build}"
-  --target gesture_replay_cli RESULT_VARIABLE result)
+  --target gesture_replay_cli calibrate_cli_tool RESULT_VARIABLE result)
 check_result("${result}" "replay build")
 execute_process(COMMAND "${CMAKE_COMMAND}" --install "${build}"
   RESULT_VARIABLE result)
@@ -67,7 +67,8 @@ foreach(file LICENSE THIRDPARTY.md)
   endif()
 endforeach()
 
-foreach(file main.js server.js session.js hook-broker.js package.json package-lock.json)
+foreach(file main.js server.js session.js hook-broker.js feeling-widget.js
+    feeling-widget.html feeling-elicitation.js package.json package-lock.json)
   if(NOT EXISTS "${moved}/share/facepalm/mcp/${file}")
     fail("installed MCP adapter is missing ${file}")
   endif()

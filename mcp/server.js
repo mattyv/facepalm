@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { registerFeelingCard } from './feeling-widget.js';
 import { registerFeelingElicitation } from './feeling-elicitation.js';
 
 // A feeling's name. The names come from the service's one list
@@ -17,6 +18,7 @@ const delivery = z.object({
 
 export function createServer(session) {
   const server = new McpServer({ name: 'facepalm', version: '0.1.0' });
+  registerFeelingCard(server);
   registerFeelingElicitation(server, session);
   server.registerTool('wait_for_reaction', {
     description: 'Wait for interpreted reactions. Show each summary verbatim with its reading ID; do not present detail as the summary. '

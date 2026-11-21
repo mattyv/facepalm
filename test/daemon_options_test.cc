@@ -17,7 +17,8 @@ using Command = DaemonOptions::Command;
 std::optional<UserPaths> Home() {
   return UserPaths{.directory = "/h/fp",
                    .socket = "/h/fp/service.sock",
-                   .clients = "/h/fp/c"};
+                   .clients = "/h/fp/c",
+                   .calibration = "/h/fp/calibration"};
 }
 
 std::optional<DaemonOptions> Parse(const std::vector<const char*>& arguments,

@@ -8,7 +8,8 @@ setup() {
   cp "${BATS_TEST_DIRNAME}/../build_app.sh" \
     "${BATS_TEST_DIRNAME}/../check_app_links.sh" \
     "${BATS_TEST_DIRNAME}/../facepalm-info.plist" "${WORK}/scripts/"
-  for file in main.js server.js session.js hook-broker.js; do
+  for file in main.js server.js session.js hook-broker.js feeling-widget.js \
+    feeling-widget.html feeling-elicitation.js; do
     printf 'adapter' >"${WORK}/mcp/${file}"
   done
   plugin="${WORK}/integrations/claude-code"
@@ -70,6 +71,9 @@ teardown() {
   [[ -f "${app}/Resources/mcp/server.js" ]] || false
   [[ -f "${app}/Resources/mcp/session.js" ]] || false
   [[ -f "${app}/Resources/mcp/hook-broker.js" ]] || false
+  [[ -f "${app}/Resources/mcp/feeling-widget.js" ]] || false
+  [[ -f "${app}/Resources/mcp/feeling-widget.html" ]] || false
+  [[ -f "${app}/Resources/mcp/feeling-elicitation.js" ]] || false
   [[ -f "${app}/Resources/claude-code/.claude-plugin/plugin.json" ]] || false
   grep -q NSCameraUsageDescription "${WORK}/Facepalm.app/Contents/Info.plist"
 }
@@ -141,8 +145,8 @@ TOOL
 }
 
 @test "rejects a daemon that searches elsewhere before its bundle path" {
-  sed -i.bak 's|cmd LC_RPATH|&\\n path /tmp/other (offset 12)\\n cmd LC_RPATH|' \
-    "${WORK}/bin/otool"
+  local -r extra='&\\n path /tmp/other (offset 12)\\n cmd LC_RPATH'
+  sed -i.bak "s|cmd LC_RPATH|${extra}|" "${WORK}/bin/otool"
   run build_app
   [[ "${status}" -ne 0 ]] || false
   [[ ! -e "${WORK}/Facepalm.app" ]] || false

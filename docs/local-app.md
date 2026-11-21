@@ -70,6 +70,29 @@ Contents/Resources/node/bin/node Contents/Resources/mcp/main.js
 `facepalm-daemon revoke mcp` removes the approval; the next connection is
 refused. Another client, such as AI Pair, is approved under its own name.
 
+For Claude Desktop, add a `facepalm` entry to `claude_desktop_config.json`
+(macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`),
+filling in `APP` as above; the adapter takes no arguments once `mcp` is
+approved, so this is the whole entry:
+
+```json
+{
+  "mcpServers": {
+    "facepalm": {
+      "command": "APP/Contents/Resources/node/bin/node",
+      "args": ["APP/Contents/Resources/mcp/main.js"]
+    }
+  }
+}
+```
+
+Restart Claude Desktop afterward. `wait_for_reaction` with a `beat` can then
+show its "pick the feeling" card inline, when Claude Desktop renders it
+(MCP Apps): ask Claude to call `show_feeling_card` with the `id`, `feeling`
+and `feelings` a beat returned, and watch for the card asking "How were you
+feeling just then?" with Facepalm's read already highlighted. A host without
+MCP Apps gets `show_feeling_card`'s text instead, with the same information.
+
 Choose **Settings** from the 🤦 menu to set the frame rate, enable detectors,
 or adjust gesture confidence and expression tuning. Turn Facepalm off and on
 again to apply them; the menu passes the settings file to the daemon when
@@ -90,3 +113,26 @@ daemon to revoke consent for that run.
 The local bundle verification covers startup refusal without consent, rejection
 of an unapproved socket client, and clean shutdown. The new bundle has not
 been tested with live capture. Live preview is pending.
+
+## Calibration (optional)
+
+A short guided session improves on the coarse, uncalibrated gaze of item 11
+(#36, #35): it records the resting pose and, for each screen, the head pose
+at its centre and four corners, then saves them to a private file the daemon
+owns. `calibrate_cli` drives one against a running daemon, for testing and as
+a model for the eventual menu entry (item 8). Approve it once, as any other
+client:
+
+```shell
+facepalm-daemon approve calibrate
+calibrate_cli start 1
+calibrate_cli next   # Once per prompted target.
+calibrate_cli cancel # Instead of next, to give up.
+```
+
+Any client already speaking the protocol can send the same `calibrate start
+[screens]|next|cancel` line directly, with its own name and token. The daemon
+itself is not yet wired to a calibration session or the camera's lifecycle
+(that is item 7's follow-up, so `calibrate_cli` has nothing to talk to on a
+running daemon until it lands); until then, every `calibrate` request gets
+`{"error":"calibration is not available"}`.

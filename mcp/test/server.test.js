@@ -26,6 +26,7 @@ test('tools validate inputs and preserve delivered summaries and details', async
     assert.match(tools.tools.find((tool) => tool.name === 'wait_for_reaction').description, /verbatim.*ID/);
     assert.match(tools.tools.find((tool) => tool.name === 'tell_feeling').description, /five minutes/);
     assert.equal(tools.tools.some((tool) => tool.name === 'rate_reaction'), false);
+    assert.ok(tools.tools.find((tool) => tool.name === 'show_feeling_card')._meta.ui.resourceUri);
     assert.ok(tools.tools.find((tool) => tool.name === 'ask_feeling'));
     const result = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
     assert.deepEqual(JSON.parse(result.content[0].text), {
