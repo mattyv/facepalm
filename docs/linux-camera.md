@@ -33,32 +33,29 @@ install -D -m 0644 "$MODEL" \
 
 ## Run
 
-Run the daemon in a terminal to grant consent for that run. The socket
-directory and the client token are private to your user. The camera opens
-when an approved client requests reactions and closes after it disconnects.
-Start a new MCP session after starting the daemon if an earlier connection
-failed.
+Approve the MCP adapter once, then run the daemon in a terminal to grant
+consent for that run. `approve` writes a new random token to
+`~/.local/state/facepalm/clients/mcp`, private to your user, and the daemon
+listens at `service.sock` in the same folder. The camera opens when an
+approved client requests reactions and closes after the last one
+disconnects. Start a new MCP session after starting the daemon if an
+earlier connection failed.
 
 ```sh
-umask 077
-runtime="${XDG_RUNTIME_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}}/facepalm"
-mkdir -p "$runtime"
-if [ ! -e "$runtime/client-token" ]; then
-  (set -C; openssl rand -hex 32 > "$runtime/client-token")
-fi
 app="$HOME/.local/facepalm"
-"$app/bin/facepalm-daemon" --consent --socket "$runtime/service.sock" \
-  --model "$app/share/facepalm/model/face_landmarker.task" \
-  --client-token-file "$runtime/client-token"
+"$app/bin/facepalm-daemon" approve mcp
+"$app/bin/facepalm-daemon" --consent \
+  --model "$app/share/facepalm/model/face_landmarker.task"
 ```
 
-Configure your MCP client to run the adapter with the same paths.
+Configure your MCP client to run the adapter with no arguments; it finds the
+socket and its token in that folder.
 
 ```sh
-node "$app/share/facepalm/mcp/main.js" "$runtime/service.sock" \
-  --client-token-file "$runtime/client-token"
+node "$app/share/facepalm/mcp/main.js"
 ```
 
-The service accepts one approved client at a time. Stop the daemon with
-Ctrl+C to revoke consent. If the selected camera is unplugged, reconnect it
+Several approved clients can be connected at once, and each gets every
+reaction. `facepalm-daemon revoke mcp` removes the approval. Stop the daemon
+with Ctrl+C to revoke consent. If the selected camera is unplugged, reconnect it
 and restart the daemon to resume capture.

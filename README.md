@@ -200,14 +200,17 @@ cmake --install build-portable
 "$HOME/.local/facepalm/bin/gesture_replay" < camera-probe.log
 cd "$HOME/.local/facepalm/share/facepalm/mcp"
 npm ci --omit=dev
-node main.js /path/to/service.sock --client-token-file /path/to/private-token
+node main.js
 ```
 
 The MCP adapter needs Node.js 22 or newer and the lockfile dependencies.
 `npm ci` obtains those packages from a registry or an existing npm cache;
 CMake installs the source and lockfile without `node_modules`. With the default
-relative install paths, the installed tree can be moved as a unit. Provision
-a compatible service and any required private token separately.
+relative install paths, the installed tree can be moved as a unit. Given no
+arguments, the adapter connects to the daemon's socket with the token
+`facepalm-daemon approve mcp` made, both in the per-user folder:
+`~/Library/Application Support/Facepalm` on macOS, `~/.local/state/facepalm`
+on Linux. `node main.js SOCKET --client-token-file PATH` names them instead.
 
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the

@@ -13,14 +13,16 @@
 // What a client and facepalm's service say to each other (#37): a request
 // is one line of text, and each reply is one line of JSON.
 //
-//   hello <name>          names the client; the first line of a connection
-//   read                  the readings since this client last looked
-//   wait <milliseconds>   as read, waiting up to 60 seconds for one
-//   rate <id> <score>     rates a reading this client was shown, 1 to 5
+//   hello <name> [<token>]  names the client and shows its approval token;
+//                           the first line of a connection
+//   read                    the readings since this client last looked
+//   wait <milliseconds>     as read, waiting up to 60 seconds for one
+//   rate <id> <score>       rates a reading this client was shown, 1 to 5
 namespace facepalm::protocol {
 
 struct Hello {
   std::string name;
+  std::string token;  // Empty when the client showed none.
 };
 struct ReadRequest {};
 struct WaitRequest {

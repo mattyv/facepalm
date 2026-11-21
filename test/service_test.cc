@@ -44,6 +44,11 @@ class MockFeed : public Feed {
               (override));
 };
 
+class MockApprovals : public Approvals {
+ public:
+  MOCK_METHOD(bool, Approved, (std::string_view token), (override));
+};
+
 // A connection the test writes lines into and reads replies from.
 class FakeStream : public Stream {
  public:
@@ -154,8 +159,10 @@ class FakeListener : public Listener {
 
 class ServiceTest : public ::testing::Test {
  protected:
-  ServiceTest() : service_(std::make_unique<FakeListener>(queue_), feed_) {
+  ServiceTest()
+      : service_(std::make_unique<FakeListener>(queue_), feed_, approvals_) {
     ON_CALL(feed_, Connect).WillByDefault(Return(true));
+    ON_CALL(approvals_, Approved).WillByDefault(Return(true));
   }
 
   // A new connection to the service.
@@ -178,6 +185,7 @@ class ServiceTest : public ::testing::Test {
   std::shared_ptr<FakeListener::Queue> queue_ =
       std::make_shared<FakeListener::Queue>();
   NiceMock<MockFeed> feed_;
+  NiceMock<MockApprovals> approvals_;
   Service service_;
 };
 
@@ -351,11 +359,59 @@ TEST_F(StopEndsTest, StoppingANeverStartedServiceReturns) { service_.Stop(); }
 TEST_F(StopEndsTest, DestroyingAStartedServiceStopsIt) {
   const auto queue = std::make_shared<FakeListener::Queue>();
   NiceMock<MockFeed> feed;
+  NiceMock<MockApprovals> approvals;
   {
-    Service service(std::make_unique<FakeListener>(queue), feed);
+    Service service(std::make_unique<FakeListener>(queue), feed, approvals);
     service.Start();
   }
   EXPECT_TRUE(queue->closed);
+}
+
+using ApprovedOnlyTest = ServiceTest;
+
+TEST_F(ApprovedOnlyTest, ATokenNotApprovedIsRefusedBeforeTheFeed) {
+  service_.Start();
+  EXPECT_CALL(approvals_, Approved(Eq("stranger"))).WillOnce(Return(false));
+  EXPECT_CALL(feed_, Connect).Times(0);
+  const auto peer = Connect();
+
+  peer->Send("hello agent stranger");
+
+  EXPECT_THAT(peer->Reply(1), Eq(R"({"error":"client not approved"})"));
+  service_.Stop();
+}
+
+TEST_F(ApprovedOnlyTest, AHelloWithoutATokenShowsAnEmptyOne) {
+  service_.Start();
+  EXPECT_CALL(approvals_, Approved(Eq(""))).WillOnce(Return(false));
+  const auto peer = Connect();
+
+  peer->Send("hello agent");
+
+  EXPECT_THAT(peer->Reply(1), Eq(R"({"error":"client not approved"})"));
+  service_.Stop();
+}
+
+using ApprovedAdmittedTest = ServiceTest;
+
+TEST_F(ApprovedAdmittedTest, TwoConnectionsShowingOneTokenAreTwoClients) {
+  service_.Start();
+  EXPECT_CALL(approvals_, Approved(Eq("approved")))
+      .Times(2)
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(feed_, Connect("desktop")).WillOnce(Return(true));
+  EXPECT_CALL(feed_, Connect("code")).WillOnce(Return(true));
+  EXPECT_CALL(feed_, Read("desktop")).WillOnce(Return(Feed::Delivery{}));
+  EXPECT_CALL(feed_, Read("code")).WillOnce(Return(Feed::Delivery{}));
+  const auto desktop = Named("desktop approved");
+  const auto code = Named("code approved");
+
+  desktop->Send("read");
+  code->Send("read");
+
+  EXPECT_THAT(desktop->Reply(2), Eq(R"({"readings":[],"missed":0})"));
+  EXPECT_THAT(code->Reply(2), Eq(R"({"readings":[],"missed":0})"));
+  service_.Stop();
 }
 
 using NothingAfterStopTest = ServiceTest;
@@ -392,8 +448,9 @@ TEST(NothingAfterStopLateTest, AConnectionArrivingWhileStoppingIsShut) {
   const auto queue = std::make_shared<FakeListener::Queue>();
   const auto late = std::make_shared<FakeStream::Peer>();
   NiceMock<MockFeed> feed;
+  NiceMock<MockApprovals> approvals;
   EXPECT_CALL(feed, Connect).Times(0);
-  Service service(std::make_unique<LateListener>(queue, late), feed);
+  Service service(std::make_unique<LateListener>(queue, late), feed, approvals);
   service.Start();
 
   service.Stop();

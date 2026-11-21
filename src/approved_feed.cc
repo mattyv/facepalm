@@ -10,43 +10,50 @@
 
 namespace facepalm {
 
-ApprovedFeed::ApprovedFeed(Feed& feed, std::string token,
-                           std::function<void(bool)> changed,
+ApprovedFeed::ApprovedFeed(Feed& feed, std::function<void(bool)> changed,
                            std::function<void(const std::string&)> retire,
                            bool ratings_enabled)
     : feed_(feed),
-      token_(std::move(token)),
       changed_(std::move(changed)),
       retire_(std::move(retire)),
       ratings_enabled_(ratings_enabled) {}
 
+// DaemonAdmission!Join: only the first client changes the subscription.
+// Changes are told under the lock, so they reach the control queue in order.
 bool ApprovedFeed::Connect(const std::string& client) {
   const std::scoped_lock lock(mutex_);
-  if (client != token_ || !session_.empty()) {
+  if (sessions_.contains(client)) {
     return false;
   }
-  const std::string name = "approved-" + std::to_string(++next_session_);
-  if (!feed_.Connect(name)) {
+  std::string session = "approved-" + std::to_string(++next_session_);
+  if (!feed_.Connect(session)) {
     return false;
   }
-  session_ = name;
-  changed_(true);
+  sessions_.emplace(client, std::move(session));
+  if (sessions_.size() == 1) {
+    changed_(true);
+  }
   return true;
 }
 
+// DaemonAdmission!Disconnect: only the last client changes the subscription.
 void ApprovedFeed::Disconnect(const std::string& client) {
   const std::scoped_lock lock(mutex_);
-  if (client != token_ || session_.empty()) {
+  const auto found = sessions_.find(client);
+  if (found == sessions_.end()) {
     return;
   }
-  retire_(session_);
-  session_.clear();
-  changed_(false);
+  retire_(found->second);
+  sessions_.erase(found);
+  if (sessions_.empty()) {
+    changed_(false);
+  }
 }
 
 std::string ApprovedFeed::Session(const std::string& client) {
   const std::scoped_lock lock(mutex_);
-  return client == token_ ? session_ : std::string{};
+  const auto found = sessions_.find(client);
+  return found == sessions_.end() ? std::string{} : found->second;
 }
 
 std::optional<Feed::Delivery> ApprovedFeed::Read(const std::string& client) {

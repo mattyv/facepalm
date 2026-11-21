@@ -1,4 +1,6 @@
 import { closeSync, constants, fstatSync, openSync, readSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './server.js';
 import { SocketSession } from './session.js';
@@ -22,21 +24,34 @@ function readClientToken(path) {
   }
 }
 
+// Where facepalm keeps its per-user files, as src/user_paths.cc has it.
+function userDirectory() {
+  return process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library', 'Application Support', 'Facepalm')
+    : path.join(os.homedir(), '.local', 'state', 'facepalm');
+}
+
 const args = process.argv.slice(2);
-if (args.length !== 1 && !(args.length === 3 && args[1] === '--client-token-file')) {
-  console.error('Usage: node mcp/main.js SOCKET_PATH [--client-token-file PATH]');
+if (args.length !== 0 && args.length !== 1 && !(args.length === 3 && args[1] === '--client-token-file')) {
+  console.error('Usage: node mcp/main.js [SOCKET_PATH [--client-token-file PATH]]');
   process.exit(1);
 }
+// With no arguments, the service's socket and this adapter's approved token
+// are in their fixed per-user places (#37).
+const socketPath = args[0] ?? path.join(userDirectory(), 'service.sock');
+const tokenPath = args.length === 0 ? path.join(userDirectory(), 'clients', 'mcp') : args[2];
 let token;
-if (args.length === 3) {
+if (tokenPath !== undefined) {
   try {
-    token = readClientToken(args[2]);
+    token = readClientToken(tokenPath);
   } catch {
-    console.error('Could not read a valid private client token file.');
+    console.error(args.length === 0
+      ? 'Facepalm has not approved this adapter: turn Facepalm on from its menu, or run facepalm-daemon approve mcp.'
+      : 'Could not read a valid private client token file.');
     process.exit(1);
   }
 }
-const session = new SocketSession(args[0], token);
+const session = new SocketSession(socketPath, token);
 let broker;
 if (process.env.FACEPALM_HOOK_SOCKET) {
   try { broker = await startHookBroker({ path: process.env.FACEPALM_HOOK_SOCKET, session }); }

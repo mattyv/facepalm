@@ -35,12 +35,21 @@ class Listener {
   virtual void Close() = 0;
 };
 
+// Which tokens the person approved (#37).
+class Approvals {
+ public:
+  virtual ~Approvals() = default;
+  // Whether `token` is one the person approved; "" when a client shows none.
+  [[nodiscard]] virtual bool Approved(std::string_view token) = 0;
+};
+
 // facepalm's background service (#37), following specs/Service.tla. Each
 // connection gets its own thread, which speaks src/protocol.h to the feed
-// for the client the connection names.
+// for the client the connection names. Only a client showing an approved
+// token is let in; several connections may show the same one.
 class Service {
  public:
-  Service(std::unique_ptr<Listener> listener, Feed& feed);
+  Service(std::unique_ptr<Listener> listener, Feed& feed, Approvals& approvals);
   ~Service();
   Service(const Service&) = delete;
   Service& operator=(const Service&) = delete;
@@ -73,6 +82,7 @@ class Service {
 
   std::unique_ptr<Listener> listener_;
   Feed& feed_;
+  Approvals& approvals_;
   std::mutex mutex_;
   bool stopping_ = false;
   std::list<Connection> connections_;

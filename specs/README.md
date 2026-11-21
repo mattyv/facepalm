@@ -28,7 +28,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 1,588 |
-| `DaemonAdmission.cfg` | one client: consent, approval, retirement | holds | 26 |
+| `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 7,908 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
@@ -37,7 +37,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `RatingPersistence.cfg` | one rating, a sync that may fail | holds | 6 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
-| `Service.cfg` | three connections, two client names | holds | 396 |
+| `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds | 396 |
 | `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
 
 ## `McpSocket`: an MCP session owns one socket
@@ -59,14 +59,91 @@ exercise partial writes, sync failures and the disabled sink. The model does
 not prove filesystem crash recovery; a failed sync can leave an unacknowledged
 record.
 
-## `DaemonAdmission`: consent, approval and retirement
+## `DaemonAdmission`: the daemon's clients, camera and stop
 
-The bounded model checks 26 states with one client and no fairness assumptions.
-`OpenHasConsent`, `OpenHasApproval` and `StoppedAfterRetirement` hold; each
-corresponding disabled guard violates its invariant. It abstracts physical
-camera closure and model retirement as separate actions. The controller,
-approved-feed and daemon-control tests cover the integration; the model does
-not prove OS camera behavior or the secrecy of a token file.
+Models the daemon's control logic (#37, #63), as `src/daemon_control.cc`
+and `src/approved_feed.cc` implement it and `tools/daemon/main.cc` wires it:
+which approved clients are connected, when the camera opens and closes for
+them, and how the daemon stops. Every approved client shares one camera
+subscription: `ApprovedFeed` tells the control queue when the first one
+joins and when the last one leaves, and every client reads the same
+readings from `ReactionFeed`, so two clients get the same nod.
+
+Four serial queues run the work, as in the daemon. The control queue owns
+`DaemonControl` and `CameraController`, so each of its tasks is one atomic
+action; it takes subscription changes from `ApprovedFeed`, reports from the
+camera session (opened, open failed, closed, device lost, device back), and
+the frame pipeline's word that a face model was destroyed. The session queue
+opens and closes the camera, and the inference queue creates and destroys
+the face model. Each queue is FIFO, and the order between the control
+queue's three sources is left free, which allows more interleavings than the
+code has. The model covers stopping, a retirement under way, a device coming
+back during one, a failed open, a lost device, and a `Stop` re-entered from
+a failed open. Opening may succeed or fail each time. The queues are weakly
+fair; the person, the clients and the OS are not. `MaxQueue = 2` bounds what
+the clients and the OS may queue, so the state space is finite.
+
+| Property | What it says | Test |
+|---|---|---|
+| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
+| `ApprovedOnly` | Only approved clients are connected. | `ApprovedOnlyTest` in `test/service_test.cc` and `test/client_approvals_test.cc`; `approval.test.mjs`'s stranger |
+| `OpenHasConsent` | The camera is opening or open only with consent. | `OpenOnlyWithConsentTest` in `test/camera_controller_test.cc`; `StopEndsTest.StoppingWithTheCameraClosedRetiresAtOnce` checks that stopping revokes it |
+| `SubscriptionMatches` | Once the subscription changes are handled, the camera is wanted exactly while some client is connected: one client leaving does not take it from another. | `SubscriptionMatchesTest` in `test/approved_feed_test.cc` and `test/daemon_control_test.cc`; `approval.test.mjs`'s "camera on" and "camera off" |
+| `ReopenAfterRetire` | A camera opens only once the previous face model is destroyed. | `ReopenAfterRetireTest` in `test/daemon_control_test.cc` |
+| `ExitClean` | The daemon exits only with the camera closed and stopped, and every face model destroyed. | `ExitCleanTest` |
+| `StopEnds` | Liveness: stopping, by the person, a signal, a failed model or a failed open, always ends with the daemon exiting. | `StopEndsTest` |
+| `LastLeaveCloses` | Liveness: with no client left, the camera closes, unless one joins. | `SubscriptionMatchesTest.OnlyTheFirstJoinAndTheLastLeaveCount`; `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` in `test/camera_controller_test.cc` |
+| `JoinOpens` | Liveness, and something must happen: a connected client gets the camera open, unless every client leaves, the daemon stops, or the device is gone. | `JoinOpensTest`, `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`; `WantedOpensTest` in `test/camera_controller_test.cc` |
+
+`CHECK_DEADLOCK FALSE` stays only because an exited daemon does nothing;
+the liveness properties are what say that stopping and closing finish.
+Each mutation, and what TLC found (counts are the counterexample's states):
+
+| Mutation | Broke |
+|---|---|
+| `GuardApproval = FALSE`: a client not approved joins | `ApprovedOnly`, 2 states |
+| `GuardFirstLast = FALSE`: every join and leave changes the subscription, the one-client design | `SubscriptionMatches`, 7 states: one client leaving takes the camera from another |
+| `GuardConsent = FALSE`: the camera opens without consent | `OpenHasConsent`, 10 states: a retirement after stopping reopens it |
+| `GuardStopRevokes = FALSE`: stopping leaves consent | `ExitClean`, 14 states; with it left out, `StopEnds` and `LastLeaveCloses` |
+| `GuardStopRetires = FALSE`: stopping with the camera closed retires nothing | `StopEnds` |
+| `GuardRetireOnce = FALSE`: two retirements at once | `ExitClean`, 6 states: the daemon exits with a face model still to destroy |
+| `GuardAckAfterRetire = FALSE`: a closed camera counts as closed before its model is destroyed | `ReopenAfterRetire`, 11 states |
+| `GuardDeferDeviceBack = FALSE`: a device coming back is let in during a retirement | `ReopenAfterRetire`, 7 states |
+| `GuardOpenOnce = FALSE`: an `Opened` after closing began creates a model | Nothing: the model is destroyed behind it on the same FIFO inference queue, so the guard only saves loading a model no frame will reach |
+| `GuardOpenFailStops = FALSE`: a failed open leaves the daemon running | Nothing: stopping on a failed open is a choice, not a protection; without it the camera waits for the device to come back, which `JoinOpens` allows |
+| `OpenIf` never opens | `JoinOpens` |
+| `Leave` does not close | `LastLeaveCloses` |
+| `Retired` never exits | `StopEnds` |
+| No fairness on `Report`, `SessionTask`, `InferenceTask` or `Retired` | `StopEnds`, `LastLeaveCloses` and `JoinOpens` |
+| No fairness on `Subscription` | `LastLeaveCloses` and `JoinOpens` |
+| `InferenceTask` writes a model outside the type | `TypeOK`, 6 states |
+
+Each liveness mutation was checked with each property alone. Before #63,
+`DaemonControl::OnOpenFailed` also retired the model when stopping with the
+camera closed; the model shows that case cannot arise, since stopping
+revokes consent and a camera that began closing reports `Closed`, so that
+code was removed. The failed open's stop moved from the daemon's `main.cc`
+into `DaemonControl`, where the spec's `OnOpenFailed` has it.
+
+The same mutations, made to the code, fail the tests that stand for the
+properties they break:
+
+| Mutation to the code | Fails |
+|---|---|
+| `Subscription` is not ignored while stopping | `SubscriptionMatchesTest.ChangesAreIgnoredOnceStopping` |
+| `Stop` does not revoke consent | Seven tests, among them every `StopEndsTest` and `ExitCleanTest` |
+| `Stop` does not retire a closed camera's model | `StopEndsTest.StoppingWithTheCameraClosedRetiresAtOnce`, `AFailedModelStopsTheDaemonAsAFailure`, `ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
+| More than one retirement at a time | `ExitCleanTest.OneRetirementAtATime` |
+| `OnClosed` counts the camera closed before the retirement | `ReopenAfterRetireTest.AClosedCameraCountsOnlyOnceTheModelIsGone`, and two others |
+| A device coming back is not deferred | `ReopenAfterRetireTest.ADeviceComingBackWaitsForTheRetirement` |
+| Every `Opened` creates a model | `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`, and two others |
+| A failed open does not stop the daemon | `StopEndsTest.ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
+| A failure exits as a success | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure`, `ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
+| Every join or every leave changes the subscription (`ApprovedFeed`) | `SubscriptionMatchesTest.OnlyTheFirstJoinAndTheLastLeaveCount` |
+
+The model does not cover the OS camera itself, which `CameraLifecycle`
+models, nor the secrecy of the token files, which only file permissions
+give.
 
 ## `FeedWaitRetirement`: canceled wait ownership
 
@@ -462,15 +539,20 @@ a missing wake fails them rather than passing late.
 
 Models #37's service. It accepts connections on a socket only its user can
 open, and gives each its own thread. A connection's first line names its
-client, which connects that client to `ReactionFeed`; the thread then reads,
-waits for a reading, or rates. The peer can hang up at any time, but a
-thread blocked in a wait is not reading its socket, so it notices only once
-the wait ends. Stopping the service closes every connection, and must not
-hang on a waiting one, since a wait can last its whole timeout.
+client and shows its token; only a token the person approved is let in,
+and several connections may show the same one, so two sessions of one
+approved app are two clients. A client let in is connected to
+`ReactionFeed`; the thread then reads, waits for a reading, or rates. The
+peer can hang up at any time, but a thread blocked in a wait is not reading
+its socket, so it notices only once the wait ends. Stopping the service
+closes every connection, and must not hang on a waiting one, since a wait
+can last its whole timeout.
 
 | Property | What it says | Test |
 |---|---|---|
 | `UniqueNames` | No two connections speak for the same client. | `UniqueNamesTest` in `test/service_test.cc`; `ConnectingANameAlreadyConnectedIsRefused` in `test/reaction_feed_test.cc` |
+| `ApprovedOnly` | Every named connection showed an approved token. | `ApprovedOnlyTest` in `test/service_test.cc` and `test/client_approvals_test.cc`; `approval.test.mjs` |
+| `ApprovedAdmitted` | Something must happen: an approved token with a new name is let in, even while another connection shows the same token. | `ApprovedAdmittedTest.TwoConnectionsShowingOneTokenAreTwoClients`; `ApprovedAdmittedTest.ATokenAClientHoldsIsApproved` in `test/client_approvals_test.cc`; `approval.test.mjs` |
 | `FeedMatchesConns` | The feed's clients are exactly the named connections still open. | `FeedMatchesConnsTest` |
 | `StopWakesWaiters` | Once stopping, no thread is left blocked in a wait. | `StopWakesWaitersTest` |
 | `NothingAfterStop` | Once stopped, every connection is closed. | `NothingAfterStopTest`, `NothingAfterStopLateTest` |
@@ -482,6 +564,9 @@ Each mutation, and what TLC found:
 | Mutation | Broke |
 |---|---|
 | `GuardUniqueNames = FALSE`: a name already connected is accepted | `UniqueNames`, 5 states |
+| `GuardApproval = FALSE`: a token not approved is let in | `ApprovedOnly`, 3 states |
+| One connection per token, the design before several clients | `ApprovedAdmitted`, 4 states |
+| Every hello refused | `ApprovedAdmitted`, 2 states |
 | `GuardLeaveOnClose = FALSE`: a closed connection's client stays in the feed | `FeedMatchesConns`, 5 states |
 | `GuardStopWakes = FALSE`: stopping leaves a wait to its timeout | `StopWakesWaiters`, 5 states; with it left out, `StopEnds` |
 | `GuardRefuseWhenStopping = FALSE`: connections are accepted while stopping | `StopEnds`: new ones can keep it from finishing |
@@ -499,6 +584,8 @@ properties they break:
 | Mutation to `Service` | Fails |
 |---|---|
 | A name already connected is accepted | `UniqueNamesTest.ANameAlreadyConnectedIsRefused` |
+| Any token is let in | `ApprovedOnlyTest.ATokenNotApprovedIsRefusedBeforeTheFeed`, `AHelloWithoutATokenShowsAnEmptyOne` |
+| Any client's file approves any token (`ClientApprovals`) | `ApprovedOnlyTest.ATokenNoClientHoldsIsNotApproved`, `ATokenOfAnotherLengthIsNotApproved`, `ApprovedAdmittedTest.ATokenAClientHoldsIsApproved` |
 | A closed connection's client stays in the feed | `FeedMatchesConnsTest.AHangUpTakesTheClientOutOfTheFeed` |
 | Stopping does not disconnect the clients, so a wait runs on | `StopWakesWaitersTest.StoppingEndsAWaitAndTheConnection` |
 | A connection arriving while stopping is served | `NothingAfterStopLateTest.AConnectionArrivingWhileStoppingIsShut` |

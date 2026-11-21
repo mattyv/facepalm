@@ -86,11 +86,15 @@ std::optional<Request> Parse(std::string_view line, std::string& error) {
   const std::vector<std::string_view> words = Words(line);
   const std::string_view verb = words.front();
   if (verb == "hello") {
-    if (words.size() != 2 || !IsName(words[1])) {
+    constexpr std::size_t kWithToken = 3;
+    if (words.size() < 2 || words.size() > kWithToken || !IsName(words[1]) ||
+        (words.size() == kWithToken && !IsName(words[2]))) {
       error = "a name is 1 to 64 of A-Z a-z 0-9 . _ -";
       return std::nullopt;
     }
-    return Hello{.name = std::string(words[1])};
+    return Hello{.name = std::string(words[1]),
+                 .token = words.size() == kWithToken ? std::string(words[2])
+                                                     : std::string()};
   }
   if (verb == "read" && words.size() == 1) {
     return ReadRequest{};

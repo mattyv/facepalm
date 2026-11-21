@@ -14,8 +14,9 @@
 
 namespace facepalm {
 
-Service::Service(std::unique_ptr<Listener> listener, Feed& feed)
-    : listener_(std::move(listener)), feed_(feed) {}
+Service::Service(std::unique_ptr<Listener> listener, Feed& feed,
+                 Approvals& approvals)
+    : listener_(std::move(listener)), feed_(feed), approvals_(approvals) {}
 
 Service::~Service() { Stop(); }
 
@@ -66,7 +67,8 @@ void Service::Serve(Connection& connection) {
   connection.done = true;
 }
 
-// Service!Hello: refuses a name already connected (GuardUniqueNames).
+// Service!Hello: refuses a token not approved (GuardApproval), then a name
+// already connected (GuardUniqueNames).
 std::optional<std::string> Service::Greet(Connection& connection) {
   Stream& stream = *connection.stream;
   const std::optional<std::string> line = stream.ReadLine();
@@ -83,6 +85,10 @@ std::optional<std::string> Service::Greet(Connection& connection) {
   const auto* hello = std::get_if<protocol::Hello>(&*request);
   if (hello == nullptr) {
     stream.WriteLine(protocol::ErrorJson("say hello first"));
+    return std::nullopt;
+  }
+  if (!approvals_.Approved(hello->token)) {
+    stream.WriteLine(protocol::ErrorJson("client not approved"));
     return std::nullopt;
   }
   if (!feed_.Connect(hello->name)) {

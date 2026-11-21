@@ -7,7 +7,8 @@
 
 namespace facepalm {
 
-// All calls run on the daemon's control queue.
+// The camera controller, as the daemon drives it. All calls run on the
+// daemon's control queue.
 class DaemonController {
  public:
   virtual ~DaemonController() = default;
@@ -22,22 +23,34 @@ class DaemonController {
   [[nodiscard]] virtual CameraController::State State() const = 0;
 };
 
+// The frame pipeline's face model, as the daemon drives it.
 class DaemonPipeline {
  public:
   virtual ~DaemonPipeline() = default;
+  // Creates the face model on the inference queue.
   virtual void Open() = 0;
+  // Destroys the face model on the inference queue, then calls `done` on the
+  // control queue.
   virtual void Close(std::function<void()> done) = 0;
 };
 
-// Joins the existing controller and pipeline. Reopen and process exit wait
-// for the preceding analyser to be destroyed on the inference queue.
+// The daemon's control logic (#37, #63), following specs/DaemonAdmission.tla:
+// it joins the camera controller and the frame pipeline, so a camera reopens
+// and the daemon exits only once the previous face model is destroyed. Each
+// method names the spec action it implements. Call it from the control
+// queue only.
 class DaemonControl : public CameraReports {
  public:
+  // `stop_service` stops the socket service, which disconnects every client;
+  // `exit` ends the process, told whether it stopped as a failure.
   DaemonControl(DaemonController& controller, DaemonPipeline& pipeline,
                 std::function<void()> stop_service,
-                std::function<void()> stopped);
+                std::function<void(bool failed)> exit);
   void Subscription(bool joined);
+  // Stops the daemon: the person turned Facepalm off, or a signal came.
   void Stop();
+  // Stops the daemon as a failure, as when the face model failed.
+  void Fail();
   void OnOpened() override;
   void OnOpenFailed() override;
   void OnClosed() override;
@@ -49,7 +62,8 @@ class DaemonControl : public CameraReports {
   DaemonController& controller_;
   DaemonPipeline& pipeline_;
   std::function<void()> stop_service_;
-  std::function<void()> stopped_;
+  std::function<void(bool)> exit_;
+  bool failed_ = false;
   bool stopping_ = false;
   bool retiring_ = false;
   bool device_back_ = false;
