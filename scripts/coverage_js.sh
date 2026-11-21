@@ -127,9 +127,12 @@ main() {
   rm -rf "${OUT}" && mkdir -p "${OUT}"
   touch "${OUT}/shortfalls.txt"
   local listing source
-  listing="$(git -C "${ROOT}" ls-files 'mcp/*.js' 'mcp/widget/*.js' \
-    'integrations/claude-code/*.mjs' 'integrations/claude-code/*/*.mjs' \
-    | grep -v '/test/')"
+  local -a patterns=()
+  patterns+=('mcp/*.js')
+  patterns+=('mcp/widget/*.js')
+  patterns+=('integrations/claude-code/*.mjs')
+  patterns+=('integrations/claude-code/*/*.mjs')
+  listing="$(git -C "${ROOT}" ls-files "${patterns[@]}" | grep -v '/test/')"
   while IFS= read -r source; do
     check_source "${source}"
   done <<<"${listing}"

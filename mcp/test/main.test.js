@@ -44,13 +44,6 @@ async function fixture(handler, hello = '{"ok":true}\n', address) {
   } };
 }
 
-// The per-user directory under `home`, as src/user_paths.cc has it.
-function userDirectory(home) {
-  return process.platform === 'darwin'
-    ? path.join(home, 'Library', 'Application Support', 'Facepalm')
-    : path.join(home, '.local', 'state', 'facepalm');
-}
-
 for (const reason of ['EOF', 'oversized input']) {
   test(`stdio ${reason} closes the child socket`, { timeout: 7000 }, async () => {
     let entered;
@@ -153,78 +146,52 @@ test('with no arguments and no approval, names how to approve it', { timeout: 50
   }
 });
 
-test('finds its per-user files under Linux\'s path there, not only macOS\'s', { timeout: 7000 }, async () => {
-  // Both branches of userDirectory()'s platform check cannot run in one
-  // process; this spawns main.js believing it is on Linux, with --import
-  // preloading that belief before main.js's own top-level code runs, and
-  // puts the approval only where the Linux branch would look: finding it
-  // proves that branch ran, on an actual macOS test machine.
-  const home = await mkdtemp('/tmp/fp-home-');
-  const preload = path.join(home, 'platform.mjs');
-  await writeFile(preload, "Object.defineProperty(process, 'platform', { value: 'linux' });\n");
-  const directory = path.join(home, '.local', 'state', 'facepalm');
-  await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
-  const token = 'c'.repeat(64);
-  await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
-  let greeted;
-  const hello = new Promise((resolve) => { greeted = resolve; });
-  const f = await fixture(() => {}, (line) => {
-    greeted(line);
-    return '{"ok":true}\n';
-  }, path.join(directory, 'service.sock'));
-  const child = spawn(process.execPath, [`--import=${preload}`, main], {
-    env: { ...process.env, HOME: home },
+for (const platform of ['darwin', 'linux']) {
+  test(`with no arguments, finds the per-user socket and token for ${platform}`, { timeout: 7000 }, async () => {
+    // Both branches of userDirectory()'s platform check cannot run in one
+    // process, and whichever this test machine really is, running it
+    // always makes the OTHER branch the one that needs forcing: --import
+    // preloads a belief about process.platform before main.js's own
+    // top-level code runs, for both, so neither depends on which platform
+    // actually runs this suite.
+    const home = await mkdtemp('/tmp/fp-home-');
+    const preload = path.join(home, 'platform.mjs');
+    await writeFile(preload, `Object.defineProperty(process, 'platform', { value: '${platform}' });\n`);
+    const directory = platform === 'darwin'
+      ? path.join(home, 'Library', 'Application Support', 'Facepalm')
+      : path.join(home, '.local', 'state', 'facepalm');
+    await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
+    const token = 'c'.repeat(64);
+    await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
+    let greeted;
+    const hello = new Promise((resolve) => { greeted = resolve; });
+    const f = await fixture(() => {}, (line) => {
+      greeted(line);
+      return '{"ok":true}\n';
+    }, path.join(directory, 'service.sock'));
+    const child = spawn(process.execPath, [`--import=${preload}`, main], {
+      env: { ...process.env, HOME: home },
+    });
+    const exited = once(child, 'exit');
+    try {
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
+      } }) + '\n');
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+        name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
+      } }) + '\n');
+      assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
+    } finally {
+      // Ends gracefully, through main.js's own close(), rather than killing
+      // it with a signal: a signal skips the exit hook that flushes coverage.
+      child.stdin.end();
+      await exited;
+      await f.close();
+      await rm(home, { recursive: true, force: true });
+    }
   });
-  const exited = once(child, 'exit');
-  try {
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
-    } }) + '\n');
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
-      name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
-    } }) + '\n');
-    assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
-  } finally {
-    // Ends gracefully, through main.js's own close(), rather than killing
-    // it with a signal: a signal skips the exit hook that flushes coverage.
-    child.stdin.end();
-    await exited;
-    await f.close();
-    await rm(home, { recursive: true, force: true });
-  }
-});
-
-test('with no arguments, finds the per-user socket and approved token', { timeout: 7000 }, async () => {
-  const home = await mkdtemp('/tmp/fp-home-');
-  const directory = userDirectory(home);
-  await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
-  const token = 'b'.repeat(64);
-  await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
-  let greeted;
-  const hello = new Promise((resolve) => { greeted = resolve; });
-  const f = await fixture(() => {}, (line) => {
-    greeted(line);
-    return '{"ok":true}\n';
-  }, path.join(directory, 'service.sock'));
-  const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
-  const exited = once(child, 'exit');
-  try {
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
-    } }) + '\n');
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
-      name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
-    } }) + '\n');
-    assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
-  } finally {
-    child.stdin.end();
-    await exited;
-    await f.close();
-    await rm(home, { recursive: true, force: true });
-  }
-});
+}
 
 test('starts the hook broker only when FACEPALM_HOOK_SOCKET is set, and keeps the MCP server up when it fails', async () => {
   const f = await fixture(() => {});
