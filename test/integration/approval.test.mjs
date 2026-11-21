@@ -101,9 +101,16 @@ test('two approved MCP sessions get the same nod, each its own beat, and a stran
 
   desktop.child.stdin.end();
   await desktop.exited;
-  code.child.stdin.end();
+  // An adapter that dies mid-wait gives up the camera at once, not when its
+  // minute-long wait would have timed out.
+  const longWait = wait(code, 60000).catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const killed = Date.now();
+  code.child.kill('SIGKILL');
   await code.exited;
   assert.equal((await lines.next()).value, 'camera off');
+  assert.ok(Date.now() - killed < 5000);
+  await longWait;
   fixture.stdin.end();
   assert.deepEqual(await fixtureExited, [0, null]);
 });

@@ -38,7 +38,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `RatingPersistence.cfg` | one rating, a sync that may fail | holds | 6 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
-| `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds | 396 |
+| `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
 | `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
 
 ## `McpSocket`: an MCP session owns one socket
@@ -609,10 +609,12 @@ client and shows its token; only a token the person approved is let in,
 and several connections may show the same one, so two sessions of one
 approved app are two clients. A client let in is connected to
 `ReactionFeed`; the thread then reads, waits for a reading, or rates. The
-peer can hang up at any time, but a thread blocked in a wait is not reading
-its socket, so it notices only once the wait ends. Stopping the service
-closes every connection, and must not hang on a waiting one, since a wait
-can last its whole timeout.
+peer can hang up at any time. A thread blocked in a wait or a beat is not
+reading its socket, so a watcher (`Noticed`) sees the hang-up and
+disconnects the client, which ends the wait at once: a client gone does
+not keep its session, and the camera, for the up to 60 seconds its wait
+could last. Stopping the service closes every connection, and must not
+hang on a waiting one, since a wait can last its whole timeout.
 
 A beat (`FeelingBeat`) is a wait to this model: its thread blocks until the
 window ends or the client is disconnected, so `Wait` and `Answered` stand for
@@ -629,6 +631,7 @@ that stopping ends one. The model itself is unchanged.
 | `NothingAfterStop` | Once stopped, every connection is closed. | `NothingAfterStopTest`, `NothingAfterStopLateTest` |
 | `CanAccept` | Something must happen: a running service can accept a connection into a free slot. | `CanAcceptTest` |
 | `StopEnds` | Stopping always finishes. | `StopEndsTest` |
+| `HangUpEnds` | A connection whose peer hung up is closed, and its client gone from the feed, even in the middle of a wait or a beat. | `HangUpEndsTest` in `test/service_test.cc`; `AHangUpEndsAnAwaitInAnotherThread` and the other `AwaitHangUp` tests in `test/unix_socket_test.cc`; `approval.test.mjs`'s adapter killed mid-wait |
 
 Each mutation, and what TLC found:
 
@@ -643,6 +646,8 @@ Each mutation, and what TLC found:
 | `GuardRefuseWhenStopping = FALSE`: connections are accepted while stopping | `StopEnds`: new ones can keep it from finishing |
 | `Accept` never enabled | `CanAccept`, in the initial state |
 | `Accept` writes a connection state outside the type | `TypeOK`, 2 states |
+| `GuardHangUpWakes = FALSE`: a hang-up during a wait is noticed only when the wait ends, the design before | `HangUpEnds` |
+| No fairness on `Noticed` | `HangUpEnds` |
 | No fairness on `Closed` | `StopEnds` |
 | No fairness on `Stopped` | `StopEnds` |
 
@@ -660,6 +665,8 @@ properties they break:
 | A closed connection's client stays in the feed | `FeedMatchesConnsTest.AHangUpTakesTheClientOutOfTheFeed` |
 | Stopping does not disconnect the clients, so a wait runs on | `StopWakesWaitersTest.StoppingEndsAWaitAndTheConnection` |
 | A connection arriving while stopping is served | `NothingAfterStopLateTest.AConnectionArrivingWhileStoppingIsShut` |
+| The watcher does not disconnect a client that hung up | `HangUpEndsTest.AHangUpDuringAWaitDisconnectsTheClient`, `AHangUpDuringABeatDisconnectsTheClient` |
+| A line arriving counts as a hang-up (`UnixStream`) | `UnixSocketTest.ALineArrivingEndsAnAwaitAndIsStillRead` |
 | Nothing is ever accepted | Twelve tests, every one that connects |
 
 Each test that waits on another thread gives up after 5 seconds, so a

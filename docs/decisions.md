@@ -19,8 +19,11 @@ a line saying which entry replaced it.
     client shares one camera subscription, taken when the first joins and
     given up when the last leaves, and every client reads the same readings.
     The MCP adapter, given no arguments, uses the socket and the `mcp` token
-    from those places. `specs/DaemonAdmission.tla` and `specs/Service.tla`
-    model it, with liveness.
+    from those places. A client that hangs up during a wait or a beat is
+    disconnected at once by a watcher on its socket, so it gives up its
+    session, and the camera, without waiting out the window.
+    `specs/DaemonAdmission.tla` and `specs/Service.tla` model it, with
+    liveness.
 -   **Why:** #37 asks for tokens provisioned on approval, with no
     hand-run `openssl`, found by the MCP adapter and AI Pair in a fixed
     per-user place, and for two clients, such as Claude Desktop and Claude
@@ -40,6 +43,7 @@ a line saying which entry replaced it.
     valid token is skipped, not repaired.
 -   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37),
     [#63](https://github.com/mattyv/facepalm/issues/63).
+
 ## 2026-11-21: Remove the Linux ELF build of the MediaPipe shim
 
 -   **Decision:** remove the Bazel `libfacepalm_mediapipe.so` target, its

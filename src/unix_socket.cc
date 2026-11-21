@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -143,9 +144,18 @@ UnixStream::UnixStream(int fd) : fd_(fd) {
   const int on = 1;
   setsockopt(fd_, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
 #endif
+  std::array<int, 2> wake{-1, -1};
+  if (pipe(wake.data()) == 0) {
+    wake_read_ = wake[0];
+    wake_write_ = wake[1];
+  }
 }
 
-UnixStream::~UnixStream() { close(fd_); }
+UnixStream::~UnixStream() {
+  close(fd_);
+  close(wake_read_);
+  close(wake_write_);
+}
 
 std::optional<std::string> UnixStream::ReadLine() {
   constexpr std::size_t kChunk = 512;
@@ -185,5 +195,56 @@ void UnixStream::WriteLine(std::string_view line) {
 }
 
 void UnixStream::Shutdown() { shutdown(fd_, SHUT_RDWR); }
+
+// specs/Service.tla, Noticed: the socket turning readable with nothing to
+// read is the peer hanging up, or the stream shut down. An end already
+// written is taken at once; one written while polling wakes the poll.
+bool UnixStream::AwaitHangUp() {
+  {
+    const std::scoped_lock lock(mutex_);
+    if (ends_ > 0) {
+      char byte = 0;
+      std::ignore = read(wake_read_, &byte, 1);
+      ends_ = 0;
+      return false;
+    }
+    if (wake_read_ < 0) {
+      ++noticed_;
+      return false;  // No pipe to end a poll with, so nothing is watched.
+    }
+  }
+  std::array<pollfd, 2> fds{
+      pollfd{.fd = fd_, .events = POLLIN, .revents = 0},
+      pollfd{.fd = wake_read_, .events = POLLIN, .revents = 0}};
+  // A signal interrupting the poll leaves both unset, so it polls again.
+  do {
+    poll(fds.data(), fds.size(), -1);
+  } while (fds[0].revents == 0 && fds[1].revents == 0);
+  bool hung_up = false;
+  if (fds[1].revents == 0) {
+    char byte = 0;
+    hung_up = recv(fd_, &byte, 1, MSG_PEEK | MSG_DONTWAIT) <= 0;
+  }
+  const std::scoped_lock lock(mutex_);
+  if (ends_ > 0) {
+    char byte = 0;
+    std::ignore = read(wake_read_, &byte, 1);
+    ends_ = 0;
+    return false;
+  }
+  ++noticed_;
+  return hung_up;
+}
+
+void UnixStream::EndAwaitHangUp() {
+  const std::scoped_lock lock(mutex_);
+  if (noticed_ > 0) {
+    --noticed_;
+    return;
+  }
+  ++ends_;
+  const char wake = 0;
+  std::ignore = write(wake_write_, &wake, 1);
+}
 
 }  // namespace facepalm

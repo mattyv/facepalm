@@ -1,6 +1,7 @@
 #ifndef FACEPALM_SRC_SERVICE_H_
 #define FACEPALM_SRC_SERVICE_H_
 
+#include <functional>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,13 @@ class Stream {
   virtual void WriteLine(std::string_view line) = 0;
   // Ends a ReadLine blocked in another thread, and every one after it.
   virtual void Shutdown() = 0;
+  // Blocks while the connection's thread waits, until the peer hangs up or
+  // the stream is shut down (true), or until EndAwaitHangUp, or the peer
+  // sends something, which stays to be read (false). Call it from one
+  // thread, and EndAwaitHangUp once for each call, from another.
+  virtual bool AwaitHangUp() = 0;
+  // Ends the AwaitHangUp under way, or the next one if none has started.
+  virtual void EndAwaitHangUp() = 0;
 };
 
 // Where connections come from: a socket only its user can open.
@@ -79,6 +87,10 @@ class Service {
   bool BeginStop();
   // The reply to one request from a named client; false to end.
   bool Answer(const std::string& name, std::string_view line, Stream& stream);
+  // Runs `wait`, a wait or a beat, while watching for a hang-up.
+  std::optional<Feed::Delivery> Watched(
+      const std::string& name, Stream& stream,
+      const std::function<std::optional<Feed::Delivery>()>& wait);
 
   std::unique_ptr<Listener> listener_;
   Feed& feed_;

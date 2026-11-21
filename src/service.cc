@@ -1,5 +1,6 @@
 #include "src/service.h"
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -150,9 +151,12 @@ bool Service::Answer(const std::string& name, std::string_view line,
   // (specs/FeelingBeat.tla), or a read.
   std::optional<Feed::Delivery> delivery;
   if (const auto* beat = std::get_if<protocol::BeatRequest>(&*request)) {
-    delivery = feed_.Beat(name, beat->kind, beat->window);
+    delivery = Watched(name, stream, [&] {
+      return feed_.Beat(name, beat->kind, beat->window);
+    });
   } else if (const auto* wait = std::get_if<protocol::WaitRequest>(&*request)) {
-    delivery = feed_.Wait(name, wait->timeout);
+    delivery =
+        Watched(name, stream, [&] { return feed_.Wait(name, wait->timeout); });
   } else {
     delivery = feed_.Read(name);
   }
@@ -163,6 +167,23 @@ bool Service::Answer(const std::string& name, std::string_view line,
   }
   stream.WriteLine(protocol::DeliveryJson(*delivery));
   return true;
+}
+
+// Service!Noticed: while the connection's thread waits, and so reads
+// nothing, a watcher disconnects the client when the peer hangs up, which
+// ends the wait at once (GuardHangUpWakes).
+std::optional<Feed::Delivery> Service::Watched(
+    const std::string& name, Stream& stream,
+    const std::function<std::optional<Feed::Delivery>()>& wait) {
+  std::thread watcher([&] {
+    if (stream.AwaitHangUp()) {
+      feed_.Disconnect(name);
+    }
+  });
+  std::optional<Feed::Delivery> delivery = wait();
+  stream.EndAwaitHangUp();
+  watcher.join();
+  return delivery;
 }
 
 // Service!Stop: refuses new connections (GuardRefuseWhenStopping), shuts
