@@ -234,7 +234,7 @@ and package the desktop tools.
 ```shell
 cmake -S . -B build-debian -G Ninja -DBUILD_TESTING=OFF \
   -DCMAKE_BUILD_TYPE=Release -DFACEPALM_LINUX_TRAY=ON
-cmake --build build-debian --target facepalm_menu gesture_replay_cli
+cmake --build build-debian --target facepalm_menu gesture_replay_cli calibrate_cli_tool
 cpack --config build-debian/CPackConfig.cmake -B build-debian/package
 ```
 
