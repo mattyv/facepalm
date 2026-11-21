@@ -257,7 +257,7 @@ QString DaemonPath() {
       return candidate;
     }
   }
-  return QString();
+  return {};
 }
 
 // The cameras facepalm-daemon's own `cameras` command lists (item 10 of
