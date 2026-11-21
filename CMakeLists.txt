@@ -172,7 +172,7 @@ install(TARGETS gesture_replay_cli calibrate_cli_tool RUNTIME DESTINATION ${CMAK
 install(FILES LICENSE THIRDPARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm COMPONENT Runtime)
 install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
   mcp/settings-launcher.js mcp/feeling-widget.js mcp/feeling-widget.html
-  mcp/package.json mcp/package-lock.json
+  mcp/feeling-elicitation.js mcp/package.json mcp/package-lock.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm/mcp COMPONENT MCP)
 
 if(FACEPALM_LINUX_TRAY)

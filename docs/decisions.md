@@ -5,6 +5,39 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: "Pick the feeling" asks through MCP elicitation where there is no card
+
+-   **Decision:** `ask_feeling` (`mcp/feeling-elicitation.js`) asks the same
+    "How were you feeling just then?" question as `show_feeling_card` (#61
+    item 5), through MCP elicitation instead of an inline widget, for a
+    host that supports elicitation but not MCP Apps, such as the Claude
+    Code terminal. It takes `id`, `feeling` and `feelings` exactly as
+    `wait_for_reaction` returns them, requests one form field (a `string`
+    enum of `feelings`, `enumNames` the same plain words the card's buttons
+    use, and `default` set to Facepalm's own read), and on an accepted
+    pick sends it on itself as `feel <id> <feeling>`, the same request
+    `tell_feeling` sends. A decline, a cancel, or a host that refuses to
+    elicit at all (including a pick outside the requested schema, which
+    the SDK's own validation of an "accept" response catches before this
+    tool sees it) is reported without an error and without sending
+    anything. The `/facepalm:feel` skill calls it when invoked with no
+    arguments, using the most recent beat's interpretation from the
+    conversation, rather than requiring the person to type an
+    interpretation ID.
+-   **Why:** #61 item 6 asks for the same question where a host cannot
+    render an inline card; MCP elicitation is the Claude Code terminal's
+    way of showing a person a form (supported since v2.1.76).
+-   **Rejected:** a tool that only returns the person's pick and leaves the
+    caller to call `tell_feeling` separately: `show_feeling_card`'s own
+    card sends `tell_feeling` itself, through its script, and this keeps
+    the two paths to the same place symmetric. Re-validating the picked
+    feeling against `feelings` after elicitInput returns, which this work
+    found unreachable: an accepted response outside the requested schema
+    throws from elicitInput itself, so a second check never saw a bad
+    value in any test that could reach it.
+-   **Evidence:** [#61](https://github.com/mattyv/facepalm/issues/61) item
+    6, [#36](https://github.com/mattyv/ai-pair/issues/36).
+
 ## 2026-11-21: "Pick the feeling" renders as an MCP Apps card, with a text fallback
 
 -   **Decision:** `show_feeling_card` (`mcp/feeling-widget.js`) shows the
