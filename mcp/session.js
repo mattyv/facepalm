@@ -5,10 +5,13 @@ const maxReplyBytes = 1024 * 1024;
 
 // One session owns one socket. Losing or cancelling it is terminal: reconnecting
 // would create a new feed cursor and could misattribute a consumed response.
+// Each session names itself, so several sessions showing one approved token
+// are separate clients of the service (#37).
 export class SocketSession {
-  constructor(path, name = `mcp-${randomUUID()}`) {
+  constructor(path, token) {
     this.path = path;
-    this.name = name;
+    this.name = `mcp-${randomUUID()}`;
+    this.token = token;
     this.tail = Promise.resolve();
     this.queued = 0;
     this.socket = undefined;
@@ -44,7 +47,7 @@ export class SocketSession {
     });
     socket.on('error', () => this.close());
     socket.on('close', () => this.close());
-    const hello = await this.exchange(`hello ${this.name}`, signal, 5000);
+    const hello = await this.exchange(this.token ? `hello ${this.name} ${this.token}` : `hello ${this.name}`, signal, 5000);
     if (hello?.ok !== true) { this.close(); throw new Error('hello failed'); }
   }
 

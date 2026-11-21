@@ -1,7 +1,6 @@
 #include "src/screen_context_reader.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -17,16 +16,13 @@ namespace {
 
 // As src/look_away_reader.cc's own PoseOf: `face`'s head pose, read as
 // ReactionFrom (src/reaction.cc) reads it, or nothing for a degenerate
-// transformation matrix (#44).
+// transformation matrix (#44, #85).
 std::optional<HeadRotation> PoseOf(const Face& face) {
   PoseMatrix pose{};
   std::ranges::copy(face.pose_column_major, pose.begin());
   const Rotation rotation = RotationFrom(pose);
-  for (const auto& row : rotation.rows) {
-    if (!std::ranges::all_of(
-            row, [](double value) { return std::isfinite(value); })) {
-      return std::nullopt;
-    }
+  if (!IsFiniteRotation(rotation)) {
+    return std::nullopt;
   }
   return HeadRotationFrom(rotation);
 }

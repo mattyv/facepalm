@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -11,8 +12,15 @@
 #include "src/feed.h"
 #include "src/feelings.h"
 
+// Each test stands for the specs/DaemonAdmission.tla property it is named
+// for.
+
 namespace facepalm {
 namespace {
+
+using ::testing::ElementsAre;
+using ::testing::Return;
+
 class MockFeed : public Feed {
  public:
   MOCK_METHOD(bool, Connect, (const std::string&), (override));
@@ -28,89 +36,107 @@ class MockFeed : public Feed {
   MOCK_METHOD(bool, Reset, (const std::string&), (override));
 };
 
-TEST(ApprovedFeedTest, OnlyApprovedClientCanSubscribeAndLeave) {
-  MockFeed inner;
-  std::vector<bool> changes;
-  ApprovedFeed feed(
-      inner, "secret", [&](bool joined) { changes.push_back(joined); },
-      [&](const std::string& name) { inner.Disconnect(name); });
-  EXPECT_FALSE(feed.Connect("wrong"));
-  EXPECT_TRUE(changes.empty());
-  EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
-  EXPECT_TRUE(feed.Connect("secret"));
-  EXPECT_CALL(inner, Disconnect("approved-1"));
-  feed.Disconnect("secret");
-  EXPECT_THAT(changes, testing::ElementsAre(true, false));
+class ApprovedFeedTest : public ::testing::Test {
+ protected:
+  ApprovedFeed Make() {
+    return {
+        inner_, [this](bool joined) { changes_.push_back(joined); },
+        [this](const std::string& session) { retired_.push_back(session); }};
+  }
+
+  MockFeed inner_;
+  std::vector<bool> changes_;
+  std::vector<std::string> retired_;
+};
+
+using SubscriptionMatchesTest = ApprovedFeedTest;
+
+TEST_F(SubscriptionMatchesTest, OnlyTheFirstJoinAndTheLastLeaveCount) {
+  ApprovedFeed feed = Make();
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  EXPECT_CALL(inner_, Connect("approved-2")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  ASSERT_TRUE(feed.Connect("code"));
+  EXPECT_THAT(changes_, ElementsAre(true));
+
+  feed.Disconnect("desktop");
+  EXPECT_THAT(changes_, ElementsAre(true));
+  feed.Disconnect("code");
+
+  EXPECT_THAT(changes_, ElementsAre(true, false));
+  EXPECT_THAT(retired_, ElementsAre("approved-1", "approved-2"));
 }
 
-TEST(ApprovedFeedTest, FailedAndDuplicateConnectionsDoNotSubscribe) {
-  MockFeed inner;
-  std::vector<bool> changes;
-  ApprovedFeed feed(
-      inner, "secret", [&](bool joined) { changes.push_back(joined); },
-      [&](const std::string& name) { inner.Disconnect(name); });
-  EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(false));
-  EXPECT_FALSE(feed.Connect("secret"));
-  feed.Disconnect("wrong");
-  EXPECT_TRUE(changes.empty());
+TEST_F(SubscriptionMatchesTest, AFailedOrDuplicateConnectDoesNotJoin) {
+  ApprovedFeed feed = Make();
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(false));
+  EXPECT_FALSE(feed.Connect("desktop"));
+  EXPECT_CALL(inner_, Connect("approved-2")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  EXPECT_FALSE(feed.Connect("desktop"));
+
+  EXPECT_THAT(changes_, ElementsAre(true));
 }
 
-// Mock expectations exercise each operation on the same admitted session.
+TEST_F(SubscriptionMatchesTest, DisconnectingAStrangerChangesNothing) {
+  ApprovedFeed feed = Make();
+  feed.Disconnect("nobody");
+
+  EXPECT_TRUE(changes_.empty());
+  EXPECT_TRUE(retired_.empty());
+}
+
+TEST_F(SubscriptionMatchesTest, AReconnectIsANewSession) {
+  ApprovedFeed feed = Make();
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  EXPECT_CALL(inner_, Connect("approved-2")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  feed.Disconnect("desktop");
+  ASSERT_TRUE(feed.Connect("desktop"));
+
+  EXPECT_THAT(changes_, ElementsAre(true, false, true));
+}
+
+// Mock expectations exercise each operation on each client's own session.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST(ApprovedFeedTest, OperationsUseOnlyTheAuthorizedFeedIdentity) {
-  MockFeed inner;
-  ApprovedFeed feed(
-      inner, "secret", [](bool) {},
-      [&](const std::string& name) { inner.Disconnect(name); });
-  EXPECT_FALSE(feed.Read("wrong"));
-  EXPECT_FALSE(feed.Wait("wrong", std::chrono::milliseconds(1)));
-  EXPECT_FALSE(feed.Feel("wrong", 1, Feeling::kAgreement));
-  EXPECT_FALSE(feed.Reset("wrong"));
+TEST_F(ApprovedFeedTest, EachClientUsesItsOwnSession) {
+  ApprovedFeed feed = Make();
+  EXPECT_FALSE(feed.Read("desktop"));
+  EXPECT_FALSE(feed.Wait("desktop", std::chrono::milliseconds(1)));
+  EXPECT_FALSE(feed.Feel("desktop", 1, Feeling::kAgreement));
+  EXPECT_FALSE(feed.Reset("desktop"));
   EXPECT_FALSE(
-      feed.Beat("wrong", BeatKind::kQuestion, std::chrono::milliseconds(1)));
-  EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
-  ASSERT_TRUE(feed.Connect("secret"));
-  EXPECT_CALL(inner, Read("approved-1"))
-      .WillOnce(testing::Return(Feed::Delivery{}));
-  EXPECT_TRUE(feed.Read("secret"));
-  EXPECT_CALL(inner, Wait("approved-1", std::chrono::milliseconds(4)))
-      .WillOnce(testing::Return(Feed::Delivery{}));
-  EXPECT_TRUE(feed.Wait("secret", std::chrono::milliseconds(4)));
-  EXPECT_CALL(inner, Feel("approved-1", 3, Feeling::kConfused))
-      .WillOnce(testing::Return(true));
-  EXPECT_TRUE(feed.Feel("secret", 3, Feeling::kConfused));
-  EXPECT_CALL(inner, Reset("approved-1")).WillOnce(testing::Return(true));
-  EXPECT_TRUE(feed.Reset("secret"));
-  EXPECT_CALL(inner, Beat("approved-1", BeatKind::kProposal,
-                          std::chrono::milliseconds(6)))
-      .WillOnce(testing::Return(Feed::Delivery{}));
+      feed.Beat("desktop", BeatKind::kQuestion, std::chrono::milliseconds(1)));
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  EXPECT_CALL(inner_, Connect("approved-2")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  ASSERT_TRUE(feed.Connect("code"));
+  EXPECT_CALL(inner_, Read("approved-2")).WillOnce(Return(Feed::Delivery{}));
+  EXPECT_TRUE(feed.Read("code"));
+  EXPECT_CALL(inner_, Wait("approved-1", std::chrono::milliseconds(4)))
+      .WillOnce(Return(Feed::Delivery{}));
+  EXPECT_TRUE(feed.Wait("desktop", std::chrono::milliseconds(4)));
+  EXPECT_CALL(inner_, Feel("approved-2", 3, Feeling::kConfused))
+      .WillOnce(Return(true));
+  EXPECT_TRUE(feed.Feel("code", 3, Feeling::kConfused));
+  EXPECT_CALL(inner_, Reset("approved-2")).WillOnce(Return(true));
+  EXPECT_TRUE(feed.Reset("code"));
+  EXPECT_CALL(inner_, Beat("approved-1", BeatKind::kProposal,
+                           std::chrono::milliseconds(6)))
+      .WillOnce(Return(Feed::Delivery{}));
   EXPECT_TRUE(
-      feed.Beat("secret", BeatKind::kProposal, std::chrono::milliseconds(6)));
-}
-TEST(ApprovedFeedTest, DuplicateApprovalAndIdleDisconnectDoNotRetire) {
-  MockFeed inner;
-  std::vector<bool> changes;
-  ApprovedFeed feed(
-      inner, "secret", [&](bool joined) { changes.push_back(joined); },
-      [&](const std::string& name) { inner.Disconnect(name); });
-  EXPECT_CALL(inner, Disconnect).Times(0);
-  feed.Disconnect("secret");
-  EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
-  ASSERT_TRUE(feed.Connect("secret"));
-  EXPECT_FALSE(feed.Connect("secret"));
-  EXPECT_THAT(changes, testing::ElementsAre(true));
+      feed.Beat("desktop", BeatKind::kProposal, std::chrono::milliseconds(6)));
 }
 
-TEST(ApprovedFeedTest, ARefusedFeelingOrResetIsReportedToTheClient) {
-  MockFeed inner;
-  ApprovedFeed feed(inner, "secret", [](bool) {}, [](const std::string&) {});
-  EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
-  ASSERT_TRUE(feed.Connect("secret"));
-  EXPECT_CALL(inner, Feel("approved-1", 8, Feeling::kUnknown))
-      .WillOnce(testing::Return(false));
-  EXPECT_FALSE(feed.Feel("secret", 8, Feeling::kUnknown));
-  EXPECT_CALL(inner, Reset("approved-1")).WillOnce(testing::Return(false));
-  EXPECT_FALSE(feed.Reset("secret"));
+TEST_F(ApprovedFeedTest, ARefusedFeelingOrResetIsReportedToTheClient) {
+  ApprovedFeed feed = Make();
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  EXPECT_CALL(inner_, Feel("approved-1", 8, Feeling::kUnknown))
+      .WillOnce(Return(false));
+  EXPECT_FALSE(feed.Feel("desktop", 8, Feeling::kUnknown));
+  EXPECT_CALL(inner_, Reset("approved-1")).WillOnce(Return(false));
+  EXPECT_FALSE(feed.Reset("desktop"));
 }
 
 }  // namespace

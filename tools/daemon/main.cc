@@ -9,33 +9,32 @@
 #include <dispatch/dispatch.h>
 #endif
 
-#include <chrono>
 #include <csignal>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <vector>
 
 #include "src/approved_feed.h"
 #include "src/camera_controller.h"
+#include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/config.h"
 #include "src/daemon_control.h"
-#include "src/expression_reader.h"
+#include "src/daemon_options.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
-#include "src/face_reader.h"
+#include "src/face_readers.h"
+#include "src/feed_clients.h"
 #include "src/frame_pipeline.h"
-#include "src/gesture_reader.h"
-#include "src/look_away.h"
-#include "src/look_away_reader.h"
 #include "src/screen_context.h"
 #include "src/screen_context_reader.h"
 #include "src/screen_context_reporter.h"
@@ -52,6 +51,7 @@
 #include "src/service.h"
 #include "src/session_camera.h"
 #include "src/unix_socket.h"
+#include "src/user_paths.h"
 
 namespace facepalm {
 namespace {
@@ -115,76 +115,12 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 }
 #endif
 
-// Forwards to Engine's own long-lived ScreenContextReader (#61 item 11):
-// MakeAnalyzers rebuilds `readers` on every camera open, but the pose it
-// caches, and FeedClients' access to it, both need to outlive any one
-// camera session.
-class ScreenContextReaderForwarder : public FaceReader {
- public:
-  explicit ScreenContextReaderForwarder(ScreenContextReader& target)
-      : target_(target) {}
-  void OnFace(const Face& face, int width, int height,
-              std::int64_t timestamp_ms,
-              std::vector<Reaction>& reactions) override {
-    target_.OnFace(face, width, height, timestamp_ms, reactions);
-  }
-  void OnNoFace() override { target_.OnNoFace(); }
-
- private:
-  ScreenContextReader& target_;
-};
-
-// Only interpreted gesture and expression events enter the feed. Each also
-// carries screen context (#61 item 11) when Config::screen_context_enabled:
-// `screen_source` is nullptr otherwise, and `pose_reader` goes unread.
-class FeedClients : public Clients {
- public:
-  FeedClients(ReactionFeed& feed, const Config& config,
-              ScreenContextReader& pose_reader, ScreenSource* screen_source)
-      : feed_(feed), pose_reader_(pose_reader) {
-    if (screen_source != nullptr) {
-      reporter_.emplace(
-          *screen_source,
-          GazeSettings{.other_screen_degrees =
-                           config.screen_context_other_screen_degrees,
-                       .away_degrees = config.looking_away_degrees},
-          config.screen_context_window_titles_enabled);
-    }
-  }
-  void Deliver(const ClientId& /*client*/, const Reaction& reaction) override {
-    constexpr std::string_view kGesture = R"({"gesture":")";
-    constexpr std::string_view kExpression = R"({"expression":")";
-    const std::string_view event(reaction);
-    const bool gesture = event.starts_with(kGesture);
-    const bool expression = event.starts_with(kExpression);
-    if ((!gesture && !expression) || !event.ends_with("\"}")) {
-      return;
-    }
-    const auto prefix = gesture ? kGesture : kExpression;
-    const std::string name(
-        event.substr(prefix.size(), event.size() - prefix.size() - 2));
-    const auto published =
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch());
-    std::optional<std::string> context;
-    if (reporter_) {
-      context =
-          reporter_->Json(pose_reader_.Pose(), pose_reader_.RestingPose());
-    }
-    feed_.React(std::string(gesture ? "Gesture: " : "Expression: ") + name,
-                reaction, published.count(), std::move(context));
-  }
-
- private:
-  ReactionFeed& feed_;
-  ScreenContextReader& pose_reader_;
-  std::optional<ScreenContextReporter> reporter_;
-};
-
-// The daemon owns all queues and resources until the stopped callback exits.
+// The daemon owns all queues and resources until DaemonControl exits. Its
+// methods only forward: the logic is in DaemonControl, which follows
+// specs/DaemonAdmission.tla, and in the sources it wires together.
 class Engine : public DaemonController, public DaemonPipeline {
  public:
-  Engine(std::unique_ptr<Listener> listener, std::string token,
+  Engine(std::unique_ptr<Listener> listener, Approvals& approvals,
          std::string model, Config config,
          std::unique_ptr<FeelingStore> feelings, Post control, Post camera,
          Post inference, [[maybe_unused]] std::string device = {})
@@ -200,21 +136,50 @@ class Engine : public DaemonController, public DaemonPipeline {
             .settle_ms = config.expressions_settle_ms,
             .spreads = config.expressions_spreads,
             .hold_ms = config.expressions_hold_ms}),
+        reporter_(
+            screen_source_
+                ? std::optional<ScreenContextReporter>(ScreenContextReporter(
+                      *screen_source_,
+                      GazeSettings{
+                          .other_screen_degrees =
+                              config.screen_context_other_screen_degrees,
+                          .away_degrees = config.looking_away_degrees},
+                      config.screen_context_window_titles_enabled))
+                : std::nullopt),
         feelings_(std::move(feelings)),
         feed_(kFeedCapacity, *feelings_),
-        clients_(feed_, config_, screen_context_reader_, screen_source_.get()),
+        clients_(
+            [this](std::string summary, std::string detail,
+                   std::int64_t published_ms,
+                   std::optional<std::string> context) {
+              feed_.React(std::move(summary), std::move(detail), published_ms,
+                          std::move(context));
+            },
+            UnixMilliseconds,
+            [this] {
+              return reporter_ ? std::make_optional(reporter_->Json(
+                                     screen_context_reader_.Pose(),
+                                     screen_context_reader_.RestingPose()))
+                               : std::nullopt;
+            }),
         approved_(
-            feed_, std::move(token),
+            feed_,
             [this](bool joined) {
               control_queue_([this, joined] { control_.Subscription(joined); });
             },
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
             }),
-        service_(std::move(listener), approved_),
+        service_(std::move(listener), approved_, approvals),
         control_(
             *this, *this, [this] { service_.Stop(); },
-            [this] { std::_Exit(failed_ ? 1 : 0); }),
+            [](bool failed) {
+              if (failed) {
+                std::fputs("facepalm-daemon: stopped after a failure\n",
+                           stderr);
+              }
+              std::_Exit(failed ? 1 : 0);
+            }),
 #ifdef __linux__
         capture_(
             std::move(device),
@@ -240,8 +205,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                       control_queue_([this] {
                         std::fprintf(stderr,
                                      "facepalm-daemon: model failure\n");
-                        failed_ = true;
-                        control_.Stop();
+                        control_.Fail();
                       });
                     }}) {
   }
@@ -252,16 +216,7 @@ class Engine : public DaemonController, public DaemonPipeline {
   void Leave() override { controller_.Leave("approved"); }
   void Revoke() override { controller_.RevokeConsent(); }
   void Opened() override { controller_.OnOpened(); }
-  void OpenFailed() override {
-    const bool opening =
-        controller_.CurrentState() == CameraController::State::kOpening;
-    controller_.OnOpenFailed();
-    if (opening) {
-      std::fprintf(stderr, "facepalm-daemon: camera could not open\n");
-      failed_ = true;
-      control_.Stop();
-    }
-  }
+  void OpenFailed() override { controller_.OnOpenFailed(); }
   void Closed() override { controller_.OnClosed(); }
   void DeviceLost() override { controller_.OnDeviceLost(); }
   void DeviceBack() override { controller_.OnDeviceBack(); }
@@ -279,51 +234,22 @@ class Engine : public DaemonController, public DaemonPipeline {
     if (!model) {
       return {};
     }
-    std::vector<std::unique_ptr<FaceReader>> readers;
-    if (config_.gestures_enabled) {
-      readers.push_back(std::make_unique<GestureReader>(
-          config_.gesture_confidence_threshold));
-    }
-    if (config_.expressions_enabled) {
-      readers.push_back(
-          std::make_unique<ExpressionReader>(ExpressionTracker::Settings{
-              .rise = config_.expressions_smallest_rise,
-              .pose_degrees = config_.expressions_pose_degrees,
-              .pose_range = config_.expressions_pose_range,
-              .settle_ms = config_.expressions_settle_ms,
-              .spreads = config_.expressions_spreads,
-              .hold_ms = config_.expressions_hold_ms}));
-    }
-    if (config_.looking_away_enabled) {
-      readers.push_back(std::make_unique<LookAwayReader>(
-          ExpressionTracker::Settings{
-              .rise = config_.expressions_smallest_rise,
-              .pose_degrees = config_.expressions_pose_degrees,
-              .pose_range = config_.expressions_pose_range,
-              .settle_ms = config_.expressions_settle_ms,
-              .spreads = config_.expressions_spreads,
-              .hold_ms = config_.expressions_hold_ms},
-          LookAwayDetector::Settings{.degrees = config_.looking_away_degrees,
-                                     .hold_ms = config_.looking_away_hold_ms}));
-    }
-    if (config_.screen_context_enabled) {
-      readers.push_back(std::make_unique<ScreenContextReaderForwarder>(
-          screen_context_reader_));
-    }
     FramePipeline::Analyzers analyzers;
-    analyzers.push_back(
-        std::make_unique<FaceAnalyzer>(std::move(model), std::move(readers)));
+    analyzers.push_back(std::make_unique<FaceAnalyzer>(
+        std::move(model),
+        MakeFaceReaders(config_,
+                        screen_source_ ? &screen_context_reader_ : nullptr)));
     return analyzers;
   }
 
-  bool failed_ = false;  // Control queue only.
   Post control_queue_;
   std::string model_;
   Config config_;
-  // Outlives any one camera session, unlike MakeAnalyzers' own readers
-  // (#61 item 11); screen_source_ is nullptr with screen_context disabled.
+  // Outlives any one camera session, unlike MakeFaceReaders' own readers
+  // (#61 item 11); nullptr/nullopt with screen_context disabled.
   std::unique_ptr<ScreenSource> screen_source_;
   ScreenContextReader screen_context_reader_;
+  std::optional<ScreenContextReporter> reporter_;
   std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
   ReactionFeed feed_;
   FeedClients clients_;
@@ -340,67 +266,61 @@ class Engine : public DaemonController, public DaemonPipeline {
   FramePipeline pipeline_;
 };
 
-struct Options {
-  bool consent = false;
-  std::string socket;
-  std::string model;
-  std::string token;
-  std::string config;
-  std::string feelings_file;
-};
-
-std::optional<Options> ParseOptions(int argc, char* const* argv) {
-  Options options;
-  for (int i = 1; i < argc; ++i) {
-    const std::string_view arg(argv[i]);
-    if (arg == "--consent" && !options.consent) {
-      options.consent = true;
-      continue;
+// Approves or revokes a client, for the approve and revoke commands.
+int ChangeApproval(const DaemonOptions& options) {
+  const std::unique_ptr<ApprovalsIo> io = PosixApprovalsIo();
+  ClientApprovals approvals(
+      options.clients,
+      [](const std::string& path) { return LoadClientToken(path); }, *io);
+  if (options.command == DaemonOptions::Command::kRevoke) {
+    if (!approvals.Revoke(options.client)) {
+      std::fprintf(stderr, "no approved client called %s\n",
+                   options.client.c_str());
+      return 1;
     }
-    if (i + 1 >= argc) {
-      return std::nullopt;
-    }
-    std::string* value = nullptr;
-    if (arg == "--socket") {
-      value = &options.socket;
-    } else if (arg == "--model") {
-      value = &options.model;
-    } else if (arg == "--client-token-file") {
-      value = &options.token;
-    } else if (arg == "--config") {
-      value = &options.config;
-    } else if (arg == "--feelings-file") {
-      value = &options.feelings_file;
-    }
-    if (value == nullptr || !value->empty()) {
-      return std::nullopt;
-    }
-    *value = argv[++i];
+    return 0;
   }
-  if (!options.consent || options.socket.empty() || options.model.empty() ||
-      options.token.empty()) {
-    return std::nullopt;
+  std::string error;
+  const std::optional<std::string> path =
+      approvals.Approve(options.client, error);
+  if (!path) {
+    std::fprintf(stderr, "cannot approve %s: %s\n", options.client.c_str(),
+                 error.c_str());
+    return 1;
   }
-  return options;
+  std::printf("%s\n", path->c_str());
+  return 0;
 }
+
 }  // namespace
 }  // namespace facepalm
 
 // The process reports startup failures, including allocation failures.
 // NOLINTNEXTLINE(bugprone-exception-escape,misc-const-correctness)
 int main(int argc, char** argv) {
-  const auto options = facepalm::ParseOptions(argc, argv);
+  const char* home = std::getenv("HOME");
+  const auto options = facepalm::ParseDaemonOptions(
+      std::span<const char* const>(argv + 1, argc - 1),
+      facepalm::PathsFor(home != nullptr ? home : "", facepalm::kThisPlatform));
   if (!options) {
-    std::fprintf(
-        stderr,
-        "usage: facepalm-daemon --consent --socket PATH --model PATH "
-        "--client-token-file PATH [--config PATH] [--feelings-file PATH]\n");
+    std::fputs(facepalm::kDaemonUsage.data(), stderr);
     return 2;
   }
-  const auto token = facepalm::LoadClientToken(options->token);
-  if (!token) {
-    std::fprintf(stderr, "invalid client token file\n");
-    return 2;
+  if (options->command != facepalm::DaemonOptions::Command::kRun) {
+    return facepalm::ChangeApproval(*options);
+  }
+  const std::unique_ptr<facepalm::ApprovalsIo> approvals_io =
+      facepalm::PosixApprovalsIo();
+  facepalm::ClientApprovals approvals(
+      options->clients,
+      [](const std::string& path) { return facepalm::LoadClientToken(path); },
+      *approvals_io);
+  const std::string socket_directory =
+      std::filesystem::path(options->socket).parent_path();
+  if (!socket_directory.empty() &&
+      !approvals_io->MakePrivateDirectory(socket_directory)) {
+    std::fprintf(stderr, "cannot make %s\n", socket_directory.c_str());
+    return 1;
   }
   std::ifstream const model_file(options->model, std::ios::binary);
   if (!model_file) {
@@ -457,8 +377,8 @@ int main(int argc, char** argv) {
   facepalm::SerialQueue camera;
   facepalm::SerialQueue inference;
   const char* device = std::getenv("FACEPALM_CAMERA_DEVICE");
-  facepalm::Engine engine(std::move(listener), *token, options->model, config,
-                          std::move(feelings), control.Poster(),
+  facepalm::Engine engine(std::move(listener), approvals, options->model,
+                          config, std::move(feelings), control.Poster(),
                           camera.Poster(), inference.Poster(),
                           device != nullptr ? device : "/dev/video0");
   engine.Start();
@@ -476,13 +396,13 @@ int main(int argc, char** argv) {
 #else
   dispatch_queue_t control =
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);
-  auto* engine =
-      new facepalm::Engine(std::move(listener), *token, options->model, config,
-                           std::move(feelings), facepalm::OnQueue(control),
-                           facepalm::OnQueue(dispatch_queue_create(
-                               "facepalm.camera", DISPATCH_QUEUE_SERIAL)),
-                           facepalm::OnQueue(dispatch_queue_create(
-                               "facepalm.inference", DISPATCH_QUEUE_SERIAL)));
+  auto* engine = new facepalm::Engine(
+      std::move(listener), approvals, options->model, config,
+      std::move(feelings), facepalm::OnQueue(control),
+      facepalm::OnQueue(
+          dispatch_queue_create("facepalm.camera", DISPATCH_QUEUE_SERIAL)),
+      facepalm::OnQueue(
+          dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)));
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
     dispatch_source_t source =

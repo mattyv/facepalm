@@ -7,15 +7,17 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
-import { chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { SocketSession } from '../session.js';
 
-async function fixture(handler, hello = '{"ok":true}\n') {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
-  const address = path.join(dir, 'service.sock');
+async function fixture(handler, hello = '{"ok":true}\n', address = undefined) {
+  const dir = address ? undefined : await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
+  address ??= path.join(dir, 'service.sock');
   const connections = [];
   const server = net.createServer((socket) => {
     connections.push(socket);
+    // A client killed mid-test resets its connection; that is not a failure.
+    socket.on('error', () => {});
     socket.setEncoding('utf8');
     let buffer = '';
     socket.on('data', (chunk) => {
@@ -33,7 +35,7 @@ async function fixture(handler, hello = '{"ok":true}\n') {
   return { address, connections, async close() {
     for (const socket of connections) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
-    await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true });
   } };
 }
 
@@ -159,7 +161,7 @@ for (const reason of ['EOF', 'oversized input']) {
       entered();
       if (reason !== 'EOF') socket.write('{"readings":[],"missed":0}\n');
     }, (line) => {
-      assert.equal(line, `hello ${token}`);
+      assert.match(line, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
       return '{"ok":true}\n';
     });
     const tokenPath = path.join(path.dirname(f.address), 'approved-token');
@@ -197,10 +199,64 @@ for (const reason of ['EOF', 'oversized input']) {
   });
 }
 
-test('stdio entry point requires a socket path', { timeout: 5000 }, async () => {
+test('stdio entry point refuses a wrong number of arguments', { timeout: 5000 }, async () => {
   const main = fileURLToPath(new URL('../main.js', import.meta.url));
-  const child = spawn(process.execPath, [main]);
+  const child = spawn(process.execPath, [main, 'a', 'b']);
   assert.deepEqual(await once(child, 'exit'), [1, null]);
+});
+
+// The per-user directory under `home`, as src/user_paths.cc has it.
+function userDirectory(home) {
+  return process.platform === 'darwin'
+    ? path.join(home, 'Library', 'Application Support', 'Facepalm')
+    : path.join(home, '.local', 'state', 'facepalm');
+}
+
+test('stdio entry point without arguments needs its approved token', { timeout: 5000 }, async () => {
+  // /tmp keeps the socket path under the 104 bytes macOS allows.
+  const home = await mkdtemp('/tmp/fp-home-');
+  try {
+    const main = fileURLToPath(new URL('../main.js', import.meta.url));
+    const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
+    const stderr = [];
+    child.stderr.on('data', (data) => stderr.push(data));
+    assert.deepEqual(await once(child, 'exit'), [1, null]);
+    assert.match(Buffer.concat(stderr).toString(), /turn Facepalm on from its menu/);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('stdio entry point without arguments uses the per-user socket and token', { timeout: 7000 }, async () => {
+  const home = await mkdtemp('/tmp/fp-home-');
+  const directory = userDirectory(home);
+  await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
+  const token = 'b'.repeat(64);
+  await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
+  let greeted;
+  const hello = new Promise((resolve) => { greeted = resolve; });
+  const f = await fixture(() => {}, (line) => {
+    greeted(line);
+    return '{"ok":true}\n';
+  }, path.join(directory, 'service.sock'));
+  const main = fileURLToPath(new URL('../main.js', import.meta.url));
+  const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
+  const exited = once(child, 'exit');
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
+    } }) + '\n');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+      name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
+    } }) + '\n');
+    assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
+  } finally {
+    child.kill();
+    await exited;
+    await f.close();
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('stdio entry point rejects invalid or nonprivate token files', { timeout: 5000 }, async () => {

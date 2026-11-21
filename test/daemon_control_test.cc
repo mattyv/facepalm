@@ -1,14 +1,22 @@
 #include "src/daemon_control.h"
 
 #include <functional>
-#include <string>
+#include <optional>
 #include <utility>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
+// Each test stands for the specs/DaemonAdmission.tla property it is named
+// for.
+
 namespace facepalm {
 namespace {
+
+using ::testing::Eq;
+using ::testing::Return;
+using State = CameraController::State;
+
 class MockDaemonController : public DaemonController {
  public:
   MOCK_METHOD(void, Subscribe, (), (override));
@@ -27,223 +35,204 @@ class MockDaemonPipeline : public DaemonPipeline {
   MOCK_METHOD(void, Close, (std::function<void()>), (override));
 };
 
-TEST(DaemonControlTest, CameraCloseWaitsForModelRetirementBeforeReopen) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  std::function<void()> retired;
-  EXPECT_CALL(pipeline, Close).WillOnce([&](auto done) {
-    retired = std::move(done);
-  });
-  daemon.OnClosed();
-  EXPECT_CALL(controller, Closed);
-  retired();
+class DaemonControlTest : public ::testing::Test {
+ protected:
+  // Holds the pipeline's next retirement until the test runs it.
+  void ExpectRetirement() {
+    EXPECT_CALL(pipeline_, Close).WillOnce([this](std::function<void()> done) {
+      retired_ = std::move(done);
+    });
+  }
+
+  MockDaemonController controller_;
+  MockDaemonPipeline pipeline_;
+  bool service_stopped_ = false;
+  std::optional<bool> exited_;  // Whether the daemon exited as a failure.
+  DaemonControl daemon_{controller_, pipeline_,
+                        [this] { service_stopped_ = true; },
+                        [this](bool failed) { exited_ = failed; }};
+  std::function<void()> retired_;
+};
+
+using ReopenAfterRetireTest = DaemonControlTest;
+
+TEST_F(ReopenAfterRetireTest, AClosedCameraCountsOnlyOnceTheModelIsGone) {
+  ExpectRetirement();
+  daemon_.OnClosed();
+  EXPECT_CALL(controller_, Closed);
+  retired_();
 }
 
-TEST(DaemonControlTest, StopRevokesConsentAndWaitsForPhysicalAndModelClose) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  bool service_stopped = false;
-  bool stopped = false;
-  DaemonControl daemon(
-      controller, pipeline, [&] { service_stopped = true; },
-      [&] { stopped = true; });
-  EXPECT_CALL(controller, Revoke);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosing));
-  daemon.Stop();
-  EXPECT_TRUE(service_stopped);
-  EXPECT_FALSE(stopped);
-  std::function<void()> retired;
-  EXPECT_CALL(pipeline, Close).WillOnce([&](auto done) {
-    retired = std::move(done);
-  });
-  daemon.OnClosed();
-  EXPECT_FALSE(stopped);
-  EXPECT_CALL(controller, Closed);
-  retired();
-  EXPECT_TRUE(stopped);
+TEST_F(ReopenAfterRetireTest, ADeviceComingBackWaitsForTheRetirement) {
+  EXPECT_CALL(controller_, DeviceLost);
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosed));
+  ExpectRetirement();
+  daemon_.OnDeviceLost();
+  EXPECT_CALL(controller_, DeviceBack).Times(0);
+  daemon_.OnDeviceBack();
+  testing::Mock::VerifyAndClearExpectations(&controller_);
+
+  EXPECT_CALL(controller_, DeviceBack);
+  retired_();
+  EXPECT_CALL(controller_, DeviceBack);
+  daemon_.OnDeviceBack();
 }
 
-TEST(DaemonControlTest, NoLateOpenCreatesModelAfterConsentIsRevoked) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, Opened);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosing));
-  daemon.OnOpened();
-}
-TEST(DaemonControlTest, AFailedOpenDuringShutdownCanFinishRetirement) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  bool stopped = false;
-  DaemonControl daemon(controller, pipeline, [] {}, [&] { stopped = true; });
-  EXPECT_CALL(controller, Revoke);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosing));
-  daemon.Stop();
-  EXPECT_CALL(controller, OpenFailed);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosed));
-  std::function<void()> retired;
-  EXPECT_CALL(pipeline, Close).WillOnce([&](auto done) {
-    retired = std::move(done);
-  });
-  daemon.OnOpenFailed();
-  EXPECT_FALSE(stopped);
-  retired();
-  EXPECT_TRUE(stopped);
+TEST_F(ReopenAfterRetireTest, OnlyTheOpeningCameraCreatesAModel) {
+  EXPECT_CALL(controller_, State)
+      .WillOnce(Return(State::kOpening))
+      .WillOnce(Return(State::kOpen));
+  EXPECT_CALL(controller_, Opened);
+  EXPECT_CALL(pipeline_, Open);
+  daemon_.OnOpened();
+
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kOpen));
+  EXPECT_CALL(controller_, Opened);
+  EXPECT_CALL(pipeline_, Open).Times(0);
+  daemon_.OnOpened();
 }
 
-TEST(DaemonControlTest, DuplicateOpenedDoesNotCreateAnotherModel) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kOpen));
-  EXPECT_CALL(controller, Opened);
-  EXPECT_CALL(pipeline, Open).Times(0);
-  daemon.OnOpened();
+TEST_F(ReopenAfterRetireTest, AnOpenedAfterClosingBeganCreatesNoModel) {
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosing));
+  EXPECT_CALL(controller_, Opened);
+  EXPECT_CALL(pipeline_, Open).Times(0);
+  daemon_.OnOpened();
 }
 
-TEST(DaemonControlTest, SubscriptionsAndOpeningFollowTheController) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, Subscribe);
-  daemon.Subscription(true);
-  EXPECT_CALL(controller, Leave);
-  daemon.Subscription(false);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kOpening))
-      .WillOnce(testing::Return(CameraController::State::kOpen));
-  EXPECT_CALL(controller, Opened);
-  EXPECT_CALL(pipeline, Open);
-  daemon.OnOpened();
+TEST_F(ReopenAfterRetireTest, AnOpeningThatClosesBeforeOpenCreatesNoModel) {
+  EXPECT_CALL(controller_, State)
+      .WillOnce(Return(State::kOpening))
+      .WillOnce(Return(State::kClosing));
+  EXPECT_CALL(controller_, Opened);
+  EXPECT_CALL(pipeline_, Open).Times(0);
+  daemon_.OnOpened();
 }
 
-TEST(DaemonControlTest, DeviceReturnWaitsForRetirement) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, DeviceLost);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosed));
-  std::function<void()> retired;
-  EXPECT_CALL(pipeline, Close).WillOnce([&](auto done) {
-    retired = std::move(done);
-  });
-  daemon.OnDeviceLost();
-  daemon.OnDeviceBack();
-  EXPECT_CALL(controller, DeviceBack);
-  retired();
-  EXPECT_CALL(controller, DeviceBack);
-  daemon.OnDeviceBack();
+TEST_F(ReopenAfterRetireTest, ADeviceLostWhileClosingWaitsForTheClose) {
+  EXPECT_CALL(controller_, DeviceLost);
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosing));
+  EXPECT_CALL(pipeline_, Close).Times(0);
+  daemon_.OnDeviceLost();
 }
 
-TEST(DaemonControlTest, StopWhileIdleAndRepeatedStop) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  bool stopped = false;
-  DaemonControl daemon(controller, pipeline, [] {}, [&] { stopped = true; });
-  EXPECT_CALL(controller, Revoke).Times(1);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosed));
-  std::function<void()> retired;
-  EXPECT_CALL(pipeline, Close).WillOnce([&](auto done) {
-    retired = std::move(done);
-  });
-  daemon.Stop();
-  daemon.Stop();
-  daemon.Subscription(true);
-  daemon.OnDeviceBack();
-  retired();
-  EXPECT_TRUE(stopped);
+using ExitCleanTest = DaemonControlTest;
+
+TEST_F(ExitCleanTest, OneRetirementAtATime) {
+  EXPECT_CALL(controller_, DeviceLost);
+  EXPECT_CALL(controller_, State).WillRepeatedly(Return(State::kClosed));
+  ExpectRetirement();
+  daemon_.OnDeviceLost();
+  daemon_.OnClosed();
+  EXPECT_CALL(controller_, Revoke);
+  daemon_.Stop();
+
+  retired_();
+
+  EXPECT_THAT(exited_, Eq(false));
 }
 
-TEST(DaemonControlTest, DeviceLossDuringClosingWaitsForClosedReport) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, DeviceLost);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosing));
-  EXPECT_CALL(pipeline, Close).Times(0);
-  daemon.OnDeviceLost();
+TEST_F(ExitCleanTest, StoppingWaitsForTheCameraAndTheModel) {
+  EXPECT_CALL(controller_, Revoke);
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosing));
+  daemon_.Stop();
+  EXPECT_TRUE(service_stopped_);
+  ExpectRetirement();
+  daemon_.OnClosed();
+  EXPECT_THAT(exited_, Eq(std::nullopt));
+
+  EXPECT_CALL(controller_, Closed);
+  retired_();
+
+  EXPECT_THAT(exited_, Eq(false));
 }
 
-TEST(DaemonControlTest, DeferredRetirementIgnoresDuplicateCloseAndStop) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  bool stopped = false;
-  DaemonControl daemon(controller, pipeline, [] {}, [&] { stopped = true; });
-  EXPECT_CALL(controller, DeviceLost);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosed))
-      .WillOnce(testing::Return(CameraController::State::kClosed));
-  std::function<void()> retired;
-  EXPECT_CALL(pipeline, Close).WillOnce([&](auto done) {
-    retired = std::move(done);
-  });
-  daemon.OnDeviceLost();
-  daemon.OnClosed();
-  EXPECT_CALL(controller, Revoke);
-  daemon.Stop();
-  retired();
-  EXPECT_TRUE(stopped);
-  daemon.OnDeviceBack();
+using StopEndsTest = DaemonControlTest;
+
+TEST_F(StopEndsTest, StoppingWithTheCameraClosedRetiresAtOnce) {
+  EXPECT_CALL(controller_, Revoke).Times(1);
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosed));
+  ExpectRetirement();
+  daemon_.Stop();
+  daemon_.Stop();
+  daemon_.Subscription(true);
+  daemon_.OnDeviceBack();
+
+  retired_();
+
+  EXPECT_THAT(exited_, Eq(false));
 }
 
-TEST(DaemonControlTest, OpenFailedOutsideShutdownDoesNotRetire) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, OpenFailed);
-  daemon.OnOpenFailed();
+TEST_F(StopEndsTest, AFailedModelStopsTheDaemonAsAFailure) {
+  EXPECT_CALL(controller_, Revoke);
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosed));
+  ExpectRetirement();
+  daemon_.Fail();
+
+  retired_();
+
+  EXPECT_THAT(exited_, Eq(true));
 }
 
-TEST(DaemonControlTest, OpenFailedWhileRetirementRunsDoesNotRetireTwice) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, Revoke);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosed));
-  std::function<void()> retired;
-  EXPECT_CALL(pipeline, Close).WillOnce([&](auto done) {
-    retired = std::move(done);
-  });
-  daemon.Stop();
-  EXPECT_CALL(controller, OpenFailed);
-  daemon.OnOpenFailed();
-  retired();
+TEST_F(StopEndsTest, ACameraThatFailsToOpenStopsTheDaemonAsAFailure) {
+  EXPECT_CALL(controller_, State)
+      .WillOnce(Return(State::kOpening))
+      .WillOnce(Return(State::kClosed));
+  EXPECT_CALL(controller_, OpenFailed);
+  EXPECT_CALL(controller_, Revoke);
+  ExpectRetirement();
+  daemon_.OnOpenFailed();
+  EXPECT_TRUE(service_stopped_);
+
+  retired_();
+
+  EXPECT_THAT(exited_, Eq(true));
 }
 
-TEST(DaemonControlTest, FailureWhilePhysicalClosePendingWaitsForClose) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, Revoke);
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kClosing))
-      .WillOnce(testing::Return(CameraController::State::kClosing));
-  daemon.Stop();
-  EXPECT_CALL(controller, OpenFailed);
-  EXPECT_CALL(pipeline, Close).Times(0);
-  daemon.OnOpenFailed();
+TEST_F(StopEndsTest, AFailedOpenReportedAfterClosingBeganIsIgnored) {
+  EXPECT_CALL(controller_, Revoke);
+  EXPECT_CALL(controller_, State)
+      .WillOnce(Return(State::kClosing))
+      .WillOnce(Return(State::kClosing));
+  daemon_.Stop();
+  EXPECT_CALL(controller_, OpenFailed);
+  EXPECT_CALL(pipeline_, Close).Times(0);
+  daemon_.OnOpenFailed();
+  EXPECT_THAT(exited_, Eq(std::nullopt));
+
+  ExpectRetirement();
+  daemon_.OnClosed();
+  EXPECT_CALL(controller_, Closed);
+  retired_();
+
+  EXPECT_THAT(exited_, Eq(false));
 }
 
-TEST(DaemonControlTest, RejectedOpenDoesNotCreateModel) {
-  MockDaemonController controller;
-  MockDaemonPipeline pipeline;
-  DaemonControl daemon(controller, pipeline, [] {}, [] {});
-  EXPECT_CALL(controller, State)
-      .WillOnce(testing::Return(CameraController::State::kOpening))
-      .WillOnce(testing::Return(CameraController::State::kClosing));
-  EXPECT_CALL(controller, Opened);
-  EXPECT_CALL(pipeline, Open).Times(0);
-  daemon.OnOpened();
+using SubscriptionMatchesTest = DaemonControlTest;
+
+TEST_F(SubscriptionMatchesTest, SubscriptionsFollowTheFeed) {
+  EXPECT_CALL(controller_, Subscribe);
+  daemon_.Subscription(true);
+  EXPECT_CALL(controller_, Leave);
+  daemon_.Subscription(false);
+}
+
+TEST_F(SubscriptionMatchesTest, ChangesAreIgnoredOnceStopping) {
+  EXPECT_CALL(controller_, Revoke);
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosing));
+  daemon_.Stop();
+  EXPECT_CALL(controller_, Subscribe).Times(0);
+  EXPECT_CALL(controller_, Leave).Times(0);
+  EXPECT_CALL(controller_, DeviceBack).Times(0);
+  daemon_.Subscription(true);
+  daemon_.Subscription(false);
+  daemon_.OnDeviceBack();
+}
+
+using JoinOpensTest = DaemonControlTest;
+
+TEST_F(JoinOpensTest, ADeviceComingBackIsLetIn) {
+  EXPECT_CALL(controller_, DeviceBack);
+  daemon_.OnDeviceBack();
 }
 
 }  // namespace

@@ -41,6 +41,16 @@ TEST(ParseTest, ReadsHello) {
 
   ASSERT_TRUE(std::holds_alternative<Hello>(request));
   EXPECT_THAT(std::get<Hello>(request).name, Eq("claude-code.1_a"));
+  EXPECT_THAT(std::get<Hello>(request).token, Eq(""));
+}
+
+TEST(ParseTest, ReadsHelloWithAToken) {
+  const std::string token(64, 'f');
+  const Request request = Parsed("hello mcp-1 " + token);
+
+  ASSERT_TRUE(std::holds_alternative<Hello>(request));
+  EXPECT_THAT(std::get<Hello>(request).name, Eq("mcp-1"));
+  EXPECT_THAT(std::get<Hello>(request).token, Eq(token));
 }
 
 TEST(ParseTest, ReadsRead) {
@@ -102,7 +112,7 @@ TEST(ParseTest, RefusesAnUnknownRequest) {
 
 TEST(ParseTest, RefusesABadName) {
   EXPECT_THAT(Refused("hello"), Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
-  EXPECT_THAT(Refused("hello two words"),
+  EXPECT_THAT(Refused("hello three more words"),
               Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
   EXPECT_THAT(Refused("hello " + std::string(65, 'a')),
               Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
@@ -112,6 +122,13 @@ TEST(ParseTest, RefusesABadName) {
   for (const char* line : {"hello ", "hello a{b", "hello A[B"}) {
     EXPECT_THAT(Refused(line), Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
   }
+}
+
+TEST(ParseTest, RefusesABadToken) {
+  EXPECT_THAT(Refused("hello name " + std::string(65, 'a')),
+              Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
+  EXPECT_THAT(Refused("hello name a/b"),
+              Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
 }
 
 TEST(ParseTest, RefusesABadWait) {

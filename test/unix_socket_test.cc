@@ -1,6 +1,7 @@
 #include "src/unix_socket.h"
 
 #include <pthread.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -120,6 +121,89 @@ TEST_F(UnixSocketTest, AHangUpEndsReadLine) {
   stream->WriteLine("to no one");  // Neither raises SIGPIPE nor blocks.
 }
 
+// Service!Noticed's watcher, on a real socket (specs/Service.tla's
+// HangUpEnds).
+TEST_F(UnixSocketTest, AHangUpEndsAnAwaitInAnotherThread) {
+  auto listener = Listen();
+  const int client = Dial(path_);
+  auto stream = listener->Accept();
+  auto hung =
+      std::async(std::launch::async, [&] { return stream->AwaitHangUp(); });
+  ASSERT_THAT(hung.wait_for(std::chrono::milliseconds(50)),
+              Eq(std::future_status::timeout));
+
+  close(client);
+
+  ASSERT_THAT(hung.wait_for(std::chrono::seconds(5)),
+              Eq(std::future_status::ready));
+  EXPECT_TRUE(hung.get());
+  stream->EndAwaitHangUp();
+}
+
+TEST_F(UnixSocketTest, EndingAnAwaitReturnsFalseAndTheNextOneWatchesAgain) {
+  auto listener = Listen();
+  const int client = Dial(path_);
+  auto stream = listener->Accept();
+  auto first =
+      std::async(std::launch::async, [&] { return stream->AwaitHangUp(); });
+  ASSERT_THAT(first.wait_for(std::chrono::milliseconds(50)),
+              Eq(std::future_status::timeout));
+  stream->EndAwaitHangUp();
+  ASSERT_THAT(first.wait_for(std::chrono::seconds(5)),
+              Eq(std::future_status::ready));
+  EXPECT_FALSE(first.get());
+
+  auto second =
+      std::async(std::launch::async, [&] { return stream->AwaitHangUp(); });
+  ASSERT_THAT(second.wait_for(std::chrono::milliseconds(50)),
+              Eq(std::future_status::timeout));
+  close(client);
+  ASSERT_THAT(second.wait_for(std::chrono::seconds(5)),
+              Eq(std::future_status::ready));
+  EXPECT_TRUE(second.get());
+  stream->EndAwaitHangUp();
+}
+
+TEST_F(UnixSocketTest, AnEndBeforeTheAwaitStartsEndsIt) {
+  auto listener = Listen();
+  const int client = Dial(path_);
+  auto stream = listener->Accept();
+
+  stream->EndAwaitHangUp();
+
+  EXPECT_FALSE(stream->AwaitHangUp());
+  close(client);
+}
+
+TEST_F(UnixSocketTest, ALineArrivingEndsAnAwaitAndIsStillRead) {
+  auto listener = Listen();
+  const int client = Dial(path_);
+  auto stream = listener->Accept();
+  Send(client, "read\n");
+
+  EXPECT_FALSE(stream->AwaitHangUp());
+  stream->EndAwaitHangUp();
+  EXPECT_THAT(stream->ReadLine(), Eq("read"));
+  close(client);
+}
+
+TEST(UnixStreamTest, WithoutAWakePipeNothingIsWatched) {
+  std::array<int, 2> pair{-1, -1};
+  ASSERT_THAT(socketpair(AF_UNIX, SOCK_STREAM, 0, pair.data()), Eq(0));
+  rlimit open_files{};
+  ASSERT_THAT(getrlimit(RLIMIT_NOFILE, &open_files), Eq(0));
+  // With no descriptor free under the limit, the stream's pipe fails.
+  rlimit none_free = open_files;
+  none_free.rlim_cur = 3;
+  ASSERT_THAT(setrlimit(RLIMIT_NOFILE, &none_free), Eq(0));
+  auto stream = std::make_unique<UnixStream>(pair[0]);
+  ASSERT_THAT(setrlimit(RLIMIT_NOFILE, &open_files), Eq(0));
+
+  EXPECT_FALSE(stream->AwaitHangUp());
+  stream->EndAwaitHangUp();
+  close(pair[1]);
+}
+
 TEST_F(UnixSocketTest, ShutdownEndsAReadLineInAnotherThread) {
   auto listener = Listen();
   const int client = Dial(path_);
@@ -194,6 +278,35 @@ TEST_F(UnixSocketTest, ASignalDoesNotKeepCloseFromEndingAnAccept) {
     pthread_kill(thread, SIGUSR1);  // Unstick the thread, so the test ends.
   }
   EXPECT_THAT(accepted.get(), IsNull());
+  ASSERT_THAT(sigaction(SIGUSR1, &before, nullptr), Eq(0));
+}
+
+TEST_F(UnixSocketTest, ASignalDoesNotKeepAHangUpFromEndingAnAwait) {
+  struct sigaction action{};
+  action.sa_handler = [](int) {};  // No SA_RESTART: poll fails with EINTR.
+  struct sigaction before{};
+  ASSERT_THAT(sigaction(SIGUSR1, &action, &before), Eq(0));
+  auto listener = Listen();
+  const int client = Dial(path_);
+  auto stream = listener->Accept();
+  std::promise<pthread_t> awaiting;
+  auto hung = std::async(std::launch::async, [&] {
+    awaiting.set_value(pthread_self());
+    return stream->AwaitHangUp();
+  });
+  const pthread_t thread = awaiting.get_future().get();
+  std::this_thread::sleep_for(kSettle);  // Let the thread reach its poll.
+  ASSERT_THAT(pthread_kill(thread, SIGUSR1), Eq(0));
+  std::this_thread::sleep_for(kSettle);  // Let the signal land first.
+
+  close(client);
+
+  if (hung.wait_for(kPrompt) != std::future_status::ready) {
+    ADD_FAILURE() << "A hang-up left AwaitHangUp blocked";
+    stream->EndAwaitHangUp();  // Unstick the thread, so the test ends.
+  }
+  EXPECT_TRUE(hung.get());
+  stream->EndAwaitHangUp();
   ASSERT_THAT(sigaction(SIGUSR1, &before, nullptr), Eq(0));
 }
 
