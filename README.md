@@ -136,6 +136,11 @@ bash scripts/coverage.sh          # Each source's own tests, against its floors.
 CXX=clang++ cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
 cmake --build build-sanitizers && ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
+# Data races, in a build of its own: ThreadSanitizer cannot share one with
+# AddressSanitizer. Clang on macOS runs it too.
+CXX=clang++ cmake -S . -B build-tsan -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer"
+cmake --build build-tsan && TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build-tsan --output-on-failure --no-tests=error
 bats scripts/test specs/test tools/fixtures/test  # Tests for the scripts.
 bash scripts/check_bats.sh        # Every bats assertion ends in || false.
 # On Linux with kcov: every shell script's lines, at 100 percent.

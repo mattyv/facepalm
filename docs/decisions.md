@@ -5,6 +5,23 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Run the native tests under ThreadSanitizer too
+
+-   **Decision:** a CI job of its own, on Linux, builds the native CTest suite
+    with `-fsanitize=thread` and fails on the first data race it reports.
+    It sets `vm.mmap_rnd_bits=28` first, since ThreadSanitizer does not start
+    under the 32 bits of address space randomization newer kernels use.
+-   **Why:** the service, the feed and the client gate run on threads, and
+    AddressSanitizer and UndefinedBehaviorSanitizer find no data races. With
+    the lock around `connection.done = true` in `Service::Serve` removed,
+    `service_test` failed under ThreadSanitizer with a data race against
+    `AcceptAll`, three runs out of three; with it, the suite is clean.
+-   **Rejected:** adding the flag to the existing sanitizers job, which
+    Clang refuses: ThreadSanitizer cannot be combined with AddressSanitizer.
+-   **Cost:** as with the other sanitizers, only threads the tests start are
+    checked, and only on Linux; the MediaPipe shim is not in the build.
+    Evidence: [#66](https://github.com/mattyv/facepalm/issues/66).
+
 ## 2026-11-21: Read a reaction as a feeling when a client marks a beat
 
 A client that has just asked a question or made a proposal sends
