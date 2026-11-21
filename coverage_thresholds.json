@@ -76,6 +76,13 @@
       "functions": 100
     }
   },
+  "src/gesture_replay.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/head_pose_reader.cc": {
     "unit": {
       "lines": 100,
@@ -112,6 +119,27 @@
     }
   },
   "src/look_away_reader.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/screen_context.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/screen_context_reporter.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/screen_context_reader.cc": {
     "unit": {
       "lines": 100,
       "branches": 100,
@@ -273,6 +301,67 @@
     }
   },
   "src/feeling_store.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/linux/mediapipe_c_shim.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/linux/v4l2_session.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "scripts/fetch_mediapipe_c.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
+  "src/client_approvals.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/daemon_options.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/feed_clients.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/face_readers.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/user_paths.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/user_service.cc": {
     "unit": {
       "lines": 100,
       "branches": 100,

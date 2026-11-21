@@ -7,17 +7,19 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
-import { chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 
 const main = fileURLToPath(new URL('../main.js', import.meta.url));
 
 // Stands in for the native service: a Unix socket main.js connects to, so
 // these tests exercise main.js's own CLI entry point (argument parsing, the
-// client token file, and stdio transport wiring) as a real child process,
-// not session.js, which has its own test file.
-async function fixture(handler, hello = '{"ok":true}\n') {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
-  const address = path.join(dir, 'service.sock');
+// per-user socket and token, the client token file, and stdio transport
+// wiring) as a real child process, not session.js, which has its own test
+// file. address lets a test put the service where main.js's own per-user
+// path lookup (no arguments) expects to find it.
+async function fixture(handler, hello = '{"ok":true}\n', address) {
+  const dir = address ? undefined : await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
+  address ??= path.join(dir, 'service.sock');
   const connections = [];
   const server = net.createServer((socket) => {
     connections.push(socket);
@@ -38,8 +40,15 @@ async function fixture(handler, hello = '{"ok":true}\n') {
   return { address, connections, async close() {
     for (const socket of connections) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
-    await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true });
   } };
+}
+
+// The per-user directory under `home`, as src/user_paths.cc has it.
+function userDirectory(home) {
+  return process.platform === 'darwin'
+    ? path.join(home, 'Library', 'Application Support', 'Facepalm')
+    : path.join(home, '.local', 'state', 'facepalm');
 }
 
 for (const reason of ['EOF', 'oversized input']) {
@@ -51,7 +60,7 @@ for (const reason of ['EOF', 'oversized input']) {
       entered();
       if (reason !== 'EOF') socket.write('{"readings":[],"missed":0}\n');
     }, (line) => {
-      assert.equal(line, `hello ${token}`);
+      assert.match(line, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
       return '{"ok":true}\n';
     });
     const tokenPath = path.join(path.dirname(f.address), 'approved-token');
@@ -87,11 +96,6 @@ for (const reason of ['EOF', 'oversized input']) {
     }
   });
 }
-
-test('requires a socket path', { timeout: 5000 }, async () => {
-  const child = spawn(process.execPath, [main]);
-  assert.deepEqual(await once(child, 'exit'), [1, null]);
-});
 
 test('rejects invalid or nonprivate token files', { timeout: 5000 }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'facepalm-token-'));
@@ -132,6 +136,93 @@ test('rejects a malformed command line before touching any socket', { timeout: 5
   for (const args of [['s', '--client-token-file'], ['s', '--wrong-flag', 't'], ['s', 'extra', 'args']]) {
     const child = spawn(process.execPath, [main, ...args]);
     assert.deepEqual(await once(child, 'exit'), [1, null]);
+  }
+});
+
+test('with no arguments and no approval, names how to approve it', { timeout: 5000 }, async () => {
+  // /tmp keeps the socket path under the 104 bytes macOS allows.
+  const home = await mkdtemp('/tmp/fp-home-');
+  try {
+    const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
+    const stderr = [];
+    child.stderr.on('data', (data) => stderr.push(data));
+    assert.deepEqual(await once(child, 'exit'), [1, null]);
+    assert.match(Buffer.concat(stderr).toString(), /turn Facepalm on from its menu/);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('finds its per-user files under Linux\'s path there, not only macOS\'s', { timeout: 7000 }, async () => {
+  // Both branches of userDirectory()'s platform check cannot run in one
+  // process; this spawns main.js believing it is on Linux, with --import
+  // preloading that belief before main.js's own top-level code runs, and
+  // puts the approval only where the Linux branch would look: finding it
+  // proves that branch ran, on an actual macOS test machine.
+  const home = await mkdtemp('/tmp/fp-home-');
+  const preload = path.join(home, 'platform.mjs');
+  await writeFile(preload, "Object.defineProperty(process, 'platform', { value: 'linux' });\n");
+  const directory = path.join(home, '.local', 'state', 'facepalm');
+  await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
+  const token = 'c'.repeat(64);
+  await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
+  let greeted;
+  const hello = new Promise((resolve) => { greeted = resolve; });
+  const f = await fixture(() => {}, (line) => {
+    greeted(line);
+    return '{"ok":true}\n';
+  }, path.join(directory, 'service.sock'));
+  const child = spawn(process.execPath, [`--import=${preload}`, main], {
+    env: { ...process.env, HOME: home },
+  });
+  const exited = once(child, 'exit');
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
+    } }) + '\n');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+      name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
+    } }) + '\n');
+    assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
+  } finally {
+    // Ends gracefully, through main.js's own close(), rather than killing
+    // it with a signal: a signal skips the exit hook that flushes coverage.
+    child.stdin.end();
+    await exited;
+    await f.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('with no arguments, finds the per-user socket and approved token', { timeout: 7000 }, async () => {
+  const home = await mkdtemp('/tmp/fp-home-');
+  const directory = userDirectory(home);
+  await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
+  const token = 'b'.repeat(64);
+  await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
+  let greeted;
+  const hello = new Promise((resolve) => { greeted = resolve; });
+  const f = await fixture(() => {}, (line) => {
+    greeted(line);
+    return '{"ok":true}\n';
+  }, path.join(directory, 'service.sock'));
+  const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
+  const exited = once(child, 'exit');
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
+    } }) + '\n');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+      name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
+    } }) + '\n');
+    assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
+  } finally {
+    child.stdin.end();
+    await exited;
+    await f.close();
+    await rm(home, { recursive: true, force: true });
   }
 });
 

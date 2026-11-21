@@ -64,6 +64,24 @@ made since, each with its reason, are in the
     less than a second and are not reported. A pose held for long enough,
     under a minute, becomes the resting pose, so turning back from it reads
     as a look away of its own. `specs/LookAway.tla` models the rule.
+-   `src/screen_context`, `src/screen_context_reporter`,
+    `src/screen_context_reader`, `src/screen_source`: the screen context a
+    reading's `context` carries (#36 item 11 of #61): the frontmost app,
+    the mouse, and a coarse gaze (`this_screen`, `other_screen`, `away` or
+    `unknown`) read, without calibration, from the same head pose and
+    resting pose `src/look_away_reader` reads. `CoarseGazeFrom` and
+    `SideOf`, in `src/screen_context`, are the rule, tested directly; it
+    has no lifecycle, so no spec. `ScreenContextReader` is a `FaceReader`
+    that keeps the pose behind a mutex, read from a different thread than
+    it is written on. `ScreenContextReporter` builds the `context` JSON
+    from `ScreenSource`, the mockable seam its tests take in place of
+    `src/macos/screen_context_macos` (AppKit) and
+    `src/linux/screen_context_linux` (X11, through XWayland where a
+    Wayland session runs one). Window titles need macOS's Screen Recording
+    permission and can hold private text, so they default off. The
+    platform sources need a real desktop session and have no unit tests or
+    coverage floor, following `src/macos/avfoundation_session`'s
+    precedent.
 -   `src/config`: the settings file, below.
 -   `src/reaction_feed`: the readings each client is told about (#36): one
     timeline of interpreted reactions, each with the summary line the person
@@ -154,6 +172,11 @@ Checks that CI runs:
 
 ```shell
 bash scripts/coverage.sh          # Each source's own tests, against its floors.
+# On Linux, the camera's sources in src/linux and the daemon too (#83).
+bash scripts/fetch_mediapipe_c.sh build-mediapipe-c
+bash scripts/coverage.sh \
+  -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/build-mediapipe-c/include" \
+  -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/build-mediapipe-c/lib/libmediapipe.so"
 # On Linux with Clang: check memory errors and undefined behavior.
 CXX=clang++ cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
@@ -195,9 +218,10 @@ The tray is displayed by desktops with StatusNotifierItem support. GNOME
 may need the [AppIndicator support extension](https://extensions.gnome.org/extension/615/appindicator-support/).
 The applications menu opens **Facepalm Settings** for frame rate, gesture
 and expression detection, and advanced tuning. Choose **Settings…** from the
-tray to reopen the form. The tray also shows local camera service readiness
-and offline replay availability. Start the daemon with `--config` and the
-path displayed in the form to apply saved settings.
+tray to reopen the form. **Turn On Facepalm…** in the tray, as in the macOS
+menu, gives consent and starts the camera daemon as a systemd user service
+with the saved settings; **Turn Off Facepalm** stops it. The tray also shows
+local camera service readiness and offline replay availability.
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 
@@ -238,14 +262,17 @@ cmake --install build-portable
 "$HOME/.local/facepalm/bin/gesture_replay" < camera-probe.log
 cd "$HOME/.local/facepalm/share/facepalm/mcp"
 npm ci --omit=dev
-node main.js /path/to/service.sock --client-token-file /path/to/private-token
+node main.js
 ```
 
 The MCP adapter needs Node.js 22 or newer and the lockfile dependencies.
 `npm ci` obtains those packages from a registry or an existing npm cache;
 CMake installs the source and lockfile without `node_modules`. With the default
-relative install paths, the installed tree can be moved as a unit. Provision
-a compatible service and any required private token separately.
+relative install paths, the installed tree can be moved as a unit. Given no
+arguments, the adapter connects to the daemon's socket with the token
+`facepalm-daemon approve mcp` made, both in the per-user folder:
+`~/Library/Application Support/Facepalm` on macOS, `~/.local/state/facepalm`
+on Linux. `node main.js SOCKET --client-token-file PATH` names them instead.
 
 The adapter's `wait_for_reaction` tool returns the readings since the session
 last looked. Right after the agent asks the person something, it can pass
@@ -331,6 +358,14 @@ expressions.settle_ms = 600
 looking_away.enabled = true
 looking_away.degrees = 15
 looking_away.hold_ms = 1000
+# Screen context (#36 item 11 of #61): the frontmost app, the mouse and a
+# coarse gaze on every reading. Window titles can hold private text and
+# need macOS's Screen Recording permission, so they default off.
+screen_context.enabled = true
+screen_context.window_titles_enabled = false
+# Within this many degrees of the resting pose is still this_screen;
+# looking_away.degrees, above, is reused as the away threshold.
+screen_context.other_screen_degrees = 7.5
 ```
 
 A nod, a shake or a tilt moves the blendshape scores as much as an
@@ -344,6 +379,36 @@ movement is the new posture's face, not an expression made at its end.
 The trade-off is that an expression made while the head
 moves is reported only if it is still held once the head settles again, a
 little after the movement stops.
+
+## Screen context
+
+With `screen_context.enabled`, every reading's `context` object carries what
+the screen showed at that moment: `active_app` (the frontmost app's name),
+`window_title` (only with `screen_context.window_titles_enabled`), `mouse`
+(`x`/`y`), and `gaze` (`this_screen`, `other_screen`, `away` or `unknown`).
+Nothing else about the screen, and no image of it, leaves the process.
+
+Gaze is read from the same head pose and resting pose `looking_away` reads,
+against the screens the platform reports, with no calibration to the
+camera's own position: a screen is placed only to the left or the right of
+the one the camera is assumed to face, by `screen_context.other_screen_degrees`
+and `looking_away.degrees`. `away` and `other_screen` otherwise mean the same
+things `looking_away` already says about head pose; this only reads it as a
+snapshot, not a held event.
+
+macOS reads the frontmost app, the mouse and the screens through AppKit,
+which needs no permission; a window's title needs the Screen Recording
+permission and reads as absent without it.
+
+Linux reads the same through X11, reached through XWayland where a Wayland
+session runs one. Verified, not assumed: under a GNOME Wayland session,
+Mutter keeps a Wayland client's real pointer position and window focus from
+X11 clients, and XWayland sets `_NET_ACTIVE_WINDOW` to `None` once a native
+Wayland window has focus. So the mouse and the active app read as absent
+whenever `WAYLAND_DISPLAY` is set, rather than report a stale or partial
+answer; the screens' arrangement, a separate subsystem XWayland still
+forwards, is read either way. The Linux build needs `libx11-dev` and
+`libxrandr-dev`.
 
 ## Measuring the camera on macOS
 

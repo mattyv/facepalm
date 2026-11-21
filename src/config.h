@@ -31,6 +31,10 @@ struct Config {
   // each swing lasting about half a second (#34).
   static constexpr float kDefaultLookingAwayDegrees = 15.0F;
   static constexpr int kDefaultLookingAwayHoldMs = 1000;
+  // ScreenContextReporter's default (#61 item 11): half of
+  // looking_away.degrees, the same halving LookAwayDetector's own
+  // hysteresis uses for a middle ground.
+  static constexpr float kDefaultScreenContextOtherScreenDegrees = 7.5F;
 
   int frames_per_second = kDefaultFramesPerSecond;
   bool head_pose_enabled = true;
@@ -46,6 +50,13 @@ struct Config {
   bool looking_away_enabled = true;
   float looking_away_degrees = kDefaultLookingAwayDegrees;
   int looking_away_hold_ms = kDefaultLookingAwayHoldMs;
+  // Active app, mouse position and coarse gaze (#61 item 11). Window
+  // titles need the Screen Recording permission on macOS and can hold
+  // private text, so they default off.
+  bool screen_context_enabled = true;
+  bool screen_context_window_titles_enabled = false;
+  float screen_context_other_screen_degrees =
+      kDefaultScreenContextOtherScreenDegrees;
 };
 
 // Reads a config file's text: one `name = value` a line, blank lines, and
@@ -56,10 +67,12 @@ struct Config {
 // expressions.hold_ms (a whole number from 0 to 5000),
 // expressions.pose_degrees (0 to 180), expressions.pose_range (0 to 180),
 // expressions.settle_ms (a whole number from 0 to 5000),
-// looking_away.degrees (0 to 180), and looking_away.hold_ms (a whole number
-// from 0 to 10000). Returns the config, or nothing with `error`
-// naming the line, for an unknown name, a bad value, a repeated name or a
-// line with no `=`.
+// looking_away.degrees (0 to 180), looking_away.hold_ms (a whole number
+// from 0 to 10000), screen_context.enabled,
+// screen_context.window_titles_enabled (true or false), and
+// screen_context.other_screen_degrees (0 to 180). Returns the config, or
+// nothing with `error` naming the line, for an unknown name, a bad value, a
+// repeated name or a line with no `=`.
 std::optional<Config> ParseConfig(std::string_view text, std::string& error);
 
 }  // namespace facepalm

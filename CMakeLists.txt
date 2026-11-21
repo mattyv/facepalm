@@ -30,11 +30,18 @@ endif()
 # Each source file gets a library and a test executable of its own, so that
 # its coverage is measured from its own tests alone. A unit's tests write
 # their profiles to profiles/<unit>-<pid>.profraw for scripts/coverage.sh.
+# A unit in a folder of src, such as linux, names it with DIRECTORY; its test
+# is in the same folder of test.
 function(facepalm_unit name)
-  add_library(${name} src/${name}.cc)
+  cmake_parse_arguments(PARSE_ARGV 1 unit "" "DIRECTORY" "")
+  set(path ${name})
+  if(unit_DIRECTORY)
+    set(path ${unit_DIRECTORY}/${name})
+  endif()
+  add_library(${name} src/${path}.cc)
   target_include_directories(${name} PUBLIC ${PROJECT_SOURCE_DIR})
   if(BUILD_TESTING)
-    add_executable(${name}_test test/${name}_test.cc)
+    add_executable(${name}_test test/${path}_test.cc)
     target_link_libraries(${name}_test PRIVATE ${name} GTest::gmock GTest::gtest_main)
     gtest_discover_tests(${name}_test
       DISCOVERY_MODE PRE_TEST
@@ -47,7 +54,12 @@ facepalm_unit(approved_feed)
 facepalm_unit(settings_document)
 target_link_libraries(settings_document PUBLIC config)
 facepalm_unit(client_token)
+facepalm_unit(client_approvals)
 facepalm_unit(daemon_control)
+facepalm_unit(daemon_options)
+facepalm_unit(feed_clients)
+facepalm_unit(user_paths)
+facepalm_unit(user_service)
 facepalm_unit(camera_controller)
 facepalm_unit(config)
 facepalm_unit(expressions)
@@ -71,6 +83,20 @@ facepalm_unit(expression_reader)
 facepalm_unit(gesture_reader)
 facepalm_unit(look_away)
 facepalm_unit(look_away_reader)
+facepalm_unit(screen_context)
+# Pure computation (SideOf, CoarseGazeFrom), like look_away: head_pose for
+# the rotation type and ReactionFrom's sign convention (#61 item 11).
+target_link_libraries(screen_context PUBLIC head_pose)
+facepalm_unit(screen_context_reporter)
+# The gaze rule and protocol::Quoted are pure computation, so the
+# reporter's tests run them for real; only ScreenSource, the OS seam, is
+# mocked.
+target_link_libraries(screen_context_reporter PUBLIC screen_context protocol)
+facepalm_unit(screen_context_reader)
+# ScreenContextReader's tests run the real ExpressionTracker and head_pose
+# (also pure computation), as expression_reader's and look_away_reader's
+# do, for the same reason.
+target_link_libraries(screen_context_reader PUBLIC expressions head_pose)
 facepalm_unit(head_pose)
 facepalm_unit(head_pose_reader)
 facepalm_unit(head_gesture_model)
@@ -105,6 +131,13 @@ target_link_libraries(expression_reader PUBLIC expressions head_pose)
 target_link_libraries(look_away PUBLIC head_pose)
 target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose)
 facepalm_unit(session_camera)
+# The daemon's readers are pure computation, so their factory's tests make
+# them for real. screen_context_reader (#61 item 11) is the one exception:
+# its tests pass it a real ScreenContextReader by reference, as
+# ScreenContextReaderForwarder (face_readers.cc) always wraps one given.
+facepalm_unit(face_readers)
+target_link_libraries(face_readers PUBLIC gesture_reader expression_reader
+  look_away_reader screen_context_reader config)
 
 facepalm_unit(gesture_replay)
 target_link_libraries(gesture_replay PUBLIC gesture_reader)
@@ -136,7 +169,8 @@ if(FACEPALM_LINUX_TRAY)
   add_executable(facepalm_menu tools/menu/main_linux.cc)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
-  target_link_libraries(facepalm_menu PRIVATE settings_document Qt6::Widgets Qt6::Network)
+  target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
+    client_token user_paths Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -188,11 +222,13 @@ if(APPLE)
   add_executable(facepalm_menu tools/menu/main.mm)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
-  target_link_libraries(facepalm_menu PRIVATE settings_document "-framework AppKit")
+  target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
+    client_token user_paths "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
-    target_link_libraries(menu_store_checks PRIVATE settings_document GTest::gtest_main "-framework AppKit")
+    target_link_libraries(menu_store_checks PRIVATE settings_document user_service
+      client_approvals client_token user_paths GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 
@@ -202,6 +238,17 @@ if(APPLE)
   target_link_libraries(avfoundation_session PUBLIC frame session_camera
     "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
     "-framework Foundation")
+
+  # AppKit calls alone (#61 item 11), needing a real desktop session like
+  # avfoundation_session above; it has no unit tests or coverage floor for
+  # the same reason. ScreenContextReporter, which is tested, takes it
+  # behind ScreenSource.
+  add_library(screen_context_macos src/macos/screen_context_macos.mm)
+  target_compile_options(screen_context_macos PRIVATE -fobjc-arc)
+  target_include_directories(screen_context_macos PUBLIC ${PROJECT_SOURCE_DIR})
+  target_link_libraries(screen_context_macos PUBLIC screen_context
+    "-framework AppKit" "-framework CoreGraphics")
+
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
     config frame_pipeline frame_recorder face_analyzer expression_reader
@@ -224,9 +271,11 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   add_executable(facepalm_daemon tools/daemon/main.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "@executable_path/../Frameworks")
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
-    avfoundation_session camera_controller config frame_pipeline face_analyzer
-    expression_reader gesture_reader look_away_reader reaction_feed feeling_store service
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+    daemon_control daemon_options face_readers feed_clients user_paths avfoundation_session
+    camera_controller config frame_pipeline face_analyzer
+    expression_reader gesture_reader look_away_reader screen_context_reader
+    screen_context_reporter screen_context_macos reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
@@ -243,7 +292,11 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
 endif()
 
-# The Linux daemon uses the pinned native MediaPipe Tasks C library.
+# The Linux daemon uses the pinned native MediaPipe Tasks C library, which
+# scripts/fetch_mediapipe_c.sh fetches with its C headers. Its two Linux
+# sources are units of their own (#83): their tests link fakes of MediaPipe's
+# C API and of libv4l2 in place of the real libraries, so they need the
+# headers but never open a camera or load the model.
 set(FACEPALM_MEDIAPIPE_C_INCLUDE "" CACHE PATH "Root of MediaPipe's native C headers")
 set(FACEPALM_MEDIAPIPE_C_LIBRARY "" CACHE FILEPATH "Linux libmediapipe.so")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
@@ -255,16 +308,32 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   find_package(Threads REQUIRED)
   find_path(V4L2_INCLUDE_DIRECTORY NAMES libv4l2.h REQUIRED)
   find_library(V4L2_LIBRARY NAMES v4l2 libv4l2.so.0 REQUIRED)
+  # X11 and RandR for screen context (#61 item 11): CI's Linux job needs
+  # libx11-dev and libxrandr-dev alongside its existing packages.
+  find_package(X11 REQUIRED)
+  find_library(XRANDR_LIBRARY NAMES Xrandr REQUIRED)
+  facepalm_unit(mediapipe_c_shim DIRECTORY linux)
+  target_include_directories(mediapipe_c_shim SYSTEM PUBLIC ${FACEPALM_MEDIAPIPE_C_INCLUDE})
+  facepalm_unit(v4l2_session DIRECTORY linux)
+  target_include_directories(v4l2_session SYSTEM PUBLIC ${V4L2_INCLUDE_DIRECTORY})
+  target_link_libraries(v4l2_session PUBLIC Threads::Threads)
+  # screen_context_linux needs a real X server, like avfoundation_session
+  # needs a real camera, so, unlike the two units above, it has no
+  # facepalm_unit of its own: it goes straight into the daemon.
   add_executable(facepalm_daemon tools/daemon/main.cc
-    src/linux/v4l2_session.cc src/linux/mediapipe_c_shim.cc)
+    src/linux/screen_context_linux.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
-  target_include_directories(facepalm_daemon SYSTEM PRIVATE
-    ${FACEPALM_MEDIAPIPE_C_INCLUDE} ${V4L2_INCLUDE_DIRECTORY})
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
+  # face_model calls the shim, and the shim MediaPipe, so each comes after
+  # the one that calls it.
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+    daemon_control daemon_options face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
-    look_away_reader reaction_feed feeling_store service session_camera unix_socket face_model Threads::Threads
-    ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
+    look_away_reader screen_context_reader screen_context_reporter screen_context
+    reaction_feed feeling_store service session_camera unix_socket v4l2_session
+    face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
+    ${X11_LIBRARIES} ${XRANDR_LIBRARY})
+  target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/facepalm COMPONENT LinuxCamera)
@@ -296,5 +365,6 @@ endif()
 if(BUILD_TESTING)
   add_executable(mcp_service_fixture EXCLUDE_FROM_ALL
     test/fixtures/mcp_service_fixture.cc)
-  target_link_libraries(mcp_service_fixture PRIVATE service reaction_feed feeling_store unix_socket)
+  target_link_libraries(mcp_service_fixture PRIVATE approved_feed client_approvals client_token
+    service reaction_feed feeling_store unix_socket)
 endif()

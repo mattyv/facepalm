@@ -6,12 +6,14 @@ import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { SocketSession } from '../session.js';
 
-async function fixture(handler, hello = '{"ok":true}\n') {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
-  const address = path.join(dir, 'service.sock');
+async function fixture(handler, hello = '{"ok":true}\n', address = undefined) {
+  const dir = address ? undefined : await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
+  address ??= path.join(dir, 'service.sock');
   const connections = [];
   const server = net.createServer((socket) => {
     connections.push(socket);
+    // A client killed mid-test resets its connection; that is not a failure.
+    socket.on('error', () => {});
     socket.setEncoding('utf8');
     let buffer = '';
     socket.on('data', (chunk) => {
@@ -29,7 +31,7 @@ async function fixture(handler, hello = '{"ok":true}\n') {
   return { address, connections, async close() {
     for (const socket of connections) socket.destroy();
     await new Promise((resolve) => server.close(resolve));
-    await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true });
   } };
 }
 
@@ -44,6 +46,16 @@ test('serializes requests on one uniquely named connection', async () => {
     assert.equal(f.connections.length, 2);
     assert.ok(commands.indexOf('feel 1 agreement') < commands.indexOf('feel 2 agreement'));
   } finally { a.close(); b.close(); await f.close(); }
+});
+
+test('sends a token with hello when one is given, and omits it otherwise', async () => {
+  const hellos = [];
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'), (line) => { hellos.push(line); return '{"ok":true}\n'; });
+  const session = new SocketSession(f.address, 'a-private-token');
+  try {
+    await session.request('feel 1 agreement');
+    assert.deepEqual(hellos, [`hello ${session.name} a-private-token`]);
+  } finally { session.close(); await f.close(); }
 });
 
 test('cancelling a queued request does not close the active one', async () => {

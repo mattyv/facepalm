@@ -1,5 +1,6 @@
 #include "src/gesture_reader.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -12,6 +13,7 @@
 #include "src/camera_controller.h"
 #include "src/face_model.h"
 #include "src/head_gesture_model.h"
+#include "src/head_pose.h"
 
 namespace facepalm {
 namespace {
@@ -77,6 +79,17 @@ bool GestureReportGate::SuppressTurn(Gesture gesture, std::int64_t timestamp_ms,
     turn_settling_ = false;
     turn_holding_ = false;
     return gesture == Gesture::kTurn;
+  }
+  if (!std::isfinite(pose.yaw)) {
+    // A non-finite yaw (#85) cannot be judged near or away: YawDistance's
+    // > comparison reads false for NaN the same as it does for "within
+    // range", so left unguarded this frame would settle or hold exactly as
+    // a genuine return would. Treat it as moved instead, so neither timer
+    // advances on a distance test done on nothing, the way TurnExcursion
+    // assumes every pose is finite.
+    turn_settling_ = false;
+    turn_holding_ = false;
+    return false;
   }
   // Settle: back within ten degrees of the origin, and still for kStillMs.
   if (YawDistance(pose.yaw, turn_origin_) > kTurnReturnRadians) {
@@ -169,6 +182,14 @@ GestureReader::GestureReader(float confidence_threshold)
 void GestureReader::OnFace(const Face& face, int width, int height,
                            std::int64_t timestamp_ms,
                            std::vector<Reaction>& reactions) {
+  PoseMatrix pose{};
+  std::ranges::copy(face.pose_column_major, pose.begin());
+  if (!IsFiniteRotation(RotationFrom(pose))) {
+    // As #73, #78 and #81 skip one: unskipped, a degenerate pose's NaN
+    // channels would poison every prediction the window makes for as long
+    // as the frame stays in its one-second lookback (#85).
+    return;
+  }
   const head_gesture::RawFrame raw =
       head_gesture::RawFrameFrom(face, width, height);
   const std::optional<

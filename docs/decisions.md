@@ -82,6 +82,161 @@ a line saying which entry replaced it.
 -   **Evidence:** [#67](https://github.com/mattyv/facepalm/issues/67),
     [#61](https://github.com/mattyv/facepalm/issues/61) item 5.
 
+## 2026-11-21: Report the screen context a reaction was read in
+
+-   **Decision:** every reading, when `screen_context.enabled` (default on),
+    carries a `context` object: `active_app` (the frontmost app's name),
+    `window_title` (only with `screen_context.window_titles_enabled`, default
+    off), `mouse` (`x`/`y`), and `gaze` (`this_screen`, `other_screen`,
+    `away` or `unknown`). Gaze comes from the same head pose and resting pose
+    LookAwayReader already reads, with no new calibration (#61 item 12 is
+    separate): within `screen_context.other_screen_degrees` (default 7.5,
+    half of `looking_away.degrees`) of the resting pose is `this_screen`;
+    past `looking_away.degrees` is `away`; between the two, a turn toward a
+    screen the platform's arrangement places on that side is
+    `other_screen`, and one with no screen known that way, or a pose not
+    yet learned, is `unknown`. Monitors are placed only left or right of the
+    one the camera is assumed to face; pitch alone, and monitors stacked
+    above or below, are not modeled. `src/screen_context.{h,cc}` is the pure
+    rule (`CoarseGazeFrom`, `SideOf`), tested directly with no mock, as it
+    has no lifecycle to spec. `src/screen_context_reader.{h,cc}` is a
+    `FaceReader` that, like `LookAwayReader`, keeps its own
+    `ExpressionTracker` for the resting pose, behind a mutex: it is read
+    from the daemon's control thread while frames update it on the
+    inference thread, which is also why it is a long-lived member of
+    `Engine` rather than one of `MakeAnalyzers`' own per-session readers
+    (`ScreenContextReaderForwarder` bridges the two). `src/screen_source.h`
+    is the mockable OS seam `src/screen_context_reporter.{h,cc}` builds the
+    `context` JSON from: `MacosScreenSource` (AppKit: `NSWorkspace`,
+    `NSScreen`, `NSEvent`, and `CGWindowListCopyWindowInfo` for a title,
+    which needs the Screen Recording permission) and `LinuxScreenSource`
+    (X11, reachable through XWayland where a Wayland session runs one).
+    Nothing from a window's pixels, and no screenshot, is read; only these
+    fields leave the process, as JSON text, like every other reaction.
+-   **Why:** #61's design (item 11) asks what screen and window was active,
+    where the mouse was, and a coarse "this screen, another screen, or
+    away" gaze, each so a client can line a reaction up with what the
+    person was looking at. Window titles are opt-in because they can hold
+    private text and need a permission; the rest needs none.
+-   **Rejected:** eye-landmark gaze (needs landmarks no reader uses yet,
+    and calibration against the camera's position, which #35's entry below
+    already deferred to this item); merging `context` into a reading's
+    `detail`, which would change the exact JSON `CueOf` (`src/feelings.h`)
+    matches and silently break the feelings rule; a second reading just for
+    context, which would double what a client sees per gesture and spend
+    the feed's capacity and "missed" accounting on it.
+-   **Linux's verified limit:** under a GNOME Wayland session, `XWayland`
+    does not give an X11 client the real global mouse position (Mutter
+    keeps Wayland coordinates from X11 clients; see the 2014 GNOME report
+    discussed on Wayland's own mailing list) and sets `_NET_ACTIVE_WINDOW`
+    to `None` once a native Wayland window has focus (found fixing Wine's
+    own XWayland integration, 2025). Rather than report a stale or partial
+    answer, `LinuxScreenSource` reads the mouse and the active app as
+    `nullopt` whenever `WAYLAND_DISPLAY` is set, whatever an XWayland
+    socket says; RandR's monitor geometry is a separate subsystem XWayland
+    still forwards, and is read either way. This needs verifying by hand
+    against a real GNOME Wayland session (not done in this change) and
+    against a plain X11 session on Linux, neither of which this agent's
+    environment can run.
+-   **Cost:** the `other_screen` reading never tells which of several
+    screens on the same side the person looks at, and a monitor stacked
+    above or below the camera's screen is never `other_screen`, only
+    `this_screen`, `away` or `unknown`. The platform sources
+    (`src/macos/screen_context_macos.mm`, `src/linux/screen_context_linux.cc`)
+    need a real desktop session and so, like
+    `src/macos/avfoundation_session`, have no unit tests or coverage floor;
+    `ScreenContextReporter`, which is tested, takes each behind
+    `ScreenSource`. The Linux build now also needs `libx11-dev` and
+    `libxrandr-dev`; CI's Linux job (#83) needs them added alongside its
+    existing packages.
+-   **Evidence:** [#36](https://github.com/mattyv/facepalm/issues/36),
+    [#61](https://github.com/mattyv/facepalm/issues/61) item 11.
+
+## 2026-11-21: Turn facepalm on and off from its menu, as a user service
+
+-   **Decision:** the menu's **Turn On Facepalm…** asks for the person's
+    consent, approves the bundled MCP adapter, and installs and loads a
+    user service that runs the daemon with `--consent` and the saved
+    settings: a launchd LaunchAgent, `com.mattyv.facepalm.daemon`, on macOS,
+    and a systemd `--user` unit, `facepalm.service`, on Linux. The service
+    manager starts it again after a failure and at each login. **Turn Off
+    Facepalm** unloads it, which stops the daemon and closes the camera,
+    and removes its file. Facepalm is on exactly while that file is there.
+    `specs/UserService.tla` models it.
+-   **Why:** #37 asks for the menu to start the service and give consent,
+    with launchd on macOS and systemd on Linux, and for a daemon that
+    crashes to recover on restart. The service manager already restarts and
+    logs a background process, and a file the menu writes and removes keeps
+    the on and off state where the person can see it.
+-   **Rejected:** the menu running the daemon as its own child, which stops
+    with the menu and would not start at login; restarting after a clean
+    stop too (`KeepAlive = true`, `Restart=always`), which TLC shows adds
+    nothing, since a clean stop only follows unloading; and leaving the
+    file on turning off, which starts the daemon again at the next login.
+-   **Cost:** turning on or off waits for the service manager, so the menu
+    is busy for as long as the daemon takes to stop. Whether macOS grants
+    the camera to a LaunchAgent inside the app bundle without a prompt that
+    names the app has not been checked on a real Mac yet.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37).
+
+## 2026-11-21: Approve clients by name, and let several in at once
+
+-   **Decision:** an approved client is a token file named for it in a
+    directory private to the user: `clients/` under
+    `~/Library/Application Support/Facepalm` on macOS and
+    `~/.local/state/facepalm` on Linux, beside the service's socket,
+    `service.sock`. `facepalm-daemon approve NAME` makes the file with a new
+    random token, keeping one already there, and `revoke NAME` removes it.
+    A client's first line is `hello <name> <token>`: the service lets it in
+    when any client's file holds the token, read at each hello, and several
+    connections may show the same token, each under its own name. Every
+    client shares one camera subscription, taken when the first joins and
+    given up when the last leaves, and every client reads the same readings.
+    The MCP adapter, given no arguments, uses the socket and the `mcp` token
+    from those places. A client that hangs up during a wait or a beat is
+    disconnected at once by a watcher on its socket, so it gives up its
+    session, and the camera, without waiting out the window.
+    `specs/DaemonAdmission.tla` and `specs/Service.tla` model it, with
+    liveness.
+-   **Why:** #37 asks for tokens provisioned on approval, with no
+    hand-run `openssl`, found by the MCP adapter and AI Pair in a fixed
+    per-user place, and for two clients, such as Claude Desktop and Claude
+    Code, to get the same nod. One token per app with a name per connection
+    lets two sessions of one app run at once. One subscription for every
+    client keeps a reaction one reading, where a subscription per client
+    would add it once for each.
+-   **Rejected:** one connection per token, the design before, which turns
+    away a second session of the same app (`ApprovedAdmitted` fails it); a
+    camera subscription per client, which delivers each reaction to the
+    shared feed once per client; and paths from `XDG_RUNTIME_DIR` or
+    `XDG_STATE_HOME`, which the service manager and an MCP host may not
+    share with the person's shell.
+-   **Cost:** any program running as the user can read the token files, as
+    it could the one token file before; the socket and the files are
+    private to the user, and that is the boundary. A file that is not a
+    valid token is skipped, not repaired.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37),
+    [#63](https://github.com/mattyv/facepalm/issues/63).
+
+## 2026-11-21: Build and test the Linux camera's sources in CI
+
+-   **Decision:** CI's `linux` and both sanitizer jobs fetch MediaPipe's C
+    headers and `libmediapipe.so` with `scripts/fetch_mediapipe_c.sh`, each
+    file checked against `scripts/mediapipe_c.sha256` and the folder cached,
+    and build the Linux daemon with them. `src/linux/mediapipe_c_shim.cc`
+    and `src/linux/v4l2_session.cc` are units of their own, held to 100
+    percent by `test/linux/*_test.cc`, whose fakes stand in for MediaPipe's
+    C API, libv4l2 and `poll` at link time. Their floors count on Linux
+    only.
+-   **Why:** no job built either file or the daemon, so a mistake in them,
+    such as in the shim's result-shape checks, would show only on a real
+    Ubuntu run.
+-   **Rejected:** fetching the whole MediaPipe checkout for nine headers;
+    pinning only the wheel's hash, which leaves the headers to a git commit;
+    and an interface injected into `V4l2Session` for its system calls, a
+    larger seam than the link-time one `test/face_model_test.cc` already
+    uses. Evidence: [#83](https://github.com/mattyv/facepalm/issues/83).
+
 ## 2026-11-21: The feeling the person picks tunes the next read, in the daemon
 
 -   **Decision:** a client sends `feel <interpretation-id> <feeling>` when
