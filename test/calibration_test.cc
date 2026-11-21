@@ -131,6 +131,8 @@ TEST_F(NoAdvanceWithoutCaptureTest, RefusesNextWithNoSessionRunning) {
 
 using CalibrationWalksEveryTargetTest = CalibrationSessionTest;
 
+// Walks every one of a screen's five points in order.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(CalibrationWalksEveryTargetTest, WalksEachScreensFivePointsInOrder) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());

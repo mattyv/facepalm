@@ -44,6 +44,9 @@ CalibrationProfile SampleProfile() {
   return profile;
 }
 
+// Checks every point of the round trip together: the resting pose, and
+// each of a screen's five points.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST(SerializeCalibrationProfileTest, RoundTripsThroughParse) {
   const CalibrationProfile original = SampleProfile();
 
@@ -565,6 +568,7 @@ TEST_F(CalibrationStoreFileTest, RefusesToSaveWhenTheDirectoryDoesNotExist) {
 // either side of the camera's forward axis could not. A camera off to one
 // side gives exactly this: screen 0's centre is 50 degrees of yaw to the
 // left, screen 1's only 10 to the right, not symmetric around 0.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(CalibrationStoreFileTest,
        ACalibratedProfileLocatesAScreenAnUncalibratedGuessMisses) {
   CalibrationFileStore store(path_);
