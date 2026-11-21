@@ -36,10 +36,16 @@
 #include "src/gesture_reader.h"
 #include "src/look_away.h"
 #include "src/look_away_reader.h"
+#include "src/screen_context.h"
+#include "src/screen_context_reader.h"
+#include "src/screen_context_reporter.h"
+#include "src/screen_source.h"
 #ifdef __linux__
+#include "src/linux/screen_context_linux.h"
 #include "src/linux/v4l2_session.h"
 #else
 #include "src/macos/avfoundation_session.h"
+#include "src/macos/screen_context_macos.h"
 #endif
 #include "src/rating_log.h"
 #include "src/reaction_feed.h"
@@ -97,10 +103,54 @@ Post OnQueue(dispatch_queue_t queue) {
 
 #endif
 
-// Only interpreted gesture and expression events enter the feed.
+// The platform's ScreenSource (#61 item 11): AVFoundation's sibling,
+// AppKit, on macOS; X11, through XWayland where one runs, on Linux.
+#ifdef __linux__
+std::unique_ptr<ScreenSource> MakeScreenSource() {
+  return std::make_unique<LinuxScreenSource>();
+}
+#else
+std::unique_ptr<ScreenSource> MakeScreenSource() {
+  return std::make_unique<MacosScreenSource>();
+}
+#endif
+
+// Forwards to Engine's own long-lived ScreenContextReader (#61 item 11):
+// MakeAnalyzers rebuilds `readers` on every camera open, but the pose it
+// caches, and FeedClients' access to it, both need to outlive any one
+// camera session.
+class ScreenContextReaderForwarder : public FaceReader {
+ public:
+  explicit ScreenContextReaderForwarder(ScreenContextReader& target)
+      : target_(target) {}
+  void OnFace(const Face& face, int width, int height,
+              std::int64_t timestamp_ms,
+              std::vector<Reaction>& reactions) override {
+    target_.OnFace(face, width, height, timestamp_ms, reactions);
+  }
+  void OnNoFace() override { target_.OnNoFace(); }
+
+ private:
+  ScreenContextReader& target_;
+};
+
+// Only interpreted gesture and expression events enter the feed. Each also
+// carries screen context (#61 item 11) when Config::screen_context_enabled:
+// `screen_source` is nullptr otherwise, and `pose_reader` goes unread.
 class FeedClients : public Clients {
  public:
-  explicit FeedClients(ReactionFeed& feed) : feed_(feed) {}
+  FeedClients(ReactionFeed& feed, const Config& config,
+              ScreenContextReader& pose_reader, ScreenSource* screen_source)
+      : feed_(feed), pose_reader_(pose_reader) {
+    if (screen_source != nullptr) {
+      reporter_.emplace(
+          *screen_source,
+          GazeSettings{.other_screen_degrees =
+                           config.screen_context_other_screen_degrees,
+                       .away_degrees = config.looking_away_degrees},
+          config.screen_context_window_titles_enabled);
+    }
+  }
   void Deliver(const ClientId& /*client*/, const Reaction& reaction) override {
     constexpr std::string_view kGesture = R"({"gesture":")";
     constexpr std::string_view kExpression = R"({"expression":")";
@@ -116,12 +166,19 @@ class FeedClients : public Clients {
     const auto published =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch());
+    std::optional<std::string> context;
+    if (reporter_) {
+      context =
+          reporter_->Json(pose_reader_.Pose(), pose_reader_.RestingPose());
+    }
     feed_.React(std::string(gesture ? "Gesture: " : "Expression: ") + name,
-                reaction, published.count());
+                reaction, published.count(), std::move(context));
   }
 
  private:
   ReactionFeed& feed_;
+  ScreenContextReader& pose_reader_;
+  std::optional<ScreenContextReporter> reporter_;
 };
 
 // The daemon owns all queues and resources until the stopped callback exits.
@@ -134,12 +191,21 @@ class Engine : public DaemonController, public DaemonPipeline {
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
+        screen_source_(config.screen_context_enabled ? MakeScreenSource()
+                                                     : nullptr),
+        screen_context_reader_(ExpressionTracker::Settings{
+            .rise = config.expressions_smallest_rise,
+            .pose_degrees = config.expressions_pose_degrees,
+            .pose_range = config.expressions_pose_range,
+            .settle_ms = config.expressions_settle_ms,
+            .spreads = config.expressions_spreads,
+            .hold_ms = config.expressions_hold_ms}),
         ratings_(std::move(ratings)),
         feed_(kFeedCapacity,
               [this](const ReactionFeed::Rating& rating) {
                 return ratings_ != nullptr && ratings_->Record(rating);
               }),
-        clients_(feed_),
+        clients_(feed_, config_, screen_context_reader_, screen_source_.get()),
         approved_(
             feed_, std::move(token),
             [this](bool joined) {
@@ -244,6 +310,10 @@ class Engine : public DaemonController, public DaemonPipeline {
           LookAwayDetector::Settings{.degrees = config_.looking_away_degrees,
                                      .hold_ms = config_.looking_away_hold_ms}));
     }
+    if (config_.screen_context_enabled) {
+      readers.push_back(std::make_unique<ScreenContextReaderForwarder>(
+          screen_context_reader_));
+    }
     FramePipeline::Analyzers analyzers;
     analyzers.push_back(
         std::make_unique<FaceAnalyzer>(std::move(model), std::move(readers)));
@@ -254,6 +324,10 @@ class Engine : public DaemonController, public DaemonPipeline {
   Post control_queue_;
   std::string model_;
   Config config_;
+  // Outlives any one camera session, unlike MakeAnalyzers' own readers
+  // (#61 item 11); screen_source_ is nullptr with screen_context disabled.
+  std::unique_ptr<ScreenSource> screen_source_;
+  ScreenContextReader screen_context_reader_;
   std::unique_ptr<RatingLog> ratings_;
   ReactionFeed feed_;
   FeedClients clients_;

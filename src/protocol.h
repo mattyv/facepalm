@@ -48,7 +48,10 @@ std::optional<Request> Parse(std::string_view line, std::string& error);
 
 // {"readings":[{"id":..,"summary":"..","detail":{..}}],"missed":n}. A
 // reading's detail is JSON facepalm wrote, so it goes in as it is.
-// Live readings also carry published_at_ms as Unix epoch milliseconds.
+// Live readings also carry published_at_ms as Unix epoch milliseconds, and,
+// when Config::screen_context_enabled, a context object (#61 item 11):
+// what the screen showed at the moment of the reading, also written by
+// facepalm and passed through as it is.
 // The reply that ends a beat adds
 // "interpretation":{"id":..,"feeling":"..","beat":".."}, with the feeling
 // one of src/feelings.h's names.

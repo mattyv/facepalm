@@ -149,6 +149,9 @@ std::string DeliveryJson(const Feed::Delivery& delivery) {
     }
     json += R"({"id":)" + std::to_string(reading.id) + R"(,"summary":)" +
             Quoted(reading.summary) + R"(,"detail":)" + reading.detail;
+    if (reading.context) {
+      json += R"(,"context":)" + *reading.context;
+    }
     if (reading.published_at_ms) {
       json +=
           R"(,"published_at_ms":)" + std::to_string(*reading.published_at_ms);

@@ -32,6 +32,9 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_TRUE(config.looking_away_enabled);
   EXPECT_THAT(config.looking_away_degrees, FloatEq(15.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1000));
+  EXPECT_TRUE(config.screen_context_enabled);
+  EXPECT_FALSE(config.screen_context_window_titles_enabled);
+  EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(7.5F));
 }
 
 TEST(ParseConfigTest, ReadsEverySetting) {
@@ -50,7 +53,10 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "expressions.settle_ms = 500\n"
       "looking_away.enabled = false\n"
       "looking_away.degrees = 20\n"
-      "looking_away.hold_ms = 1500\n",
+      "looking_away.hold_ms = 1500\n"
+      "screen_context.enabled = false\n"
+      "screen_context.window_titles_enabled = true\n"
+      "screen_context.other_screen_degrees = 5\n",
       error);
   ASSERT_TRUE(parsed.has_value()) << error;
   const Config config = parsed.value_or(Config{});
@@ -69,6 +75,9 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_FALSE(config.looking_away_enabled);
   EXPECT_THAT(config.looking_away_degrees, FloatEq(20.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1500));
+  EXPECT_FALSE(config.screen_context_enabled);
+  EXPECT_TRUE(config.screen_context_window_titles_enabled);
+  EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(5.0F));
 }
 
 TEST(ParseConfigTest, SkipsCommentsAndBlankLines) {
@@ -240,6 +249,25 @@ TEST(ParseConfigTest, RefusesALookAwayHoldOutsideZeroTo10000Ms) {
               Eq("line 1: expected a whole number from 0 to 10000"));
   EXPECT_THAT(ErrorFor("looking_away.hold_ms = 1.5"),
               Eq("line 1: expected a whole number from 0 to 10000"));
+}
+
+TEST(ParseConfigTest, RefusesAScreenContextSwitchThatIsNotTrueOrFalse) {
+  EXPECT_THAT(ErrorFor("screen_context.enabled = 1"),
+              Eq("line 1: expected true or false"));
+  EXPECT_THAT(ErrorFor("screen_context.window_titles_enabled = 1"),
+              Eq("line 1: expected true or false"));
+}
+
+TEST(ParseConfigTest, RefusesOtherScreenDegreesOutsideZeroToOneEighty) {
+  EXPECT_THAT(ErrorFor("screen_context.other_screen_degrees = -0.1"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("screen_context.other_screen_degrees = 180.1"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("screen_context.other_screen_degrees = near"),
+              Eq("line 1: expected a number from 0 to 180"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 180 check.
+  EXPECT_THAT(ErrorFor("screen_context.other_screen_degrees = nan"),
+              Eq("line 1: expected a number from 0 to 180"));
 }
 
 }  // namespace

@@ -64,6 +64,24 @@ made since, each with its reason, are in the
     less than a second and are not reported. A pose held for long enough,
     under a minute, becomes the resting pose, so turning back from it reads
     as a look away of its own. `specs/LookAway.tla` models the rule.
+-   `src/screen_context`, `src/screen_context_reporter`,
+    `src/screen_context_reader`, `src/screen_source`: the screen context a
+    reading's `context` carries (#36 item 11 of #61): the frontmost app,
+    the mouse, and a coarse gaze (`this_screen`, `other_screen`, `away` or
+    `unknown`) read, without calibration, from the same head pose and
+    resting pose `src/look_away_reader` reads. `CoarseGazeFrom` and
+    `SideOf`, in `src/screen_context`, are the rule, tested directly; it
+    has no lifecycle, so no spec. `ScreenContextReader` is a `FaceReader`
+    that keeps the pose behind a mutex, read from a different thread than
+    it is written on. `ScreenContextReporter` builds the `context` JSON
+    from `ScreenSource`, the mockable seam its tests take in place of
+    `src/macos/screen_context_macos` (AppKit) and
+    `src/linux/screen_context_linux` (X11, through XWayland where a
+    Wayland session runs one). Window titles need macOS's Screen Recording
+    permission and can hold private text, so they default off. The
+    platform sources need a real desktop session and have no unit tests or
+    coverage floor, following `src/macos/avfoundation_session`'s
+    precedent.
 -   `src/config`: the settings file, below.
 -   `src/reaction_feed`: the readings each client is told about (#36): one
     timeline of interpreted reactions, each with the summary line the person
@@ -297,6 +315,14 @@ expressions.settle_ms = 600
 looking_away.enabled = true
 looking_away.degrees = 15
 looking_away.hold_ms = 1000
+# Screen context (#36 item 11 of #61): the frontmost app, the mouse and a
+# coarse gaze on every reading. Window titles can hold private text and
+# need macOS's Screen Recording permission, so they default off.
+screen_context.enabled = true
+screen_context.window_titles_enabled = false
+# Within this many degrees of the resting pose is still this_screen;
+# looking_away.degrees, above, is reused as the away threshold.
+screen_context.other_screen_degrees = 7.5
 ```
 
 A nod, a shake or a tilt moves the blendshape scores as much as an
@@ -310,6 +336,36 @@ movement is the new posture's face, not an expression made at its end.
 The trade-off is that an expression made while the head
 moves is reported only if it is still held once the head settles again, a
 little after the movement stops.
+
+## Screen context
+
+With `screen_context.enabled`, every reading's `context` object carries what
+the screen showed at that moment: `active_app` (the frontmost app's name),
+`window_title` (only with `screen_context.window_titles_enabled`), `mouse`
+(`x`/`y`), and `gaze` (`this_screen`, `other_screen`, `away` or `unknown`).
+Nothing else about the screen, and no image of it, leaves the process.
+
+Gaze is read from the same head pose and resting pose `looking_away` reads,
+against the screens the platform reports, with no calibration to the
+camera's own position: a screen is placed only to the left or the right of
+the one the camera is assumed to face, by `screen_context.other_screen_degrees`
+and `looking_away.degrees`. `away` and `other_screen` otherwise mean the same
+things `looking_away` already says about head pose; this only reads it as a
+snapshot, not a held event.
+
+macOS reads the frontmost app, the mouse and the screens through AppKit,
+which needs no permission; a window's title needs the Screen Recording
+permission and reads as absent without it.
+
+Linux reads the same through X11, reached through XWayland where a Wayland
+session runs one. Verified, not assumed: under a GNOME Wayland session,
+Mutter keeps a Wayland client's real pointer position and window focus from
+X11 clients, and XWayland sets `_NET_ACTIVE_WINDOW` to `None` once a native
+Wayland window has focus. So the mouse and the active app read as absent
+whenever `WAYLAND_DISPLAY` is set, rather than report a stale or partial
+answer; the screens' arrangement, a separate subsystem XWayland still
+forwards, is read either way. The Linux build needs `libx11-dev` and
+`libxrandr-dev`.
 
 ## Measuring the camera on macOS
 

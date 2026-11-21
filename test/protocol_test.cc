@@ -145,6 +145,21 @@ TEST(JsonTest, WritesADelivery) {
          R"({"id":4,"summary":"frown","detail":{}}],"missed":2})"));
 }
 
+TEST(JsonTest, WritesAReadingsContextWhenPresent) {
+  const Feed::Delivery delivery{
+      .readings = {{.id = 3,
+                    .summary = "nod",
+                    .detail = R"({"g":1})",
+                    .context = R"({"gaze":"this_screen"})"},
+                   {.id = 4, .summary = "frown", .detail = "{}"}},
+      .missed = 0};
+
+  EXPECT_THAT(DeliveryJson(delivery),
+              Eq(R"({"readings":[{"id":3,"summary":"nod","detail":{"g":1},)"
+                 R"("context":{"gaze":"this_screen"}},)"
+                 R"({"id":4,"summary":"frown","detail":{}}],"missed":0})"));
+}
+
 TEST(JsonTest, WritesAnEmptyDelivery) {
   EXPECT_THAT(DeliveryJson({}), Eq(R"({"readings":[],"missed":0})"));
 }

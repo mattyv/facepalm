@@ -180,6 +180,33 @@ TEST_F(NoSilentGapTest, AReadingCarriesItsIdAndDetail) {
   EXPECT_THAT(Got(delivery).readings[0].detail, Eq(R"({"gesture":"nod"})"));
 }
 
+// Screen context (#61 item 11): a fourth, optional argument a caller that
+// does not pass one leaves this reading without, as every other test here
+// does.
+TEST_F(NoSilentGapTest, AReadingCarriesItsContextWhenGiven) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  feed_.React("nod", R"({"gesture":"nod"})", /*published_at_ms=*/std::nullopt,
+              R"({"gaze":"this_screen"})");
+
+  const auto delivery = feed_.Read("agent");
+
+  ASSERT_TRUE(delivery);
+  ASSERT_THAT(Got(delivery).readings, testing::SizeIs(1));
+  EXPECT_THAT(Got(delivery).readings[0].context,
+              Optional(Eq(R"({"gaze":"this_screen"})")));
+}
+
+TEST_F(NoSilentGapTest, AReadingWithNoContextGivenCarriesNone) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  feed_.React("nod", R"({"gesture":"nod"})");
+
+  const auto delivery = feed_.Read("agent");
+
+  ASSERT_TRUE(delivery);
+  ASSERT_THAT(Got(delivery).readings, testing::SizeIs(1));
+  EXPECT_THAT(Got(delivery).readings[0].context, Eq(std::nullopt));
+}
+
 TEST_F(NoSilentGapTest, AClientNotConnectedGetsNothing) {
   ASSERT_TRUE(feed_.Connect("left"));
   feed_.Disconnect("left");

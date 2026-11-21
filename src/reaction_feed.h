@@ -48,10 +48,13 @@ class ReactionFeed : public Feed {
   // Disconnect: ends the client's wait.
   void Disconnect(const std::string& client) override;
   // React: adds a reading, drops the oldest past capacity, and answers every
-  // waiting client. Returns the reading's id.
-  std::int64_t React(
-      std::string summary, std::string detail,
-      std::optional<std::int64_t> published_at_ms = std::nullopt);
+  // waiting client. Returns the reading's id. `context` is Feed::Reading's
+  // screen context (#61 item 11), carried through as given; it plays no
+  // part in the reading's cue, which CueOf still reads from `detail`
+  // alone.
+  std::int64_t React(std::string summary, std::string detail,
+                     std::optional<std::int64_t> published_at_ms = std::nullopt,
+                     std::optional<std::string> context = std::nullopt);
   // Read: what came since the client last looked; nullopt when it is not
   // connected or is waiting.
   std::optional<Delivery> Read(const std::string& client) override;
