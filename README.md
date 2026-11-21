@@ -73,7 +73,11 @@ made since, each with its reason, are in the
     `src/calibration_store` saves and loads the file; `src/calibration_reader`
     is the `FaceReader` that feeds it each frame's pose, as
     `LookAwayReader` does its detector. `calibrate_cli` drives one for
-    testing. `specs/Calibration.tla` models the lifecycle.
+    testing. `specs/Calibration.tla` models the lifecycle. Once saved, the
+    daemon loads the profile and gives it to `ScreenContextReporter`
+    (below), which adds a `calibrated_screen` field from
+    `NearestCalibratedScreen` alongside the uncalibrated `gaze` it already
+    reads.
 -   `src/screen_context`, `src/screen_context_reporter`,
     `src/screen_context_reader`, `src/screen_source`: the screen context a
     reading's `context` carries (#36 item 11 of #61): the frontmost app,

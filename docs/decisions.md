@@ -41,16 +41,18 @@ a line saying which entry replaced it.
     daemon's camera lifecycle, a session only ever sees the camera as up;
     the daemon's own `calibrate` support is likewise unwired until then,
     so `calibrate_cli` and the protocol line have nothing to talk to on a
-    running daemon until that follow-up lands. Item 11's coarse gaze
-    (#92, open, not yet landed when this was written) does not use a
-    calibration profile: its `CoarseGazeFrom`/`SideOf` in
-    `src/screen_context.cc` read only the resting pose and fixed degree
-    thresholds. Once a profile exists, that rule should prefer
-    `NearestCalibratedScreen(profile, pose)` over its own uncalibrated
-    guess whenever `LoadCalibrationProfile` finds one with screens, as
-    `src/calibration.h` documents at `NearestCalibratedScreen`; this
-    change does not make that switch itself, so as not to take on #92's
-    still-moving design.
+    running daemon until that follow-up lands. Item 11's coarse gaze (#92,
+    landed after this entry was first written) still reads `CoarseGazeFrom`
+    exactly as it did: `src/screen_context.cc`'s rule and the `gaze` field
+    it writes are untouched. `main.cc` loads a saved profile, if any, at
+    `UserPaths::calibration`, and `ScreenContextReporter` now takes it as
+    an optional fourth constructor argument; when given one with at least
+    one screen, and a pose to judge, `Json()` adds an additive
+    `calibrated_screen` field alongside `gaze` (never replacing it) from
+    `NearestCalibratedScreen`. Whether `calibrated_screen` should instead
+    replace or refine `gaze` itself (for instance, mapping a calibrated
+    screen other than the nearest-to-resting one onto `other_screen`) is
+    #92's design to make, not this item's.
 -   **Evidence:** [#61 item 12](https://github.com/mattyv/facepalm/issues/61),
     [#36](https://github.com/mattyv/facepalm/issues/36),
     [#35](https://github.com/mattyv/facepalm/issues/35).

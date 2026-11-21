@@ -91,7 +91,7 @@ facepalm_unit(screen_context_reporter)
 # The gaze rule and protocol::Quoted are pure computation, so the
 # reporter's tests run them for real; only ScreenSource, the OS seam, is
 # mocked.
-target_link_libraries(screen_context_reporter PUBLIC screen_context protocol)
+target_link_libraries(screen_context_reporter PUBLIC screen_context protocol calibration)
 facepalm_unit(screen_context_reader)
 # ScreenContextReader's tests run the real ExpressionTracker and head_pose
 # (also pure computation), as expression_reader's and look_away_reader's
@@ -284,7 +284,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   add_executable(facepalm_daemon tools/daemon/main.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "@executable_path/../Frameworks")
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
+    client_approvals client_token
     daemon_control daemon_options face_readers feed_clients user_paths avfoundation_session
     camera_controller config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
@@ -339,7 +340,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
   # face_model calls the shim, and the shim MediaPipe, so each comes after
   # the one that calls it.
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
+    client_approvals client_token
     daemon_control daemon_options face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader screen_context_reader screen_context_reporter screen_context
