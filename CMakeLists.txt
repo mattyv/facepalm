@@ -318,6 +318,7 @@ file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
   ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.cc ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.h
+  ${PROJECT_SOURCE_DIR}/tools/calibrate_cli/*.cc
   ${PROJECT_SOURCE_DIR}/tools/menu/*.cc ${PROJECT_SOURCE_DIR}/tools/menu/*.mm
   ${PROJECT_SOURCE_DIR}/tools/daemon/*.cc
   ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc
