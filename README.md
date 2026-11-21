@@ -154,6 +154,11 @@ Checks that CI runs:
 
 ```shell
 bash scripts/coverage.sh          # Each source's own tests, against its floors.
+# On Linux, the camera's sources in src/linux and the daemon too (#83).
+bash scripts/fetch_mediapipe_c.sh build-mediapipe-c
+bash scripts/coverage.sh \
+  -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/build-mediapipe-c/include" \
+  -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/build-mediapipe-c/lib/libmediapipe.so"
 # On Linux with Clang: check memory errors and undefined behavior.
 CXX=clang++ cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"

@@ -349,7 +349,12 @@ attempt as it starts, and `src/frame_pipeline.cc` hands that stamp to the
 ticket. `AvFoundationSession::Stop` waits for the capture queue, so a
 callback already queued finishes under the attempt it captured for, and a
 later `Start` cannot relabel its frame; no unit test reaches that code, so
-it is held to the spec's `Capture` by reading.
+it is held to the spec's `Capture` by reading. On Linux, `V4l2Session::Stop`
+joins its capture thread before it closes the device, and the thread stamps
+each frame with the attempt it was started for:
+`V4l2SessionTest.CopiesEachFrameAsBgraStampedWithItsAttempt` and
+`StoppingEndsCaptureWithoutAFailure` in `test/linux/v4l2_session_test.cc`
+hold it to `Capture` (#83).
 
 | Mutation to `SessionCamera` or `FramePipeline` | Fails |
 |---|---|
