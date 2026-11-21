@@ -11,20 +11,23 @@ a line saying which entry replaced it.
     [screens]` and stepped with `calibrate next` or ended early with
     `calibrate cancel`, records the resting pose and, for each screen, the
     head pose at its centre and four corners. It saves to a private file
-    (mode 0600, one per machine) the daemon owns, written to a temporary
-    file beside it and renamed over it, in a hand-rolled `name = value`
-    text format rather than JSON, since nothing else here needs to parse
-    that format back. `src/calibration.h`'s `CalibrationController` is the
-    session; `src/calibration_store.h` saves and loads the file;
-    `src/calibration_reader.h` feeds it each frame's pose, as
-    `LookAwayReader` does its detector. `specs/Calibration.tla` models the
-    lifecycle, including the camera going away mid-session, which cancels
-    it.
+    (mode 0600) the daemon owns, at `UserPaths::calibration` (#37's fixed
+    per-user paths, alongside `clients` and `socket`), written to a
+    temporary file beside it and renamed over it, in a hand-rolled
+    `name = value` text format rather than JSON, since nothing else here
+    needs to parse that format back. `src/calibration.h`'s
+    `CalibrationController` is the session; `src/calibration_store.h`
+    saves and loads the file; `src/calibration_reader.h` feeds it each
+    frame's pose, as `LookAwayReader` does its detector.
+    `specs/Calibration.tla` models the lifecycle, including the camera
+    going away mid-session, which cancels it. Like every client (#89), the
+    CLI built for testing here, `calibrate_cli`, needs its own token,
+    approved with `facepalm-daemon approve calibrate`.
 -   **Why:** #36 and #35 want calibration kept optional, against the
     low-calibration goal on #35: without it, gaze stays coarse (#36, item
     11). The session's own protocol line, not a new top-level verb pair,
-    keeps every client (the CLI built for testing here, the eventual menu
-    entry of item 8, and MCP, which can already send any line through
+    keeps every client (`calibrate_cli`, the eventual menu entry of item 8,
+    and MCP, which can already send any line through
     `SocketSession.request`) talking to one place.
 -   **Rejected:** JSON for the saved profile, which would need a JSON
     parser this codebase does not otherwise have, just to read back a file
@@ -38,7 +41,16 @@ a line saying which entry replaced it.
     daemon's camera lifecycle, a session only ever sees the camera as up;
     the daemon's own `calibrate` support is likewise unwired until then,
     so `calibrate_cli` and the protocol line have nothing to talk to on a
-    running daemon until that follow-up lands.
+    running daemon until that follow-up lands. Item 11's coarse gaze
+    (#92, open, not yet landed when this was written) does not use a
+    calibration profile: its `CoarseGazeFrom`/`SideOf` in
+    `src/screen_context.cc` read only the resting pose and fixed degree
+    thresholds. Once a profile exists, that rule should prefer
+    `NearestCalibratedScreen(profile, pose)` over its own uncalibrated
+    guess whenever `LoadCalibrationProfile` finds one with screens, as
+    `src/calibration.h` documents at `NearestCalibratedScreen`; this
+    change does not make that switch itself, so as not to take on #92's
+    still-moving design.
 -   **Evidence:** [#61 item 12](https://github.com/mattyv/facepalm/issues/61),
     [#36](https://github.com/mattyv/facepalm/issues/36),
     [#35](https://github.com/mattyv/facepalm/issues/35).
