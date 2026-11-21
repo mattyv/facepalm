@@ -28,6 +28,9 @@ std::string* Field(DaemonOptions& options, std::string_view option) {
   if (option == "--feelings-file") {
     return &options.feelings_file;
   }
+  if (option == "--status") {
+    return &options.status;
+  }
   return nullptr;
 }
 
@@ -89,6 +92,9 @@ std::optional<DaemonOptions> ParseDaemonOptions(
     }
     if (options.clients.empty()) {
       options.clients = defaults->clients;
+    }
+    if (options.status.empty() && running) {
+      options.status = defaults->status;
     }
   }
   if (options.clients.empty() ||

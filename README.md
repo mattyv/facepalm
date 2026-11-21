@@ -203,7 +203,9 @@ and expression detection, and advanced tuning. Choose **Settings…** from the
 tray to reopen the form. **Turn On Facepalm…** in the tray, as in the macOS
 menu, gives consent and starts the camera daemon as a systemd user service
 with the saved settings; **Turn Off Facepalm** stops it. The tray also shows
-local camera service readiness and offline replay availability.
+local camera service readiness, offline replay availability, and a
+**Camera on**/**Camera off** indicator that follows a client's
+subscription within a couple of seconds (#61 item 8).
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 

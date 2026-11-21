@@ -30,6 +30,7 @@
 #include "src/config.h"
 #include "src/daemon_control.h"
 #include "src/daemon_options.h"
+#include "src/daemon_status.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
 #include "src/face_readers.h"
@@ -105,11 +106,13 @@ class Engine : public DaemonController, public DaemonPipeline {
   Engine(std::unique_ptr<Listener> listener, Approvals& approvals,
          std::string model, Config config,
          std::unique_ptr<FeelingStore> feelings, Post control, Post camera,
-         Post inference, [[maybe_unused]] std::string device = {})
+         Post inference, [[maybe_unused]] std::string device = {},
+         std::string status_path = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
         feelings_(std::move(feelings)),
+        status_path_(std::move(status_path)),
         feed_(kFeedCapacity, *feelings_),
         clients_(
             [this](std::string summary, std::string detail,
@@ -120,6 +123,7 @@ class Engine : public DaemonController, public DaemonPipeline {
         approved_(
             feed_,
             [this](bool joined) {
+              PublishStatus(joined);
               control_queue_([this, joined] { control_.Subscription(joined); });
             },
             [this](const std::string& session) {
@@ -165,7 +169,13 @@ class Engine : public DaemonController, public DaemonPipeline {
                     }}) {
   }
 
-  void Start() { service_.Start(); }
+  // CameraStatus!Restart: republishes off before the service can take any
+  // subscription (#37 item 8), so a status file left stale by a previous
+  // crash does not linger once this one takes over.
+  void Start() {
+    PublishStatus(false);
+    service_.Start();
+  }
   void Stop() { control_.Stop(); }
   void Subscribe() override { controller_.Subscribe("approved"); }
   void Leave() override { controller_.Leave("approved"); }
@@ -195,10 +205,23 @@ class Engine : public DaemonController, public DaemonPipeline {
     return analyzers;
   }
 
+  // CameraStatus!Publish. A daemon started with no --status path (such as
+  // a test fixture's) simply runs without one.
+  void PublishStatus(bool on) {
+    if (status_path_.empty()) {
+      return;
+    }
+    std::string error;
+    if (!PublishCameraStatus(status_path_, on, error)) {
+      std::fprintf(stderr, "facepalm-daemon: %s\n", error.c_str());
+    }
+  }
+
   Post control_queue_;
   std::string model_;
   Config config_;
   std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
+  std::string status_path_;
   ReactionFeed feed_;
   FeedClients clients_;
   ApprovedFeed approved_;
@@ -328,7 +351,8 @@ int main(int argc, char** argv) {
   facepalm::Engine engine(std::move(listener), approvals, options->model,
                           config, std::move(feelings), control.Poster(),
                           camera.Poster(), inference.Poster(),
-                          device != nullptr ? device : "/dev/video0");
+                          device != nullptr ? device : "/dev/video0",
+                          options->status);
   engine.Start();
   int signal_number = 0;
   if (sigwait(&signals, &signal_number) != 0) {
@@ -350,7 +374,8 @@ int main(int argc, char** argv) {
       facepalm::OnQueue(
           dispatch_queue_create("facepalm.camera", DISPATCH_QUEUE_SERIAL)),
       facepalm::OnQueue(
-          dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)));
+          dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)),
+      /*device=*/{}, options->status);
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
     dispatch_source_t source =

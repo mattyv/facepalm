@@ -30,6 +30,7 @@
 
 #include "src/client_approvals.h"
 #include "src/client_token.h"
+#include "src/daemon_status.h"
 #include "src/settings_document.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
@@ -65,6 +66,14 @@ bool ServiceReady(const QString& path) {
   socket.connectToServer(path);
   return socket.state() == QLocalSocket::ConnectedState ||
          socket.waitForConnected(50);
+}
+
+// The camera-in-use file (#37 item 8), from src/user_paths.h: no new path
+// or token of its own.
+QString StatusPath() {
+  const std::optional<facepalm::UserPaths> paths = facepalm::PathsFor(
+      QDir::homePath().toStdString(), facepalm::Platform::kLinux);
+  return paths ? QString::fromStdString(paths->status) : QString();
 }
 
 QString ConfigPath() {
@@ -394,6 +403,8 @@ int main(int argc, char* argv[]) {
   SettingsDialog window;
 
   QMenu menu;
+  QAction* camera_status = menu.addAction(QString());
+  camera_status->setEnabled(false);
   QAction* services = menu.addAction(QString());
   services->setEnabled(false);
   QAction* tools = menu.addAction(QString::fromUtf8(kReplayStatus));
@@ -444,6 +455,21 @@ int main(int argc, char* argv[]) {
   QTimer refresh_timer;
   QObject::connect(&refresh_timer, &QTimer::timeout, &window, refresh);
   refresh_timer.start(3000);
+
+  // The camera-in-use indicator (#37 item 8): its own, faster timer so the
+  // tray settles within the two seconds it is asked to, independent of the
+  // slower daemon-reachability check above.
+  const QString status_path = StatusPath();
+  const auto refresh_camera_status = [=] {
+    camera_status->setText(facepalm::ReadCameraStatus(status_path.toStdString())
+                               ? QStringLiteral("Camera on")
+                               : QStringLiteral("Camera off"));
+  };
+  refresh_camera_status();
+  QTimer camera_status_timer;
+  QObject::connect(&camera_status_timer, &QTimer::timeout, &window,
+                   refresh_camera_status);
+  camera_status_timer.start(1000);
 
   if (!QSystemTrayIcon::isSystemTrayAvailable()) {
     show_window();

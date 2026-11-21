@@ -19,7 +19,8 @@ std::optional<UserPaths> PathsFor(std::string_view home, Platform platform) {
                                : "/.local/state/facepalm");
   return UserPaths{.directory = directory,
                    .socket = directory + "/service.sock",
-                   .clients = directory + "/clients"};
+                   .clients = directory + "/clients",
+                   .status = directory + "/status"};
 }
 
 std::string ClientTokenPath(const UserPaths& paths, std::string_view name) {

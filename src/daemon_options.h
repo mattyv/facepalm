@@ -15,10 +15,12 @@ namespace facepalm {
 //
 //   facepalm-daemon --consent --model PATH [--socket PATH]
 //       [--clients DIRECTORY] [--config PATH] [--feelings-file PATH]
+//       [--status PATH]
 //   facepalm-daemon approve NAME [--clients DIRECTORY]
 //   facepalm-daemon revoke NAME [--clients DIRECTORY]
 //
-// The socket and the clients directory default to the person's UserPaths.
+// The socket, the clients directory and the status file default to the
+// person's UserPaths.
 struct DaemonOptions {
   enum class Command : std::uint8_t { kRun, kApprove, kRevoke };
   Command command = Command::kRun;
@@ -29,11 +31,15 @@ struct DaemonOptions {
   std::string clients;
   std::string config;         // Empty for the defaults.
   std::string feelings_file;  // Empty for the default (DefaultFeelingsPath).
+  // The camera-in-use file (#37 item 8); empty to run without publishing
+  // one, which running needs no other default to allow.
+  std::string status;
 };
 
 inline constexpr std::string_view kDaemonUsage =
     "usage: facepalm-daemon --consent --model PATH [--socket PATH]\n"
     "         [--clients DIRECTORY] [--config PATH] [--feelings-file PATH]\n"
+    "         [--status PATH]\n"
     "       facepalm-daemon approve NAME [--clients DIRECTORY]\n"
     "       facepalm-daemon revoke NAME [--clients DIRECTORY]\n";
 

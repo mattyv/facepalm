@@ -25,6 +25,7 @@ struct UserPaths {
   std::string directory;
   std::string socket;   // The service's socket, in `directory`.
   std::string clients;  // One token file per approved client, in `directory`.
+  std::string status;   // The camera-in-use status file (#37 item 8).
 };
 
 // The paths under `home`, or nullopt when `home` is not an absolute path.
