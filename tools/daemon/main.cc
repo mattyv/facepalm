@@ -65,7 +65,7 @@ class SerialQueue {
   }
 
  private:
-  void Run(std::stop_token stop) {
+  void Run(const std::stop_token& stop) {
     for (;;) {
       std::function<void()> task;
       {
@@ -83,7 +83,7 @@ class SerialQueue {
   std::mutex mutex_;
   std::condition_variable_any ready_;
   std::queue<std::function<void()>> pending_;
-  std::jthread worker_{[this](std::stop_token stop) { Run(stop); }};
+  std::jthread worker_{[this](const std::stop_token& stop) { Run(stop); }};
 };
 #else
 Post OnQueue(dispatch_queue_t queue) {
