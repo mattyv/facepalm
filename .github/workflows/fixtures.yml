@@ -12,6 +12,8 @@ on:
     paths:
       - src/mediapipe_shim/**
       - src/face_model.*
+      - src/frame_times.*
+      - src/BUILD
       - src/approved_feed.*
       - src/client_token.*
       - src/daemon_control.*
@@ -25,6 +27,8 @@ on:
     paths:
       - src/mediapipe_shim/**
       - src/face_model.*
+      - src/frame_times.*
+      - src/BUILD
       - src/approved_feed.*
       - src/client_token.*
       - src/daemon_control.*

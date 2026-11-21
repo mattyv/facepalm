@@ -55,6 +55,7 @@ facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
 facepalm_unit(frame)
 facepalm_unit(frame_pipeline)
+facepalm_unit(frame_times)
 # ToRgba is pure computation, so the pipeline's tests run it for real.
 target_link_libraries(frame_pipeline PUBLIC frame)
 facepalm_unit(expression_reader)
@@ -203,8 +204,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     expression_reader gesture_reader reaction_feed rating_log service unix_socket face_model
     facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
-  target_link_libraries(face_model_check PRIVATE face_model head_gesture_model
-    facepalm_mediapipe
+  target_link_libraries(face_model_check PRIVATE face_model frame_times
+    head_gesture_model facepalm_mediapipe
     "-framework CoreFoundation" "-framework CoreGraphics" "-framework ImageIO")
   get_filename_component(FACEPALM_MEDIAPIPE_DIR ${FACEPALM_MEDIAPIPE_DYLIB}
     DIRECTORY)
