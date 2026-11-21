@@ -5,6 +5,25 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Build and test the Linux camera's sources in CI
+
+-   **Decision:** CI's `linux` and `sanitizers` jobs fetch MediaPipe's C
+    headers and `libmediapipe.so` with `scripts/fetch_mediapipe_c.sh`, each
+    file checked against `scripts/mediapipe_c.sha256` and the folder cached,
+    and build the Linux daemon with them. `src/linux/mediapipe_c_shim.cc`
+    and `src/linux/v4l2_session.cc` are units of their own, held to 100
+    percent by `test/linux/*_test.cc`, whose fakes stand in for MediaPipe's
+    C API, libv4l2 and `poll` at link time. Their floors count on Linux
+    only.
+-   **Why:** no job built either file or the daemon, so a mistake in them,
+    such as in the shim's result-shape checks, would show only on a real
+    Ubuntu run.
+-   **Rejected:** fetching the whole MediaPipe checkout for nine headers;
+    pinning only the wheel's hash, which leaves the headers to a git commit;
+    and an interface injected into `V4l2Session` for its system calls, a
+    larger seam than the link-time one `test/face_model_test.cc` already
+    uses. Evidence: [#83](https://github.com/mattyv/facepalm/issues/83).
+
 ## 2026-11-21: Skip a degenerate pose's frame in the expression reader
 
 -   **Decision:** the expression reader drops a face whose transformation
