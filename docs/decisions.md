@@ -5,6 +5,19 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Bound camera_probe's recording and fail an incomplete one
+
+The probe's recorder holds at most 30 frame copies waiting to be written
+(two seconds at 15 frames a second, about 35 MiB at 640x480), and drops a
+frame past that. The probe exits only after every frame it accepted is
+written or has failed, and exits with 1 when any frame was dropped or not
+written; a frame's capture time goes in `timestamps.txt` only once its PNG
+is written. Rejected: blocking the capture queue on a full backlog, which
+would stall the camera and the face model with it, and exiting without
+waiting, which reported success with frames still unwritten. A disk that
+never answers now leaves the probe waiting rather than exiting. Evidence:
+[#41](https://github.com/mattyv/facepalm/issues/41).
+
 ## 2026-11-21: Remove only facepalm's own socket at the socket path
 
 At startup, facepalm still replaces a socket that nothing answers on, so it
