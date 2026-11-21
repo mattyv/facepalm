@@ -10,7 +10,7 @@ import test from 'node:test';
 const adapter = process.env.FACEPALM_MCP_ADAPTER ?? 'mcp/main.js';
 const fixturePath = process.env.MCP_FIXTURE ?? './build/mcp_service_fixture';
 
-test('MCP reads and rates the real synthetic service per session', { timeout: 15000 }, async (t) => {
+test('MCP reads, rates and reads a beat from the real synthetic service per session', { timeout: 15000 }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'fp-mcp-'));
   const socketPath = path.join(dir, 's');
   const feedbackPath = path.join(dir, 'ratings.jsonl');
@@ -83,6 +83,22 @@ test('MCP reads and rates the real synthetic service per session', { timeout: 15
   await truncate(feedbackPath, 10 * 1024 * 1024);
   assert.equal((await rate(first, 1, 4)).isError, true);
   assert.equal((await rate(first, 999, 5)).isError, true);
+
+  // A beat: the nod made inside its window is read as agreement.
+  const beat = first.call('tools/call', {
+    name: 'wait_for_reaction', arguments: { beat: 'question', timeout_ms: 3000 },
+  });
+  assert.equal((await lines.next()).value, 'beat');
+  fixture.stdin.write('react\n');
+  assert.equal((await lines.next()).value, 'reacted 2');
+  const beaten = unpack(await beat);
+  assert.deepEqual(beaten.readings.map((reading) => reading.id), [2]);
+  assert.deepEqual(beaten.interpretation, { id: 1, feeling: 'agreement', beat: 'question' });
+  const quiet = unpack(await first.call('tools/call', {
+    name: 'wait_for_reaction', arguments: { beat: 'proposal', timeout_ms: 1 },
+  }));
+  assert.equal((await lines.next()).value, 'beat');
+  assert.deepEqual(quiet.interpretation, { id: 2, feeling: 'unknown', beat: 'proposal' });
 
   const second = await session();
   assert.deepEqual(unpack(await wait(second, 0)).readings, []);

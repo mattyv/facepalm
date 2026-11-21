@@ -30,6 +30,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 1,588 |
 | `DaemonAdmission.cfg` | one client: consent, approval, retirement | holds | 26 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
+| `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none | holds | 3,815,485 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
@@ -458,6 +459,71 @@ tests that stand for the properties they break:
 A wait's tests require it to end within 5 seconds of a 10 second timeout, so
 a missing wake fails them rather than passing late.
 
+## `FeelingBeat`: a reaction read as a feeling
+
+Models #70, item 3 of #61. A client that has just asked the person a question
+or made a proposal marks a beat. The window opens at the next reading; when it
+ends, the client is told every reading since it last looked, as a read would
+tell it, and one interpretation: a feeling, or unknown. Each reading carries
+its cue: a nod, a shake, a puzzled face (brows down or narrowed eyes, held), or
+none. The generic rule reads one kind of cue as its feeling, and no cue, cues of
+different feelings, or a window missing a dropped reading as unknown.
+Disconnecting during a beat ends it with no answer. `during` and `lost` are
+ghost variables recording what really happened while the beat was open, and
+each answer is checked against them as it is given.
+
+The config leaves the puzzled face out: the rule treats it exactly as a nod or
+a shake, so two feelings are enough for a conflict, and a fourth cue made the
+state space too large to check in CI. A timeline keeping two is the smallest in
+which a beat can hold two cues without dropping one; with a timeline of one,
+`GuardConflictUnknown = FALSE` passed, because every conflict was also an
+incomplete window.
+
+| Property | What it says | Test |
+|---|---|---|
+| `OneAnswerPerBeat` | Each beat gets at most one answer, and none once its client has left. | `OneAnswerPerBeatTest` in `test/reaction_feed_test.cc` |
+| `ReadsOnlyTheBeat` | With the window whole, cues of one feeling give that feeling, never one from a reading made before the beat. | `ReadsOnlyTheBeatTest` in `test/reaction_feed_test.cc` and `test/feelings_test.cc` |
+| `UnknownWhenUnclear` | No cue of a feeling, or cues of different feelings, read as unknown. | `UnknownWhenUnclearTest` in both |
+| `UnknownWhenIncomplete` | A window with a reading dropped before the beat ended reads as unknown. | `UnknownWhenIncompleteTest` in both |
+| `NoSilentGap` | Marking a beat skips no reading: each is shown or counted as missed. | `ReadsOnlyTheBeatTest.AReadingBeforeTheBeatIsToldButNotRead` |
+| `NoRepeat` | No reading is shown to the same client twice, the beat's reply included. | `ReadsOnlyTheBeatTest.AReadingAfterTheBeatGoesToTheNextRead` |
+| `CanAgree` | Something must happen: a beat in which the person only nodded can end read as agreement. | `CanAgreeTest` |
+| `BeatEnds` | Every beat ends, answered or abandoned. | `BeatEndsTest`, `OneAnswerPerBeatTest.DisconnectingEndsTheBeatUnanswered` |
+
+Each mutation, and what TLC found. The invariant mutations ran without
+`BeatEnds`, so the check stops at the first violation:
+
+| Mutation | Broke |
+|---|---|
+| `GuardWindowStart = FALSE`: the beat reads from the client's cursor | `CanAgree`, 5 states; without it, `UnknownWhenUnclear`, 5 states; without both, `ReadsOnlyTheBeat`, 6 states |
+| `GuardDroppedUnknown = FALSE`: a window missing a reading is read anyway | `UnknownWhenIncomplete`, 7 states |
+| `GuardConflictUnknown = FALSE`: one of several feelings wins | `UnknownWhenUnclear`, 6 states |
+| `GuardCloseBeat = FALSE`: a beat stays open after its answer | `OneAnswerPerBeat`, 6 states |
+| `GuardCancelOnLeave = FALSE`: disconnecting leaves the beat open | `OneAnswerPerBeat`, 8 states |
+| `GuardKeepBacklog = FALSE`: marking a beat moves the cursor past the backlog | `NoSilentGap`, 4 states |
+| Every beat answers unknown | `CanAgree`, 4 states |
+| A beat answers a value that is not a feeling | `TypeOK`, 6 states |
+| The beat's reply leaves the cursor where it was | `NoRepeat`, 6 states |
+| No fairness on `EndBeat` | `BeatEnds`, 10 states |
+
+`src/reaction_feed.cc` implements `Mark`, `EndBeat` and `Answer` in
+`ReactionFeed::Beat` and `ReactionFeed::Answer`, and `src/feelings.cc` the
+rule, `Interpret`. The same mutations, made to that code, fail the tests that
+stand for the properties they break:
+
+| Mutation to the code | Fails |
+|---|---|
+| The window opens at the client's cursor | `ReadsOnlyTheBeatTest.AReadingBeforeTheBeatIsToldButNotRead`, `UnknownWhenIncompleteTest.AReadingDroppedBeforeTheBeatDoesNot` |
+| Marking a beat moves the cursor past the backlog | the same two |
+| A dropped reading of the window is ignored | `UnknownWhenIncompleteTest.ADroppedReadingMakesTheBeatUnknown` |
+| Cues of different feelings: the last wins | `UnknownWhenUnclearTest.CuesOfDifferentFeelingsAreUnknown`, `UnknownWhenUnclearTest.ANodAndAShakeAreUnknown` |
+| Disconnecting does not end the beat | `OneAnswerPerBeatTest.DisconnectingEndsTheBeatUnanswered` |
+| Every beat reads as unknown | `CanAgreeTest.ANodDuringTheBeatIsAgreement`, and four others |
+| A reading ends the beat before its window | `BeatEndsTest.ABeatEndsWhenItsWindowDoes`, and two others |
+
+A beat's tests make their readings once the beat is seen open, inside a 500 ms
+window, and fail rather than hang when the beat ends before it is seen open.
+
 ## `Service`: the background service and its connections
 
 Models #37's service. It accepts connections on a socket only its user can
@@ -467,6 +533,11 @@ waits for a reading, or rates. The peer can hang up at any time, but a
 thread blocked in a wait is not reading its socket, so it notices only once
 the wait ends. Stopping the service closes every connection, and must not
 hang on a waiting one, since a wait can last its whole timeout.
+
+A beat (`FeelingBeat`) is a wait to this model: its thread blocks until the
+window ends or the client is disconnected, so `Wait` and `Answered` stand for
+it too, and `StopWakesWaitersTest.StoppingEndsABeatAndTheConnection` checks
+that stopping ends one. The model itself is unchanged.
 
 | Property | What it says | Test |
 |---|---|---|

@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "src/feed.h"
+#include "src/feelings.h"
 
 // What a client and facepalm's service say to each other (#37): a request
 // is one line of text, and each reply is one line of JSON.
@@ -17,6 +18,9 @@
 //   read                  the readings since this client last looked
 //   wait <milliseconds>   as read, waiting up to 60 seconds for one
 //   rate <id> <score>     rates a reading this client was shown, 1 to 5
+//   beat <kind> <milliseconds>
+//                         marks a beat after a question or a proposal, and
+//                         waits out its 1 to 10000 millisecond window
 namespace facepalm::protocol {
 
 struct Hello {
@@ -31,7 +35,13 @@ struct RateRequest {
   int score;
 };
 
-using Request = std::variant<Hello, ReadRequest, WaitRequest, RateRequest>;
+struct BeatRequest {
+  BeatKind kind;
+  std::chrono::milliseconds window;
+};
+
+using Request =
+    std::variant<Hello, ReadRequest, WaitRequest, RateRequest, BeatRequest>;
 
 // The request on `line`, or nullopt with `error` saying why not.
 std::optional<Request> Parse(std::string_view line, std::string& error);
@@ -39,6 +49,9 @@ std::optional<Request> Parse(std::string_view line, std::string& error);
 // {"readings":[{"id":..,"summary":"..","detail":{..}}],"missed":n}. A
 // reading's detail is JSON facepalm wrote, so it goes in as it is.
 // Live readings also carry published_at_ms as Unix epoch milliseconds.
+// The reply that ends a beat adds
+// "interpretation":{"id":..,"feeling":"..","beat":".."}, with the feeling
+// one of src/feelings.h's names.
 // The reply to a request that worked and has nothing to return.
 inline constexpr std::string_view kOkJson = R"({"ok":true})";
 

@@ -70,3 +70,54 @@ test('refused rating is an error', async () => {
     assert.equal(result.isError, true);
   } finally { await client.close(); await server.close(); }
 });
+
+test('a beat marks the window after a question and returns its interpretation', async () => {
+  const commands = [];
+  const reply = {
+    readings: [{ id: 3, summary: 'Gesture: nod', detail: { gesture: 'nod' } }], missed: 0,
+    interpretation: { id: 1, feeling: 'agreement', beat: 'question' },
+  };
+  const { server, client } = await connected({ request: async (command, signal, timeout) => {
+    commands.push([command, timeout]);
+    return reply;
+  }});
+  try {
+    const description = (await client.listTools()).tools.find((tool) => tool.name === 'wait_for_reaction').description;
+    assert.match(description, /beat/);
+    assert.match(description, /never.*answer/i);
+    const result = await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'question' } });
+    assert.deepEqual(JSON.parse(result.content[0].text), reply);
+    const proposal = await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'proposal', timeout_ms: 10000 } });
+    assert.notEqual(proposal.isError, true);
+    assert.deepEqual(commands, [['beat question 1500', 6500], ['beat proposal 10000', 15000]]);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('a beat outside 1 to 10000 milliseconds or of another kind is refused unsent', async () => {
+  const commands = [];
+  const { server, client } = await connected({ request: async (command) => { commands.push(command); return {}; } });
+  try {
+    for (const args of [{ beat: 'question', timeout_ms: 0 }, { beat: 'question', timeout_ms: 10001 }]) {
+      const result = await client.callTool({ name: 'wait_for_reaction', arguments: args });
+      assert.equal(result.isError, true);
+      assert.equal(result.content[0].text, 'A beat lasts 1 to 10000 milliseconds.');
+    }
+    assert.equal((await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'answer' } })).isError, true);
+    assert.deepEqual(commands, []);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('a beat reply without an interpretation closes the session', async () => {
+  for (const interpretation of [undefined, { id: 1, feeling: 'Agreement!', beat: 'question' }, { id: 0, feeling: 'agreement', beat: 'question' }]) {
+    let closed = false;
+    const { server, client } = await connected({
+      request: async () => ({ readings: [], missed: 0, interpretation }),
+      close: () => { closed = true; },
+    });
+    try {
+      const result = await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'question' } });
+      assert.equal(result.isError, true);
+      assert.equal(closed, true);
+    } finally { await client.close(); await server.close(); }
+  }
+});

@@ -140,10 +140,16 @@ bool Service::Answer(const std::string& name, std::string_view line,
                          : protocol::ErrorJson("cannot rate that reading"));
     return true;
   }
-  // Service!Wait and Service!Answered, or a read.
-  const auto* wait = std::get_if<protocol::WaitRequest>(&*request);
-  const std::optional<Feed::Delivery> delivery =
-      wait == nullptr ? feed_.Read(name) : feed_.Wait(name, wait->timeout);
+  // Service!Wait and Service!Answered, for a wait or a beat
+  // (specs/FeelingBeat.tla), or a read.
+  std::optional<Feed::Delivery> delivery;
+  if (const auto* beat = std::get_if<protocol::BeatRequest>(&*request)) {
+    delivery = feed_.Beat(name, beat->kind, beat->window);
+  } else if (const auto* wait = std::get_if<protocol::WaitRequest>(&*request)) {
+    delivery = feed_.Wait(name, wait->timeout);
+  } else {
+    delivery = feed_.Read(name);
+  }
   if (!delivery) {
     // Only Stop disconnects a client while its connection is open.
     stream.WriteLine(protocol::ErrorJson("closing"));
