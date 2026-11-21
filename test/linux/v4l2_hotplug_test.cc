@@ -9,8 +9,8 @@
 #include <fcntl.h>
 #include <libv4l2.h>
 #include <linux/videodev2.h>
+#include <poll.h>
 #include <sys/inotify.h>
-#include <sys/select.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -46,7 +46,7 @@ class MockV4l2Hotplug {
   MOCK_METHOD(int, InotifyInit1, (int flags));
   MOCK_METHOD(int, InotifyAddWatch,
               (int fd, const char* path, std::uint32_t mask));
-  MOCK_METHOD(int, Select, (int nfds, timeval* timeout));
+  MOCK_METHOD(int, Poll, (pollfd * fds, nfds_t count, int timeout));
   MOCK_METHOD(ssize_t, Read, (int fd, void* buffer, std::size_t size));
   MOCK_METHOD(int, Open, (const char* file, int flags));
   MOCK_METHOD(int, Close, (int fd));
@@ -76,9 +76,9 @@ auto Capability(std::string card, std::string bus_info) {
   };
 }
 
-// A select() that waits a moment and finds nothing ready, the way
-// v4l2_session_test.cc's NothingYet() slows its own busy loop.
-int TimesOut(int /*nfds*/, timeval* /*timeout*/) {
+// A poll that waits a moment and finds nothing to read, as
+// v4l2_session_test.cc's own NothingYet() does.
+int NothingYet() {
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
   return 0;
 }
@@ -232,7 +232,9 @@ TEST_F(V4l2HotplugTest, InitialScanProbesAllFourNodesWithoutFiringAnyCallback) {
     EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
     EXPECT_CALL(mock_, Open(StrEq("/dev/video3"), _)).WillOnce(Return(-1));
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
 
   Start();
   Stop();
@@ -252,8 +254,10 @@ TEST_F(V4l2HotplugTest, ANewCameraFiresOnConnected) {
         .WillOnce(Capability("New Camera", "usb-new"));
     EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(Delivers(EncodedEvent(IN_CREATE, "video0")));
 
@@ -275,8 +279,10 @@ TEST_F(V4l2HotplugTest, ACameraThatDoesNotQueryIsIgnoredOnConnect) {
     EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(Return(-1));
     EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(CountedRead(Delivers(EncodedEvent(IN_CREATE, "video1"))));
 
@@ -300,8 +306,10 @@ TEST_F(V4l2HotplugTest, AKnownCameraDisconnects) {
     EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
     EXPECT_CALL(mock_, Open(StrEq("/dev/video3"), _)).WillOnce(Return(-1));
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(Delivers(EncodedEvent(IN_DELETE, "video2")));
 
@@ -320,8 +328,10 @@ TEST_F(V4l2HotplugTest, AnUnknownNodeDisconnectingIsIgnored) {
     InSequence order;
     NoneAttachedAtStartup(mock_);
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(CountedRead(Delivers(EncodedEvent(IN_DELETE, "video0"))));
 
@@ -339,8 +349,10 @@ TEST_F(V4l2HotplugTest, AnUnrelatedNameIsIgnored) {
     InSequence order;
     NoneAttachedAtStartup(mock_);
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(CountedRead(Delivers(EncodedEvent(IN_CREATE, "null"))));
 
@@ -359,8 +371,10 @@ TEST_F(V4l2HotplugTest, AnEventWithNeitherCreateNorDeleteIsIgnored) {
     InSequence order;
     NoneAttachedAtStartup(mock_);
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(CountedRead(Delivers(EncodedEvent(IN_ATTRIB, "video0"))));
 
@@ -389,8 +403,10 @@ TEST_F(V4l2HotplugTest, SeveralEventsInOneReadAreAllHandled) {
         .WillOnce(Capability("New Camera", "usb-new"));
     EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(Delivers(EncodedEvents({EncodedEvent(IN_CREATE, "video0"),
                                         EncodedEvent(IN_DELETE, "video2")})));
@@ -411,7 +427,7 @@ TEST_F(V4l2HotplugTest, AReadFailureEndsWatchingCleanly) {
     InSequence order;
     NoneAttachedAtStartup(mock_);
   }
-  EXPECT_CALL(mock_, Select(_, _)).WillOnce(Return(1));
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1));
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(CountedRead(
           [](int, void*, std::size_t) { return static_cast<ssize_t>(-1); }));
@@ -431,7 +447,9 @@ TEST_F(V4l2HotplugTest, StoppingEndsTheWatchCleanly) {
     InSequence order;
     NoneAttachedAtStartup(mock_);
   }
-  EXPECT_CALL(mock_, Select(_, _)).Times(AnyNumber()).WillRepeatedly(TimesOut);
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
 
   Start();
   Stop();
@@ -470,10 +488,8 @@ int inotify_add_watch(int fd, const char* path, std::uint32_t inotify_mask) {
   return facepalm::mock->InotifyAddWatch(fd, path, inotify_mask);
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-int select(int nfds, fd_set* /*readfds*/, fd_set* /*writefds*/,
-           fd_set* /*exceptfds*/, timeval* timeout) {
-  return facepalm::mock->Select(nfds, timeout);
+int poll(pollfd* fds, nfds_t nfds, int timeout) {
+  return facepalm::mock->Poll(fds, nfds, timeout);
 }
 
 // NOLINTNEXTLINE(readability-inconsistent-declaration-parameter-name)

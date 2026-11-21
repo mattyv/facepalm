@@ -3,13 +3,11 @@
 #include <fcntl.h>
 #include <libv4l2.h>
 #include <linux/videodev2.h>
+#include <poll.h>
 #include <sys/inotify.h>
-#include <sys/select.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #include <array>
-#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <map>
@@ -31,8 +29,9 @@ constexpr int kProbedNodes = 4;
 constexpr const char* kDevDirectory = "/dev";
 // How long one wait for an inotify event blocks before checking
 // stop_requested again, the same way SessionCamera's capture loop polls
-// its device at a bounded interval.
-constexpr std::chrono::milliseconds kPollInterval{200};
+// its device at a bounded interval (100ms there; this one need not notice
+// quite as fast).
+constexpr int kPollIntervalMs = 200;
 constexpr std::size_t kEventBufferSize = 4096;
 
 std::string NodePath(int index) { return "/dev/video" + std::to_string(index); }
@@ -140,16 +139,8 @@ void V4l2InotifyMonitor::Watch(
   }
   std::array<std::byte, kEventBufferSize> buffer;
   while (!stop.stop_requested()) {
-    fd_set descriptors;
-    FD_ZERO(&descriptors);
-    FD_SET(notify, &descriptors);
-    timeval wait{
-        .tv_sec = 0,
-        .tv_usec = static_cast<suseconds_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(kPollInterval)
-                .count()),
-    };
-    if (select(notify + 1, &descriptors, nullptr, nullptr, &wait) <= 0) {
+    pollfd input{.fd = notify, .events = POLLIN, .revents = 0};
+    if (poll(&input, 1, kPollIntervalMs) <= 0) {
       continue;
     }
     const auto count = read(notify, buffer.data(), buffer.size());

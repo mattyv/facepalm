@@ -25,7 +25,7 @@ a line saying which entry replaced it.
     same cached id, since a gone node cannot be queried for it anymore.
     Chosen over udev because it adds no library (`libv4l-dev`, already a
     dependency, is all `V4l2InotifyMonitor` needs) and because its own
-    OS calls (`inotify_init1`, `inotify_add_watch`, `select`, `read`) fake
+    OS calls (`inotify_init1`, `inotify_add_watch`, `poll`, `read`) fake
     at link time the same way `v4l2_open`/`v4l2_ioctl`/`v4l2_close` already
     do for `V4l2Session`, so `test/linux/v4l2_hotplug_test.cc` covers the
     real watch loop with no real directory and no real camera, which a
