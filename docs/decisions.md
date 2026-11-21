@@ -57,6 +57,32 @@ a line saying which entry replaced it.
     [#36](https://github.com/mattyv/facepalm/issues/36),
     [#35](https://github.com/mattyv/facepalm/issues/35).
 
+## 2026-11-21: Run clang-tidy for the Linux-only sources in CI's linux job
+
+-   **Decision:** the `linux` job gets its own `clang-tidy` step, configuring
+    with the project's `-DFACEPALM_TIDY=ON` (the same flag and `.clang-tidy`
+    the `macos` job uses) once against `src/linux/*`, `test/linux/*` and the
+    Linux branches of `tools/daemon/main.cc` (with the MediaPipe C paths
+    already fetched for that job), and once with `-DFACEPALM_LINUX_TRAY=ON
+    -DBUILD_TESTING=OFF` to also reach `tools/menu/main_linux.cc`, the Linux
+    tray menu that otherwise only builds under the `debian-package` job's
+    Qt and GUI test stack. `clang-tidy` itself is installed from
+    apt.llvm.org at the major version Homebrew's `llvm` formula currently
+    resolves to (23), so a shared source that `FACEPALM_TIDY` re-checks on
+    both jobs gets the same checker on each; the comment above the `linux`
+    job says to bump that number with Homebrew's.
+-   **Why:** clang-tidy only ran on macOS, so it never saw the sources that
+    build only on Linux, against the rule that clang-tidy checks all C++ and
+    fails CI on any finding (#88).
+-   **Rejected:** scoping `CXX_CLANG_TIDY` to the Linux-only targets instead
+    of reusing `FACEPALM_TIDY`, which would have skipped re-checking the
+    sources the `macos` job already covers, at the cost of a second
+    clang-tidy wiring to keep in step with `.clang-tidy`'s checks; enabling
+    `FACEPALM_LINUX_TRAY` in the main Linux build so one configure covers
+    everything, which would have pulled dbus/xvfb/xdotool into the `linux`
+    job for a tidy pass that never runs its GUI test. Evidence:
+    [#88](https://github.com/mattyv/facepalm/issues/88).
+
 ## 2026-11-21: Report the screen context a reaction was read in
 
 -   **Decision:** every reading, when `screen_context.enabled` (default on),
