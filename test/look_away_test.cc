@@ -90,6 +90,20 @@ TEST(NoReportWhileLearningTest, NothingIsReportedWithoutARestingPose) {
   EXPECT_TRUE(detector.Update(Yawed(30), kRest, 3500));
 }
 
+// LookAway.tla's Gap: the resting pose is learned afresh, and held' =
+// FALSE, so a hold already in progress does not carry across the gap. Were
+// it not cleared, 1,000 - 0 (the pre-gap away_ms_) would already be at
+// hold_ms once learning resumes, reporting at 1000 rather than waiting the
+// full hold_ms from there.
+TEST(NoReportWhileLearningTest, AGapClearsAHoldInProgress) {
+  LookAwayDetector detector(kSettings);
+  EXPECT_FALSE(detector.Update(Yawed(30), kRest, 0));
+  EXPECT_FALSE(detector.Update(Yawed(30), std::nullopt, 500));
+  EXPECT_FALSE(detector.Update(Yawed(30), kRest, 600));
+  EXPECT_FALSE(detector.Update(Yawed(30), kRest, 1000));
+  EXPECT_TRUE(detector.Update(Yawed(30), kRest, 1600));
+}
+
 TEST(OncePerLookTest, StayingAwayIsNotReportedAgain) {
   LookAwayDetector detector(kSettings);
   detector.Update(Yawed(30), kRest, 0);

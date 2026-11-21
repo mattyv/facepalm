@@ -54,7 +54,12 @@ facepalm_unit(approved_feed)
 facepalm_unit(settings_document)
 target_link_libraries(settings_document PUBLIC config)
 facepalm_unit(client_token)
+facepalm_unit(client_approvals)
 facepalm_unit(daemon_control)
+facepalm_unit(daemon_options)
+facepalm_unit(feed_clients)
+facepalm_unit(user_paths)
+facepalm_unit(user_service)
 facepalm_unit(camera_controller)
 facepalm_unit(config)
 facepalm_unit(expressions)
@@ -112,6 +117,11 @@ target_link_libraries(expression_reader PUBLIC expressions head_pose)
 target_link_libraries(look_away PUBLIC head_pose)
 target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose)
 facepalm_unit(session_camera)
+# The daemon's readers are pure computation, so their factory's tests make
+# them for real.
+facepalm_unit(face_readers)
+target_link_libraries(face_readers PUBLIC gesture_reader expression_reader
+  look_away_reader config)
 
 facepalm_unit(gesture_replay)
 target_link_libraries(gesture_replay PUBLIC gesture_reader)
@@ -143,7 +153,8 @@ if(FACEPALM_LINUX_TRAY)
   add_executable(facepalm_menu tools/menu/main_linux.cc)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
-  target_link_libraries(facepalm_menu PRIVATE settings_document Qt6::Widgets Qt6::Network)
+  target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
+    client_token user_paths Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -195,11 +206,13 @@ if(APPLE)
   add_executable(facepalm_menu tools/menu/main.mm)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
-  target_link_libraries(facepalm_menu PRIVATE settings_document "-framework AppKit")
+  target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
+    client_token user_paths "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
-    target_link_libraries(menu_store_checks PRIVATE settings_document GTest::gtest_main "-framework AppKit")
+    target_link_libraries(menu_store_checks PRIVATE settings_document user_service
+      client_approvals client_token user_paths GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 
@@ -231,8 +244,9 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   add_executable(facepalm_daemon tools/daemon/main.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "@executable_path/../Frameworks")
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
-    avfoundation_session camera_controller config frame_pipeline face_analyzer
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+    daemon_control daemon_options face_readers feed_clients user_paths avfoundation_session
+    camera_controller config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
@@ -276,7 +290,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
   # face_model calls the shim, and the shim MediaPipe, so each comes after
   # the one that calls it.
-  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
+  target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
+    daemon_control daemon_options face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader reaction_feed feeling_store service session_camera unix_socket v4l2_session
     face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
@@ -311,5 +326,6 @@ endif()
 if(BUILD_TESTING)
   add_executable(mcp_service_fixture EXCLUDE_FROM_ALL
     test/fixtures/mcp_service_fixture.cc)
-  target_link_libraries(mcp_service_fixture PRIVATE service reaction_feed feeling_store unix_socket)
+  target_link_libraries(mcp_service_fixture PRIVATE approved_feed client_approvals client_token
+    service reaction_feed feeling_store unix_socket)
 endif()

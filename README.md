@@ -200,9 +200,10 @@ The tray is displayed by desktops with StatusNotifierItem support. GNOME
 may need the [AppIndicator support extension](https://extensions.gnome.org/extension/615/appindicator-support/).
 The applications menu opens **Facepalm Settings** for frame rate, gesture
 and expression detection, and advanced tuning. Choose **Settings…** from the
-tray to reopen the form. The tray also shows local camera service readiness
-and offline replay availability. Start the daemon with `--config` and the
-path displayed in the form to apply saved settings.
+tray to reopen the form. **Turn On Facepalm…** in the tray, as in the macOS
+menu, gives consent and starts the camera daemon as a systemd user service
+with the saved settings; **Turn Off Facepalm** stops it. The tray also shows
+local camera service readiness and offline replay availability.
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 
@@ -243,14 +244,17 @@ cmake --install build-portable
 "$HOME/.local/facepalm/bin/gesture_replay" < camera-probe.log
 cd "$HOME/.local/facepalm/share/facepalm/mcp"
 npm ci --omit=dev
-node main.js /path/to/service.sock --client-token-file /path/to/private-token
+node main.js
 ```
 
 The MCP adapter needs Node.js 22 or newer and the lockfile dependencies.
 `npm ci` obtains those packages from a registry or an existing npm cache;
 CMake installs the source and lockfile without `node_modules`. With the default
-relative install paths, the installed tree can be moved as a unit. Provision
-a compatible service and any required private token separately.
+relative install paths, the installed tree can be moved as a unit. Given no
+arguments, the adapter connects to the daemon's socket with the token
+`facepalm-daemon approve mcp` made, both in the per-user folder:
+`~/Library/Application Support/Facepalm` on macOS, `~/.local/state/facepalm`
+on Linux. `node main.js SOCKET --client-token-file PATH` names them instead.
 
 The adapter's `wait_for_reaction` tool returns the readings since the session
 last looked. Right after the agent asks the person something, it can pass

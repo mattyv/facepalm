@@ -38,32 +38,43 @@ flow for the eventual app host has not been established by this staging step.
 
 ## Run the development bundle
 
-If you want Facepalm to access your camera, create a private runtime directory
-and an approval token yourself. Keep the token file private. Set `APP` to the
-copied bundle's absolute path.
+Open the copied `Facepalm.app` and choose **Turn On Facepalm…** from the 🤦
+menu. It asks for your consent, approves the bundled MCP adapter, and starts
+the daemon as a launchd LaunchAgent,
+`~/Library/LaunchAgents/com.mattyv.facepalm.daemon.plist`, which runs it
+again if it fails and at each login until you choose **Turn Off Facepalm**.
+Turning off stops the daemon, which closes the camera, and removes the
+agent. The daemon's errors go to `~/Library/Logs/facepalm-daemon.log`.
+
+Approving the adapter writes a new random token to
+`~/Library/Application Support/Facepalm/clients/mcp`, private to you; the
+daemon listens at `service.sock` in the same folder. To run the daemon by
+hand instead, in a terminal, set `APP` to the copied bundle's absolute path:
 
 ```shell
-runtime=$(mktemp -d /tmp/facepalm.XXXXXX)
-(umask 077 && openssl rand -hex 32 >"$runtime/client-token")
+"$APP/Contents/MacOS/facepalm-daemon" approve mcp
 "$APP/Contents/MacOS/facepalm-daemon" --consent \
-  --socket "$runtime/service.sock" \
-  --model "$APP/Contents/Resources/model/face_landmarker.task" \
-  --client-token-file "$runtime/client-token"
+  --model "$APP/Contents/Resources/model/face_landmarker.task"
 ```
 
-Configure the MCP host to run the bundled Node with these arguments, using
-the same absolute runtime path:
+Configure the MCP host to run the bundled Node with the adapter and no
+arguments; it finds the socket and its token in that folder:
 
 ```text
-Contents/Resources/node/bin/node
-Contents/Resources/mcp/main.js RUNTIME/service.sock --client-token-file RUNTIME/client-token
+Contents/Resources/node/bin/node Contents/Resources/mcp/main.js
 ```
 
+`facepalm-daemon revoke mcp` removes the approval; the next connection is
+refused. Another client, such as AI Pair, is approved under its own name.
+
 Choose **Settings** from the 🤦 menu to set the frame rate, enable detectors,
-or adjust gesture confidence and expression tuning. To apply saved settings
-on the next daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"`
-to the daemon command. The dialog shows the path it used. Use one approved MCP
-connection at a time. It receives interpreted gesture and expression events.
+or adjust gesture confidence and expression tuning. Turn Facepalm off and on
+again to apply them; the menu passes the settings file to the daemon when
+there is one. By hand, add
+`--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"` to the
+daemon command. The dialog shows the path it used. Several approved
+MCP connections, such as Claude Desktop's and Claude Code's, can be open at
+once; each receives every interpreted gesture and expression event.
 For Claude Code, see the [bundled plugin instructions](/integrations/claude-code/README.md).
 The daemon keeps the feelings you pick in
 `${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/feelings`, or at the path given with

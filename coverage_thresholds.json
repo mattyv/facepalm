@@ -76,6 +76,13 @@
       "functions": 100
     }
   },
+  "src/gesture_replay.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/head_pose_reader.cc": {
     "unit": {
       "lines": 100,
@@ -296,6 +303,48 @@
   "scripts/fetch_mediapipe_c.sh": {
     "shell": {
       "lines": 100
+    }
+  },
+  "src/client_approvals.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/daemon_options.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/feed_clients.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/face_readers.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/user_paths.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/user_service.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
     }
   }
 }

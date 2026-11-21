@@ -31,6 +31,72 @@ a line saying which entry replaced it.
     job for a tidy pass that never runs its GUI test. Evidence:
     [#88](https://github.com/mattyv/facepalm/issues/88).
 
+## 2026-11-21: Turn facepalm on and off from its menu, as a user service
+
+-   **Decision:** the menu's **Turn On Facepalm…** asks for the person's
+    consent, approves the bundled MCP adapter, and installs and loads a
+    user service that runs the daemon with `--consent` and the saved
+    settings: a launchd LaunchAgent, `com.mattyv.facepalm.daemon`, on macOS,
+    and a systemd `--user` unit, `facepalm.service`, on Linux. The service
+    manager starts it again after a failure and at each login. **Turn Off
+    Facepalm** unloads it, which stops the daemon and closes the camera,
+    and removes its file. Facepalm is on exactly while that file is there.
+    `specs/UserService.tla` models it.
+-   **Why:** #37 asks for the menu to start the service and give consent,
+    with launchd on macOS and systemd on Linux, and for a daemon that
+    crashes to recover on restart. The service manager already restarts and
+    logs a background process, and a file the menu writes and removes keeps
+    the on and off state where the person can see it.
+-   **Rejected:** the menu running the daemon as its own child, which stops
+    with the menu and would not start at login; restarting after a clean
+    stop too (`KeepAlive = true`, `Restart=always`), which TLC shows adds
+    nothing, since a clean stop only follows unloading; and leaving the
+    file on turning off, which starts the daemon again at the next login.
+-   **Cost:** turning on or off waits for the service manager, so the menu
+    is busy for as long as the daemon takes to stop. Whether macOS grants
+    the camera to a LaunchAgent inside the app bundle without a prompt that
+    names the app has not been checked on a real Mac yet.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37).
+
+## 2026-11-21: Approve clients by name, and let several in at once
+
+-   **Decision:** an approved client is a token file named for it in a
+    directory private to the user: `clients/` under
+    `~/Library/Application Support/Facepalm` on macOS and
+    `~/.local/state/facepalm` on Linux, beside the service's socket,
+    `service.sock`. `facepalm-daemon approve NAME` makes the file with a new
+    random token, keeping one already there, and `revoke NAME` removes it.
+    A client's first line is `hello <name> <token>`: the service lets it in
+    when any client's file holds the token, read at each hello, and several
+    connections may show the same token, each under its own name. Every
+    client shares one camera subscription, taken when the first joins and
+    given up when the last leaves, and every client reads the same readings.
+    The MCP adapter, given no arguments, uses the socket and the `mcp` token
+    from those places. A client that hangs up during a wait or a beat is
+    disconnected at once by a watcher on its socket, so it gives up its
+    session, and the camera, without waiting out the window.
+    `specs/DaemonAdmission.tla` and `specs/Service.tla` model it, with
+    liveness.
+-   **Why:** #37 asks for tokens provisioned on approval, with no
+    hand-run `openssl`, found by the MCP adapter and AI Pair in a fixed
+    per-user place, and for two clients, such as Claude Desktop and Claude
+    Code, to get the same nod. One token per app with a name per connection
+    lets two sessions of one app run at once. One subscription for every
+    client keeps a reaction one reading, where a subscription per client
+    would add it once for each.
+-   **Rejected:** one connection per token, the design before, which turns
+    away a second session of the same app (`ApprovedAdmitted` fails it); a
+    camera subscription per client, which delivers each reaction to the
+    shared feed once per client; and paths from `XDG_RUNTIME_DIR` or
+    `XDG_STATE_HOME`, which the service manager and an MCP host may not
+    share with the person's shell.
+-   **Cost:** any program running as the user can read the token files, as
+    it could the one token file before; the socket and the files are
+    private to the user, and that is the boundary. A file that is not a
+    valid token is skipped, not repaired.
+-   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37),
+    [#63](https://github.com/mattyv/facepalm/issues/63).
+
 ## 2026-11-21: Build and test the Linux camera's sources in CI
 
 -   **Decision:** CI's `linux` and both sanitizer jobs fetch MediaPipe's C
