@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "src/feed.h"
+#include "src/feelings.h"
 
 namespace facepalm {
 namespace {
@@ -19,6 +20,9 @@ class MockFeed : public Feed {
   MOCK_METHOD(std::optional<Delivery>, Read, (const std::string&), (override));
   MOCK_METHOD(std::optional<Delivery>, Wait,
               (const std::string&, std::chrono::milliseconds), (override));
+  MOCK_METHOD(std::optional<Delivery>, Beat,
+              (const std::string&, BeatKind, std::chrono::milliseconds),
+              (override));
   MOCK_METHOD(bool, Rate, (const std::string&, std::int64_t, int), (override));
 };
 
@@ -59,6 +63,8 @@ TEST(ApprovedFeedTest, OperationsUseOnlyTheAuthorizedFeedIdentity) {
   EXPECT_FALSE(feed.Read("wrong"));
   EXPECT_FALSE(feed.Wait("wrong", std::chrono::milliseconds(1)));
   EXPECT_FALSE(feed.Rate("wrong", 1, 4));
+  EXPECT_FALSE(
+      feed.Beat("wrong", BeatKind::kQuestion, std::chrono::milliseconds(1)));
   EXPECT_CALL(inner, Connect("approved-1")).WillOnce(testing::Return(true));
   ASSERT_TRUE(feed.Connect("secret"));
   EXPECT_CALL(inner, Read("approved-1"))
@@ -69,6 +75,11 @@ TEST(ApprovedFeedTest, OperationsUseOnlyTheAuthorizedFeedIdentity) {
   EXPECT_TRUE(feed.Wait("secret", std::chrono::milliseconds(4)));
   EXPECT_CALL(inner, Rate("approved-1", 3, 5)).WillOnce(testing::Return(true));
   EXPECT_TRUE(feed.Rate("secret", 3, 5));
+  EXPECT_CALL(inner, Beat("approved-1", BeatKind::kProposal,
+                          std::chrono::milliseconds(6)))
+      .WillOnce(testing::Return(Feed::Delivery{}));
+  EXPECT_TRUE(
+      feed.Beat("secret", BeatKind::kProposal, std::chrono::milliseconds(6)));
 }
 TEST(ApprovedFeedTest, DuplicateApprovalAndIdleDisconnectDoNotRetire) {
   MockFeed inner;

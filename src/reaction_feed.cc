@@ -8,6 +8,9 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
+
+#include "src/feelings.h"
 
 namespace facepalm {
 
@@ -36,7 +39,7 @@ ReactionFeed::Delivery ReactionFeed::Tell(Client& client) {
   }
   Expire(client);
   const auto now = clock_();
-  for (const Reading& reading : timeline_) {
+  for (const auto& [reading, cue] : timeline_) {
     if (reading.id >= client.cursor) {
       delivery.readings.push_back(reading);
       client.rateable[reading.id] = {
@@ -86,15 +89,18 @@ void ReactionFeed::DisconnectAndForget(const std::string& client) {
   changed_.notify_all();
 }
 
-// ReactionFeed!React.
+// ReactionFeed!React, and FeelingBeat!React: the reading keeps the cue its
+// detail gives.
 std::int64_t ReactionFeed::React(std::string summary, std::string detail,
                                  std::optional<std::int64_t> published_at_ms) {
   const std::scoped_lock lock(mutex_);
   const std::int64_t id = next_++;
-  timeline_.push_back({.id = id,
-                       .summary = std::move(summary),
-                       .detail = std::move(detail),
-                       .published_at_ms = published_at_ms});
+  const Cue cue = CueOf(detail);
+  timeline_.push_back({.reading = {.id = id,
+                                   .summary = std::move(summary),
+                                   .detail = std::move(detail),
+                                   .published_at_ms = published_at_ms},
+                       .cue = cue});
   if (std::ssize(timeline_) > capacity_) {
     timeline_.pop_front();
   }
@@ -132,6 +138,50 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Wait(
   entry->waiting = false;
   entry->wait_canceled.reset();
   return Tell(*entry);
+}
+
+// FeelingBeat!Mark, and FeelingBeat!EndBeat when the window has passed. The
+// beat waits out its whole window: a reading wakes it, but does not end it.
+// Disconnect and DisconnectAndForget end it unanswered
+// (GuardCancelOnLeave).
+std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
+    const std::string& client, BeatKind kind,
+    std::chrono::milliseconds window) {
+  std::unique_lock lock(mutex_);
+  Client* entry = Ready(client);
+  if (entry == nullptr) {
+    return std::nullopt;
+  }
+  // The window opens at the next reading (GuardWindowStart); the cursor
+  // stays, so the reply tells the backlog too (GuardKeepBacklog).
+  const std::int64_t start = next_;
+  entry->waiting = true;
+  const auto canceled = std::make_shared<bool>(false);
+  entry->wait_canceled = canceled;
+  changed_.wait_for(lock, window, [&] { return *canceled; });
+  if (*canceled) {
+    return std::nullopt;
+  }
+  // FeelingBeat!EndBeat: one answer, and the beat closed (GuardCloseBeat).
+  entry->waiting = false;
+  entry->wait_canceled.reset();
+  const Feeling feeling = Answer(start);
+  Delivery delivery = Tell(*entry);
+  delivery.interpretation = Interpretation{
+      .id = next_interpretation_++, .feeling = feeling, .beat = kind};
+  return delivery;
+}
+
+Feeling ReactionFeed::Answer(std::int64_t start) const {
+  const std::int64_t oldest = next_ - std::ssize(timeline_);
+  std::vector<Cue> cues;
+  for (const auto& [reading, cue] : timeline_) {
+    if (reading.id >= start) {
+      cues.push_back(cue);
+    }
+  }
+  // A reading of the window dropped before it ended (GuardDroppedUnknown).
+  return Interpret(cues, /*complete=*/start >= oldest);
 }
 
 void ReactionFeed::Expire(Client& client) {

@@ -8,6 +8,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/feed.h"
+#include "src/feelings.h"
 
 namespace facepalm::protocol {
 namespace {
@@ -61,6 +62,20 @@ TEST(ParseTest, ReadsRate) {
   EXPECT_THAT(std::get<RateRequest>(request).score, Eq(4));
 }
 
+TEST(ParseTest, ReadsABeat) {
+  const Request question = Parsed("beat question 1500");
+  ASSERT_TRUE(std::holds_alternative<BeatRequest>(question));
+  EXPECT_THAT(std::get<BeatRequest>(question).kind, Eq(BeatKind::kQuestion));
+  EXPECT_THAT(std::get<BeatRequest>(question).window,
+              Eq(std::chrono::milliseconds(1500)));
+
+  const Request proposal = Parsed("beat proposal 10000");
+  ASSERT_TRUE(std::holds_alternative<BeatRequest>(proposal));
+  EXPECT_THAT(std::get<BeatRequest>(proposal).kind, Eq(BeatKind::kProposal));
+  EXPECT_THAT(std::get<BeatRequest>(Parsed("beat question 1")).window,
+              Eq(std::chrono::milliseconds(1)));
+}
+
 TEST(ParseTest, IgnoresATrailingCarriageReturn) {
   EXPECT_TRUE(std::holds_alternative<ReadRequest>(Parsed("read\r")));
 }
@@ -92,6 +107,18 @@ TEST(ParseTest, RefusesABadWait) {
   EXPECT_THAT(Refused("wait 5s"), Eq("wait takes 0 to 60000 milliseconds"));
 }
 
+TEST(ParseTest, RefusesABadBeat) {
+  constexpr auto kBadBeat =
+      "beat takes question or proposal and 1 to 10000 milliseconds";
+  EXPECT_THAT(Refused("beat"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat answer 1500"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 0"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 10001"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1.5s"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 1"), Eq(kBadBeat));
+}
+
 TEST(ParseTest, RefusesABadRate) {
   EXPECT_THAT(Refused("rate"), Eq("rate takes a reading id and a score"));
   EXPECT_THAT(Refused("rate 12"), Eq("rate takes a reading id and a score"));
@@ -120,6 +147,21 @@ TEST(JsonTest, WritesADelivery) {
 
 TEST(JsonTest, WritesAnEmptyDelivery) {
   EXPECT_THAT(DeliveryJson({}), Eq(R"({"readings":[],"missed":0})"));
+}
+
+TEST(JsonTest, WritesABeatsInterpretation) {
+  const Feed::Delivery delivery{
+      .readings = {{.id = 7, .summary = "Gesture: nod", .detail = "{}"}},
+      .missed = 0,
+      .interpretation = Feed::Interpretation{.id = 2,
+                                             .feeling = Feeling::kAgreement,
+                                             .beat = BeatKind::kQuestion}};
+
+  EXPECT_THAT(
+      DeliveryJson(delivery),
+      Eq(R"({"readings":[{"id":7,"summary":"Gesture: nod","detail":{}}],)"
+         R"("missed":0,"interpretation":{"id":2,"feeling":"agreement",)"
+         R"("beat":"question"}})"));
 }
 
 TEST(JsonTest, EscapesASummary) {

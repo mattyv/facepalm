@@ -9,6 +9,7 @@
 #include <string>
 
 #include "src/feed.h"
+#include "src/feelings.h"
 
 namespace facepalm {
 
@@ -23,6 +24,8 @@ class ApprovedFeed : public Feed {
   std::optional<Delivery> Read(const std::string& client) override;
   std::optional<Delivery> Wait(const std::string& client,
                                std::chrono::milliseconds timeout) override;
+  std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
+                               std::chrono::milliseconds window) override;
   bool Rate(const std::string& client, std::int64_t id, int score) override;
 
  private:

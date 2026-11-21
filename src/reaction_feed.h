@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "src/feed.h"
+#include "src/feelings.h"
 
 namespace facepalm {
 
@@ -21,8 +22,9 @@ namespace facepalm {
 // One timeline of readings, each an interpreted reaction with the summary
 // line facepalm writes, keeps the last `capacity`. Each client, an agent
 // session or AI Pair, reads what came since it last looked, or waits for
-// the next reading. The person rates a reading the client was shown, 1-5.
-// Thread-safe.
+// the next reading, or marks a beat and is told how its reaction was read,
+// following specs/FeelingBeat.tla. The person rates a reading the client was
+// shown, 1-5. Thread-safe.
 class ReactionFeed : public Feed {
  public:
   struct Rating {
@@ -58,6 +60,12 @@ class ReactionFeed : public Feed {
   // while waiting.
   std::optional<Delivery> Wait(const std::string& client,
                                std::chrono::milliseconds timeout) override;
+  // Beat: FeelingBeat!Mark, then FeelingBeat!EndBeat once `window` has
+  // passed. nullopt when not connected, already waiting, or disconnected
+  // during the beat (FeelingBeat!Disconnect).
+  std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
+                               std::chrono::milliseconds window) override;
+  // Whether the client is waiting or in a beat.
   [[nodiscard]] bool Waiting(const std::string& client);
   // Disconnects an ephemeral identity and removes its history. An older
   // wait holds its own cancellation token and returns no delivery.
@@ -98,13 +106,22 @@ class ReactionFeed : public Feed {
   // rate.
   void Expire(Client& client);
 
+  // FeelingBeat!Answer: the feeling of the readings from id `start` on.
+  [[nodiscard]] Feeling Answer(std::int64_t start) const;
+
+  struct Entry {
+    Reading reading;
+    Cue cue;
+  };
+
   const int capacity_;
   const OnRating on_rating_;
   const Clock clock_;
   std::mutex mutex_;
   std::condition_variable changed_;
-  std::deque<Reading> timeline_;  // Oldest first.
+  std::deque<Entry> timeline_;  // Oldest first.
   std::int64_t next_ = 1;
+  std::int64_t next_interpretation_ = 1;
   std::map<std::string, Client> clients_;
 };
 

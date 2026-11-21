@@ -13,12 +13,16 @@
 #include <vector>
 
 #include "src/feed.h"
+#include "src/feelings.h"
 
 namespace facepalm::protocol {
 namespace {
 
 constexpr std::size_t kLongestName = 64;
 constexpr std::int64_t kLongestWaitMs = 60000;
+// A reaction to a question comes within a few seconds of it, if at all.
+constexpr std::int64_t kLongestBeatMs = 10000;
+constexpr std::size_t kBeatWords = 3;
 
 // The words of `line`, split at each space.
 std::vector<std::string_view> Words(std::string_view line) {
@@ -54,6 +58,20 @@ bool IsName(std::string_view word) {
                                  (c >= '0' && c <= '9');
     return letter_or_digit || c == '.' || c == '_' || c == '-';
   });
+}
+
+// The beat request of `words`: beat, its kind, and its window.
+std::optional<Request> ParseBeat(const std::vector<std::string_view>& words,
+                                 std::string& error) {
+  const std::optional<BeatKind> kind =
+      words.size() == kBeatWords ? BeatKindNamed(words[1]) : std::nullopt;
+  const std::optional<std::int64_t> ms =
+      words.size() == kBeatWords ? Number(words[2]) : std::nullopt;
+  if (!kind || !ms || *ms < 1 || *ms > kLongestBeatMs) {
+    error = "beat takes question or proposal and 1 to 10000 milliseconds";
+    return std::nullopt;
+  }
+  return BeatRequest{.kind = *kind, .window = std::chrono::milliseconds(*ms)};
 }
 
 }  // namespace
@@ -116,6 +134,9 @@ std::optional<Request> Parse(std::string_view line, std::string& error) {
     // The feed refuses a score outside 1 to 5; this only keeps it an int.
     return RateRequest{.id = *id, .score = static_cast<int>(*score)};
   }
+  if (verb == "beat") {
+    return ParseBeat(words, error);
+  }
   error = "unknown request";
   return std::nullopt;
 }
@@ -134,7 +155,13 @@ std::string DeliveryJson(const Feed::Delivery& delivery) {
     }
     json += '}';
   }
-  return json + R"(],"missed":)" + std::to_string(delivery.missed) + "}";
+  json += R"(],"missed":)" + std::to_string(delivery.missed);
+  if (const auto& interpretation = delivery.interpretation) {
+    json += R"(,"interpretation":{"id":)" + std::to_string(interpretation->id) +
+            R"(,"feeling":)" + Quoted(Name(interpretation->feeling)) +
+            R"(,"beat":)" + Quoted(Name(interpretation->beat)) + "}";
+  }
+  return json + "}";
 }
 
 std::string ErrorJson(std::string_view message) {

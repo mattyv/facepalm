@@ -15,6 +15,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/feed.h"
+#include "src/feelings.h"
 
 // Each test stands for the specs/Service.tla property it is named for. The
 // protocol is pure computation, so it runs for real.
@@ -38,6 +39,10 @@ class MockFeed : public Feed {
               (override));
   MOCK_METHOD(std::optional<Delivery>, Wait,
               (const std::string& client, std::chrono::milliseconds timeout),
+              (override));
+  MOCK_METHOD(std::optional<Delivery>, Beat,
+              (const std::string& client, BeatKind kind,
+               std::chrono::milliseconds window),
               (override));
   MOCK_METHOD(bool, Rate,
               (const std::string& client, std::int64_t id, int score),
@@ -218,6 +223,28 @@ TEST_F(CanAcceptTest, AClientWaitsAndRates) {
   service_.Stop();
 }
 
+TEST_F(CanAcceptTest, AClientMarksABeatAndIsToldTheFeeling) {
+  service_.Start();
+  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal,
+                          std::chrono::milliseconds(1500)))
+      .WillOnce(Return(Feed::Delivery{.readings = {},
+                                      .missed = 0,
+                                      .interpretation = Feed::Interpretation{
+                                          .id = 1,
+                                          .feeling = Feeling::kDisagreement,
+                                          .beat = BeatKind::kProposal}}));
+  const auto peer = Named("agent");
+
+  peer->Send("beat proposal 1500");
+
+  EXPECT_THAT(peer->Replies(2),
+              ElementsAre(R"({"ok":true})",
+                          R"({"readings":[],"missed":0,"interpretation":)"
+                          R"({"id":1,"feeling":"disagreement",)"
+                          R"("beat":"proposal"}})"));
+  service_.Stop();
+}
+
 TEST_F(CanAcceptTest, ABadRequestGetsAnErrorAndTheConnectionStays) {
   service_.Start();
   const auto peer = Named("agent");
@@ -319,6 +346,32 @@ TEST_F(StopWakesWaitersTest, StoppingEndsAWaitAndTheConnection) {
   const auto peer = Named("agent");
   peer->Send("wait 60000");
   ASSERT_THAT(waiting.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+
+  const auto stopped = std::async(std::launch::async, [&] { service_.Stop(); });
+
+  EXPECT_THAT(stopped.wait_for(kPrompt), Eq(std::future_status::ready));
+  EXPECT_THAT(peer->Reply(2), Eq(R"({"error":"closing"})"));
+}
+
+// A beat is a wait like any other: Stop ends it too.
+TEST_F(StopWakesWaitersTest, StoppingEndsABeatAndTheConnection) {
+  service_.Start();
+  std::promise<void> beating;
+  std::promise<void> disconnected;
+  auto woken = disconnected.get_future().share();
+  std::once_flag once;
+  EXPECT_CALL(feed_, Beat("agent", BeatKind::kQuestion, _)).WillOnce([&] {
+    beating.set_value();
+    woken.wait_for(2 * kPrompt);
+    return std::optional<Feed::Delivery>();
+  });
+  EXPECT_CALL(feed_, Disconnect("agent")).WillRepeatedly([&] {
+    std::call_once(once, [&] { disconnected.set_value(); });
+  });
+  const auto peer = Named("agent");
+  peer->Send("beat question 10000");
+  ASSERT_THAT(beating.get_future().wait_for(kPrompt),
               Eq(std::future_status::ready));
 
   const auto stopped = std::async(std::launch::async, [&] { service_.Stop(); });
