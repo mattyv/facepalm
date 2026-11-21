@@ -37,7 +37,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `RatingPersistence.cfg` | one rating, a sync that may fail | holds | 6 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
 | `Service.cfg` | three connections, two client names | holds | 396 |
-| `TurnExcursion.cfg` | yaw near or away, settling time | holds | 6 |
+| `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
 
 ## `McpSocket`: an MCP session owns one socket
 
@@ -82,14 +82,66 @@ leaves. With `GuardLastLeaveDiscards` false, TLC violates `NoStaleEvent`; the
 controller test `LastLeaveInvalidatesTicketsBeforeAReconnect` exercises it.
 The updated model checks 1,588 distinct states under the existing bounds.
 
-## `TurnExcursion`: suppress repeated turns until return
+## `TurnExcursion`: one turn per excursion, and a bound on the suppression
 
-The bounded model abstracts yaw as near or away and the elapsed settling time
-as one action. TLC checks six distinct states with no fairness assumption.
-`NoRearmAway` and `NoRepeat` hold. Setting `GuardReturn` or `GuardRepeat` to
-false violates the corresponding invariant. Tests in `gesture_reader_test`
-cover elapsed time, interruption, tracking loss, angle wrap and the general
-gesture gate. The model does not prove pose accuracy or model classification.
+After a turn is reported, `GestureReportGate` suppresses later turns, so a
+turn and its return are one report (#34). The suppression is bounded (#62):
+it ends once the head has held still back near the turn's origin for 750 ms,
+or held still anywhere for 2,000 ms, which makes the pose it settled in the
+new origin. Yaw is abstracted as near or away from the origin, and time as
+how long the head has held still where it is: `held` is 0 while it moves, 1
+after 750 ms (`StillMs`), and 2 after 2,000 ms (`SettledAwayMs`). "Still"
+means the model reads no gesture and yaw stays within ten degrees of where
+the head settled. `MaxMoves` bounds how often the head moves between turns,
+which is the model's form of the assumption that the head eventually holds
+still; weak fairness on `Hold` and on the two releases says time then passes
+and the release happens. Tracking loss (`Lost`) has no fairness.
+`TurnExcursion.cfg` checks `MaxMoves = 2`: 26 distinct states, every
+property holds.
+
+| Property | What it says | Test |
+|---|---|---|
+| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
+| `ReleaseNeedsStill` | A turn is released only once the head has held still for 750 ms. | `GestureReportGateTest.ReleaseNeedsStillSoADriftStartsTheHoldAgain`, `AnotherGestureWhileSettledAwayStartsTheHoldAgain`, `ReturnMustRemainNearForTheFullStillTime` in `test/gesture_reader_test.cc` |
+| `NoRearmAway` | A release by return happens back near the origin. | `TurnWaitsForReturnAndStillnessBeforeRearming`, `ReturnDistanceWrapsAroundPi` |
+| `NoRearmOnGlance` | A release away from the origin needs the full 2,000 ms, so a glance and its return stay one turn. | `NoRearmOnGlanceShortOfTheSettledTime`, `EachTurnStartsItsOwnHold` |
+| `NoRepeat` | No turn is reported while one is latched. | `SuppressedTurnsDoNotMakeTheGeneralGateStill`, `TurnLatchDoesNotSuppressOtherGesturesAndResetClearsIt` |
+| `TurnRearms` | Something must happen: every latched turn is released, wherever the head settles, so a later turn can be reported (#62). | `TurnRearmsOnceTheHeadHasSettledAway`, `TheSettledPoseWrapsAroundPi` |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardSettleAway = FALSE`: only a return releases, the design before #62 | `TurnRearms`: a turn, then the head held still away, stays latched forever |
+| `GuardHoldAway = FALSE`: a release away needs no hold | `NoRearmOnGlance`, 3 states |
+| `GuardReturn = FALSE`: a return release needs no return | `NoRearmAway`, 4 states |
+| `GuardRepeat = FALSE`: a turn is reported while one is latched | `NoRepeat`, 3 states |
+| `Settle` needs no stillness | `ReleaseNeedsStill`, 4 states |
+| `Hold` never enabled | `TurnRearms` |
+| No fairness on `Hold` | `TurnRearms` |
+| No fairness on `Settle \/ SettleAway` | `TurnRearms` |
+| No fairness at all | `TurnRearms` |
+| `Hold` writes a `held` outside the type | `TypeOK`, 3 states |
+
+`src/gesture_reader.cc` implements the spec in `GestureReportGate`:
+`SuppressTurn` names `Away`, `Return`, `Hold`, `Settle` and `SettleAway`, and
+the turn's latch in `Update` names `Turn`. The same mutations, made to that
+code, fail the tests that stand for the properties they break:
+
+| Mutation to `GestureReportGate` | Fails |
+|---|---|
+| A head held still away never releases the turn (the design before #62) | `TurnRearmsOnceTheHeadHasSettledAway`, `TheSettledPoseWrapsAroundPi`, `ReleaseNeedsStillSoADriftStartsTheHoldAgain` |
+| The settled time is 750 ms, not 2,000 | `NoRearmOnGlanceShortOfTheSettledTime`, and three others |
+| A drift past ten degrees does not start the hold again | `ReleaseNeedsStillSoADriftStartsTheHoldAgain` |
+| A gesture other than a turn does not start the hold again | `AnotherGestureWhileSettledAwayStartsTheHoldAgain` |
+| A new turn keeps the previous turn's hold | `EachTurnStartsItsOwnHold` |
+| Yaw distances do not wrap at pi | `ReturnDistanceWrapsAroundPi`, `TheSettledPoseWrapsAroundPi` |
+| A return release ignores the origin | `ReturnMustRemainNearForTheFullStillTime`, and four others |
+
+A new turn also clears the return's 750 ms, but no test can tell: the
+general gate's own 750 ms of stillness starts on the same frame, so a stale
+return hold cannot report a turn any sooner. The model does not prove pose
+accuracy or the model's classification.
 
 ## `CameraLifecycle`: when the camera may be on
 
