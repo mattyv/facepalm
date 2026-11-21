@@ -9,7 +9,9 @@
 #include <string_view>
 #include <thread>
 
+#include "src/calibration.h"
 #include "src/feed.h"
+#include "src/protocol.h"
 
 namespace facepalm {
 
@@ -38,9 +40,14 @@ class Listener {
 // facepalm's background service (#37), following specs/Service.tla. Each
 // connection gets its own thread, which speaks src/protocol.h to the feed
 // for the client the connection names.
+// A "calibrate" request (specs/Calibration.tla, item 12 of #61) goes to
+// `calibration` instead, when the service is given one: a nullptr refuses
+// every calibrate request, which lets every existing caller build a
+// Service unchanged.
 class Service {
  public:
-  Service(std::unique_ptr<Listener> listener, Feed& feed);
+  Service(std::unique_ptr<Listener> listener, Feed& feed,
+          CalibrationController* calibration = nullptr);
   ~Service();
   Service(const Service&) = delete;
   Service& operator=(const Service&) = delete;
@@ -70,9 +77,12 @@ class Service {
   bool BeginStop();
   // The reply to one request from a named client; false to end.
   bool Answer(const std::string& name, std::string_view line, Stream& stream);
+  // The reply to a calibrate request, whether or not calibration_ is set.
+  std::string CalibrateReply(const protocol::CalibrateRequest& request);
 
   std::unique_ptr<Listener> listener_;
   Feed& feed_;
+  CalibrationController* calibration_;
   std::mutex mutex_;
   bool stopping_ = false;
   std::list<Connection> connections_;

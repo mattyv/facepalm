@@ -79,7 +79,7 @@ target_link_libraries(reaction_feed PUBLIC feelings)
 facepalm_unit(rating_log)
 target_link_libraries(rating_log PUBLIC protocol)
 facepalm_unit(protocol)
-target_link_libraries(protocol PUBLIC feelings)
+target_link_libraries(protocol PUBLIC feelings calibration)
 facepalm_unit(service)
 # The protocol is pure computation, so the service's tests run it for real.
 target_link_libraries(service PUBLIC protocol)
@@ -99,6 +99,13 @@ target_link_libraries(expression_reader PUBLIC expressions head_pose)
 # like the expression reader's (#35).
 target_link_libraries(look_away PUBLIC head_pose)
 target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose)
+facepalm_unit(calibration)
+target_link_libraries(calibration PUBLIC head_pose)
+facepalm_unit(calibration_store)
+target_link_libraries(calibration_store PUBLIC calibration)
+facepalm_unit(calibration_reader)
+target_link_libraries(calibration_reader PUBLIC calibration head_pose)
+facepalm_unit(calibrate_cli)
 facepalm_unit(session_camera)
 
 facepalm_unit(gesture_replay)
@@ -115,9 +122,15 @@ add_executable(gesture_replay_cli tools/gesture_replay/main.cc)
 set_target_properties(gesture_replay_cli PROPERTIES OUTPUT_NAME gesture_replay)
 target_link_libraries(gesture_replay_cli PRIVATE gesture_replay look_away_replay)
 
+# A minimal way to drive a calibration session for testing (#36, #35, item
+# 12 of #61), and a model for the eventual menu entry (item 8).
+add_executable(calibrate_cli_tool tools/calibrate_cli/main.cc)
+set_target_properties(calibrate_cli_tool PROPERTIES OUTPUT_NAME calibrate_cli)
+target_link_libraries(calibrate_cli_tool PRIVATE calibrate_cli)
+
 # A normal install retains the MCP source and lockfile for user-managed Node 22.
 # Debian packages select Runtime only and do not install or fetch MCP dependencies.
-install(TARGETS gesture_replay_cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
+install(TARGETS gesture_replay_cli calibrate_cli_tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
 install(FILES LICENSE THIRDPARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm COMPONENT Runtime)
 install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
   mcp/package.json mcp/package-lock.json

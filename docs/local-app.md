@@ -76,3 +76,24 @@ daemon to revoke consent for that run.
 The local bundle verification covers startup refusal without consent, rejection
 of an unapproved socket client, and clean shutdown. The new bundle has not
 been tested with live capture. Live preview is pending.
+
+## Calibration (optional)
+
+A short guided session improves on the coarse, uncalibrated gaze of item 11
+(#36, #35): it records the resting pose and, for each screen, the head pose
+at its centre and four corners, then saves them to a private file the daemon
+owns. `calibrate_cli` drives one against a running daemon, for testing and as
+a model for the eventual menu entry (item 8):
+
+```shell
+calibrate_cli "$runtime/service.sock" start 1
+calibrate_cli "$runtime/service.sock" next   # Once per prompted target.
+calibrate_cli "$runtime/service.sock" cancel # Instead of next, to give up.
+```
+
+Any client already speaking the protocol can send the same `calibrate start
+[screens]|next|cancel` line directly. The daemon itself is not yet wired to a
+calibration session or the camera's lifecycle (that is item 7's follow-up, so
+`calibrate_cli` has nothing to talk to on a running daemon until it lands);
+until then, every `calibrate` request gets `{"error":"calibration is not
+available"}`.

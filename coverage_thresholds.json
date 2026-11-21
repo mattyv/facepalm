@@ -111,6 +111,34 @@
       "functions": 100
     }
   },
+  "src/calibration.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/calibration_store.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/calibration_reader.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/calibrate_cli.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/look_away_reader.cc": {
     "unit": {
       "lines": 100,

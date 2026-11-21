@@ -64,6 +64,16 @@ made since, each with its reason, are in the
     less than a second and are not reported. A pose held for long enough,
     under a minute, becomes the resting pose, so turning back from it reads
     as a look away of its own. `specs/LookAway.tla` models the rule.
+-   `src/calibration`, `src/calibration_store`, `src/calibration_reader`: an
+    optional calibration session (#36, #35, item 12 of #61), started,
+    stepped and cancelled over the protocol's `calibrate` line: it records
+    the resting pose and, for each screen, the head pose at its centre and
+    four corners, then saves them to a private file the daemon owns.
+    `CalibrationController`, in `src/calibration`, is the session;
+    `src/calibration_store` saves and loads the file; `src/calibration_reader`
+    is the `FaceReader` that feeds it each frame's pose, as
+    `LookAwayReader` does its detector. `calibrate_cli` drives one for
+    testing. `specs/Calibration.tla` models the lifecycle.
 -   `src/config`: the settings file, below.
 -   `src/reaction_feed`: the readings each client is told about (#36): one
     timeline of interpreted reactions, each with the summary line the person
@@ -119,6 +129,9 @@ made since, each with its reason, are in the
     only a reading that was shown can be rated (#36).
 -   `specs/Service.tla`: the service's connections, unique client names,
     and a shutdown that cannot hang on a waiting connection (#37).
+-   `specs/Calibration.tla`: the optional calibration session's lifecycle,
+    including the camera going away mid-session, checked with TLC before
+    the session's code (#36, #35, item 12 of #61).
 
 ## Build and test
 

@@ -5,6 +5,44 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Add an optional calibration session, in plain text
+
+-   **Decision:** a short guided session, started with `calibrate start
+    [screens]` and stepped with `calibrate next` or ended early with
+    `calibrate cancel`, records the resting pose and, for each screen, the
+    head pose at its centre and four corners. It saves to a private file
+    (mode 0600, one per machine) the daemon owns, written to a temporary
+    file beside it and renamed over it, in a hand-rolled `name = value`
+    text format rather than JSON, since nothing else here needs to parse
+    that format back. `src/calibration.h`'s `CalibrationController` is the
+    session; `src/calibration_store.h` saves and loads the file;
+    `src/calibration_reader.h` feeds it each frame's pose, as
+    `LookAwayReader` does its detector. `specs/Calibration.tla` models the
+    lifecycle, including the camera going away mid-session, which cancels
+    it.
+-   **Why:** #36 and #35 want calibration kept optional, against the
+    low-calibration goal on #35: without it, gaze stays coarse (#36, item
+    11). The session's own protocol line, not a new top-level verb pair,
+    keeps every client (the CLI built for testing here, the eventual menu
+    entry of item 8, and MCP, which can already send any line through
+    `SocketSession.request`) talking to one place.
+-   **Rejected:** JSON for the saved profile, which would need a JSON
+    parser this codebase does not otherwise have, just to read back a file
+    only this code writes; and wiring the session into
+    `tools/daemon/main.cc` and the camera's lifecycle callbacks in the same
+    change, which belongs with item 7's daemon work landing alongside it
+    (`CalibrationController::OnCameraLost` and `OnCameraUp` are ready for
+    that wiring, covered by `NoRunningWithoutCameraTest`, but nothing calls
+    them yet).
+-   **Cost:** until item 7 wires `OnCameraLost` and `OnCameraUp` into the
+    daemon's camera lifecycle, a session only ever sees the camera as up;
+    the daemon's own `calibrate` support is likewise unwired until then,
+    so `calibrate_cli` and the protocol line have nothing to talk to on a
+    running daemon until that follow-up lands.
+-   **Evidence:** [#61 item 12](https://github.com/mattyv/facepalm/issues/61),
+    [#36](https://github.com/mattyv/facepalm/issues/36),
+    [#35](https://github.com/mattyv/facepalm/issues/35).
+
 ## 2026-11-21: Remove the Linux ELF build of the MediaPipe shim
 
 -   **Decision:** remove the Bazel `libfacepalm_mediapipe.so` target, its

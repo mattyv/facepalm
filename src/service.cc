@@ -13,9 +13,21 @@
 #include "src/protocol.h"
 
 namespace facepalm {
+namespace {
 
-Service::Service(std::unique_ptr<Listener> listener, Feed& feed)
-    : listener_(std::move(listener)), feed_(feed) {}
+// `status`'s JSON, or `error`'s when there is none.
+std::string CalibrationStatusOrError(
+    const std::optional<CalibrationController::Status>& status,
+    const std::string& error) {
+  return status ? protocol::CalibrationStatusJson(*status)
+                : protocol::ErrorJson(error);
+}
+
+}  // namespace
+
+Service::Service(std::unique_ptr<Listener> listener, Feed& feed,
+                 CalibrationController* calibration)
+    : listener_(std::move(listener)), feed_(feed), calibration_(calibration) {}
 
 Service::~Service() { Stop(); }
 
@@ -140,6 +152,11 @@ bool Service::Answer(const std::string& name, std::string_view line,
                          : protocol::ErrorJson("cannot rate that reading"));
     return true;
   }
+  if (const auto* calibrate =
+          std::get_if<protocol::CalibrateRequest>(&*request)) {
+    stream.WriteLine(CalibrateReply(*calibrate));
+    return true;
+  }
   // Service!Wait and Service!Answered, for a wait or a beat
   // (specs/FeelingBeat.tla), or a read.
   std::optional<Feed::Delivery> delivery;
@@ -157,6 +174,27 @@ bool Service::Answer(const std::string& name, std::string_view line,
   }
   stream.WriteLine(protocol::DeliveryJson(*delivery));
   return true;
+}
+
+// specs/Calibration.tla's Start, Advance, Finish and Cancel, dispatched to
+// calibration_ (item 12 of #61). A calibrate request needs no client
+// identity: any connected client may drive the one session.
+std::string Service::CalibrateReply(const protocol::CalibrateRequest& request) {
+  if (calibration_ == nullptr) {
+    return protocol::ErrorJson("calibration is not available");
+  }
+  using Action = protocol::CalibrateRequest::Action;
+  std::string error;
+  switch (request.action) {
+    case Action::kStart:
+      return CalibrationStatusOrError(
+          calibration_->Start(request.screens, error), error);
+    case Action::kNext:
+      return CalibrationStatusOrError(calibration_->Next(error), error);
+    default:  // Action::kCancel.
+      return calibration_->Cancel(error) ? std::string(protocol::kOkJson)
+                                         : protocol::ErrorJson(error);
+  }
 }
 
 // Service!Stop: refuses new connections (GuardRefuseWhenStopping), shuts

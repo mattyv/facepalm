@@ -14,6 +14,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/calibration.h"
 #include "src/feed.h"
 #include "src/feelings.h"
 
@@ -47,6 +48,16 @@ class MockFeed : public Feed {
   MOCK_METHOD(bool, Rate,
               (const std::string& client, std::int64_t id, int score),
               (override));
+};
+
+class MockCalibrationController : public CalibrationController {
+ public:
+  MOCK_METHOD(std::optional<Status>, Start, (int, std::string&), (override));
+  MOCK_METHOD(std::optional<Status>, Next, (std::string&), (override));
+  MOCK_METHOD(bool, Cancel, (std::string&), (override));
+  MOCK_METHOD(void, Update, (const HeadRotation&), (override));
+  MOCK_METHOD(void, OnCameraLost, (), (override));
+  MOCK_METHOD(void, OnCameraUp, (), (override));
 };
 
 // A connection the test writes lines into and reads replies from.
@@ -482,6 +493,146 @@ TEST_F(NothingAfterStopTest, StoppingClosesTheListener) {
 
   const std::scoped_lock lock(queue_->mutex);
   EXPECT_TRUE(queue_->closed);
+}
+
+using CalibrateTest = ServiceTest;
+
+TEST_F(CalibrateTest, RefusesCalibrateWithNoControllerGiven) {
+  service_.Start();
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate start");
+
+  EXPECT_THAT(peer->Replies(2),
+              ElementsAre(R"({"ok":true})",
+                          R"({"error":"calibration is not available"})"));
+  service_.Stop();
+}
+
+// A Service given a controller (item 12 of #61) dispatches "calibrate" to
+// it instead; everything else still goes to the feed.
+class ServiceWithCalibrationTest : public ::testing::Test {
+ protected:
+  ServiceWithCalibrationTest()
+      : service_(std::make_unique<FakeListener>(queue_), feed_, &calibration_) {
+    ON_CALL(feed_, Connect).WillByDefault(Return(true));
+  }
+
+  std::shared_ptr<FakeStream::Peer> Named(const std::string& name) {
+    auto peer = std::make_shared<FakeStream::Peer>();
+    {
+      const std::scoped_lock lock(queue_->mutex);
+      queue_->streams.push_back(std::make_unique<FakeStream>(peer));
+      queue_->changed.notify_all();
+    }
+    peer->Send("hello " + name);
+    EXPECT_THAT(peer->Replies(1), ElementsAre(R"({"ok":true})"));
+    return peer;
+  }
+
+  std::shared_ptr<FakeListener::Queue> queue_ =
+      std::make_shared<FakeListener::Queue>();
+  NiceMock<MockFeed> feed_;
+  NiceMock<MockCalibrationController> calibration_;
+  Service service_;
+};
+
+TEST_F(ServiceWithCalibrationTest, StartsAndRepliesWithTheFirstStep) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Start(1, _))
+      .WillOnce(Return(CalibrationController::Status{
+          .running = true, .index = 0, .total = 6, .resting_step = true}));
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate start");
+
+  EXPECT_THAT(peer->Reply(2),
+              Eq(R"({"ok":true,"calibration":{"state":"running","index":0,)"
+                 R"("total":6,"step":"resting"}})"));
+  service_.Stop();
+}
+
+TEST_F(ServiceWithCalibrationTest, StartsWithTheGivenNumberOfScreens) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Start(3, _))
+      .WillOnce(
+          Return(CalibrationController::Status{.running = true, .total = 16}));
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate start 3");
+
+  EXPECT_THAT(peer->Replies(2), testing::SizeIs(2));
+  service_.Stop();
+}
+
+TEST_F(ServiceWithCalibrationTest, ReportsAFailedStart) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Start).WillOnce([](int, std::string& error) {
+    error = "a calibration session is already running";
+    return std::nullopt;
+  });
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate start");
+
+  EXPECT_THAT(peer->Reply(2),
+              Eq(R"({"error":"a calibration session is already running"})"));
+  service_.Stop();
+}
+
+TEST_F(ServiceWithCalibrationTest, StepsAndFinishesWithNext) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Next)
+      .WillOnce(Return(
+          CalibrationController::Status{.running = false, .done = true}));
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate next");
+
+  EXPECT_THAT(peer->Reply(2),
+              Eq(R"({"ok":true,"calibration":{"state":"done"}})"));
+  service_.Stop();
+}
+
+TEST_F(ServiceWithCalibrationTest, ReportsAFailedNext) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Next).WillOnce([](std::string& error) {
+    error = "no pose captured yet for this step";
+    return std::nullopt;
+  });
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate next");
+
+  EXPECT_THAT(peer->Reply(2),
+              Eq(R"({"error":"no pose captured yet for this step"})"));
+  service_.Stop();
+}
+
+TEST_F(ServiceWithCalibrationTest, CancelsTheRunningSession) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Cancel).WillOnce(Return(true));
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate cancel");
+
+  EXPECT_THAT(peer->Reply(2), Eq(R"({"ok":true})"));
+  service_.Stop();
+}
+
+TEST_F(ServiceWithCalibrationTest, ReportsAFailedCancel) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Cancel).WillOnce([](std::string& error) {
+    error = "no calibration session is running";
+    return false;
+  });
+  const auto peer = Named("agent");
+
+  peer->Send("calibrate cancel");
+
+  EXPECT_THAT(peer->Reply(2),
+              Eq(R"({"error":"no calibration session is running"})"));
+  service_.Stop();
 }
 
 TEST_F(NothingAfterStopTest, FinishedConnectionsAreCleanedUp) {

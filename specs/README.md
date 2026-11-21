@@ -27,6 +27,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
+| `Calibration.cfg` | six steps, one camera outage | holds | 30 |
 | `CameraLifecycle.cfg` | two clients, one helper restart | holds | 1,588 |
 | `DaemonAdmission.cfg` | one client: consent, approval, retirement | holds | 26 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
@@ -586,3 +587,55 @@ send (`GuardOwner`), and shutdown cannot abandon a dispatched native read
 (`GuardRetire`). Each disabled guard violates its corresponding invariant.
 The socket and integration tests cover busy sessions, unacknowledged deliveries,
 disconnects, and the shared cursor. The model covers safety ordering only.
+
+## `Calibration`: an optional calibration session
+
+Models the short guided session item 12 of #61 adds (#36, #35): the resting
+pose, then each screen's centre and four corners, saved to a private profile
+only once every target is captured. `step` counts the targets from 0;
+`captured` is whether the running step has a pose yet; `camera` abstracts
+the frame pipeline that feeds poses in (#38), since a session with no frames
+has nothing to capture. `Calibration.cfg` checks `Steps = 3` (the resting
+pose and two points) and `MaxOutages = 1` (one camera loss and its
+recovery): 30 distinct states, every property holds.
+
+| Property | What it says | Test |
+|---|---|---|
+| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
+| `NoAdvanceWithoutCapture` | Every target needs its own pose before the session moves past it. | `NoAdvanceWithoutCaptureTest` in `test/calibration_test.cc` |
+| `NoSaveOnCancel` | Cancelling never saves the session in progress; the old profile is kept. | `NoSaveOnCancelTest` |
+| `NoRunningWithoutCamera` | A session only runs while the camera is up: starting needs it, and losing it ends the session. | `NoRunningWithoutCameraTest` |
+| `SessionEnds` | Something must happen: a running session always finishes or is cancelled. | `CalibrationWalksEveryTargetTest.TheLastStepFinishesTheSession`, `NoSaveOnCancelTest.CancellingNeverSaves` |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardCapture = FALSE`: a step can be finished with no pose captured | `NoAdvanceWithoutCapture`, 27 states |
+| `GuardStartCamera = FALSE`: a session can start with the camera down | `NoRunningWithoutCamera`, 17 states |
+| `GuardCameraLost = FALSE`: losing the camera does not end a running session | `NoRunningWithoutCamera`, 26 states |
+| `GuardCancelDiscards = FALSE`: cancelling saves the session in progress | `NoSaveOnCancel`, 17 states |
+| No fairness on `Finish` | `SessionEnds`: a session at its last step, never finished |
+
+`src/calibration.h`'s `CalibrationController::Start`, `Next` and `Cancel`
+implement the spec's `Start`, `Advance`/`Finish` and `Cancel`;
+`CalibrationSession::Update` is `Capture`, and `OnCameraLost` and
+`OnCameraUp` are `CameraLost` and `CameraBack`. `src/calibration_store.cc`
+saves the profile atomically (write, sync, rename, sync the directory) to a
+private file (mode 0600), exactly once, on `Finish`; a failed save leaves
+the capture in place so `Next` can be retried, which the model does not
+represent. `OnCameraLost` and `OnCameraUp` are not called by
+`src/calibration_reader.cc` (which only ever sees a pose while the camera is
+already up): they are for whoever owns the camera's lifecycle in the
+daemon's composition root to call, which is outside this change (item 7's
+`tools/daemon/main.cc`); until it does, a session only ever sees the camera
+up. `src/service.cc` dispatches a `calibrate` request to the controller it
+is given, or refuses it when it is given none, which is also outside the
+model (a session is always available in it). The model does not prove the
+saved profile maps a pose to the right screen; that is
+`NearestCalibratedScreen`'s job, covered directly by
+`NearestCalibratedScreenTest` and the acceptance test in
+`test/calibration_store_test.cc`,
+`ACalibratedProfileLocatesAScreenAnUncalibratedGuessMisses`, which replays
+fixture head poses through a full start-capture-next-finish-save-load-locate
+cycle on a real file.

@@ -7,6 +7,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/calibration.h"
 #include "src/feed.h"
 #include "src/feelings.h"
 
@@ -74,6 +75,45 @@ TEST(ParseTest, ReadsABeat) {
   EXPECT_THAT(std::get<BeatRequest>(proposal).kind, Eq(BeatKind::kProposal));
   EXPECT_THAT(std::get<BeatRequest>(Parsed("beat question 1")).window,
               Eq(std::chrono::milliseconds(1)));
+}
+
+TEST(ParseTest, ReadsACalibrateStart) {
+  const Request bare = Parsed("calibrate start");
+  ASSERT_TRUE(std::holds_alternative<CalibrateRequest>(bare));
+  EXPECT_THAT(std::get<CalibrateRequest>(bare).action,
+              Eq(CalibrateRequest::Action::kStart));
+  EXPECT_THAT(std::get<CalibrateRequest>(bare).screens, Eq(1));
+
+  const Request screens = Parsed("calibrate start 3");
+  ASSERT_TRUE(std::holds_alternative<CalibrateRequest>(screens));
+  EXPECT_THAT(std::get<CalibrateRequest>(screens).action,
+              Eq(CalibrateRequest::Action::kStart));
+  EXPECT_THAT(std::get<CalibrateRequest>(screens).screens, Eq(3));
+}
+
+TEST(ParseTest, ReadsACalibrateNextAndCancel) {
+  const Request next = Parsed("calibrate next");
+  ASSERT_TRUE(std::holds_alternative<CalibrateRequest>(next));
+  EXPECT_THAT(std::get<CalibrateRequest>(next).action,
+              Eq(CalibrateRequest::Action::kNext));
+
+  const Request cancel = Parsed("calibrate cancel");
+  ASSERT_TRUE(std::holds_alternative<CalibrateRequest>(cancel));
+  EXPECT_THAT(std::get<CalibrateRequest>(cancel).action,
+              Eq(CalibrateRequest::Action::kCancel));
+}
+
+TEST(ParseTest, RefusesABadCalibrate) {
+  constexpr auto kBadCalibrate =
+      "calibrate takes start [screens], next or cancel";
+  EXPECT_THAT(Refused("calibrate"), Eq(kBadCalibrate));
+  EXPECT_THAT(Refused("calibrate pause"), Eq(kBadCalibrate));
+  EXPECT_THAT(Refused("calibrate start now"), Eq(kBadCalibrate));
+  EXPECT_THAT(Refused("calibrate start 0"), Eq(kBadCalibrate));
+  EXPECT_THAT(Refused("calibrate start -1"), Eq(kBadCalibrate));
+  EXPECT_THAT(Refused("calibrate start 99999999999"), Eq(kBadCalibrate));
+  EXPECT_THAT(Refused("calibrate start 1 2"), Eq(kBadCalibrate));
+  EXPECT_THAT(Refused("calibrate next now"), Eq(kBadCalibrate));
 }
 
 TEST(ParseTest, IgnoresATrailingCarriageReturn) {
@@ -176,6 +216,37 @@ TEST(JsonTest, EscapesASummary) {
 TEST(JsonTest, WritesOkAndErrors) {
   EXPECT_THAT(kOkJson, Eq(R"({"ok":true})"));
   EXPECT_THAT(ErrorJson("bad \"thing\""), Eq(R"({"error":"bad \"thing\""})"));
+}
+
+TEST(JsonTest, WritesTheRestingStep) {
+  const CalibrationController::Status status{
+      .running = true, .index = 0, .total = 6, .resting_step = true};
+
+  EXPECT_THAT(CalibrationStatusJson(status),
+              Eq(R"({"ok":true,"calibration":{"state":"running","index":0,)"
+                 R"("total":6,"step":"resting"}})"));
+}
+
+TEST(JsonTest, WritesAScreenStep) {
+  const CalibrationController::Status status{
+      .running = true,
+      .index = 3,
+      .total = 6,
+      .resting_step = false,
+      .screen = 0,
+      .point = CalibrationPoint::kTopRight};
+
+  EXPECT_THAT(
+      CalibrationStatusJson(status),
+      Eq(R"({"ok":true,"calibration":{"state":"running","index":3,)"
+         R"("total":6,"step":"screen","screen":0,"point":"top_right"}})"));
+}
+
+TEST(JsonTest, WritesDoneAndIdle) {
+  EXPECT_THAT(CalibrationStatusJson({.running = false, .done = true}),
+              Eq(R"({"ok":true,"calibration":{"state":"done"}})"));
+  EXPECT_THAT(CalibrationStatusJson({.running = false, .done = false}),
+              Eq(R"({"ok":true,"calibration":{"state":"idle"}})"));
 }
 
 }  // namespace
