@@ -202,13 +202,6 @@
       "functions": 100
     }
   },
-  "src/rating_log.cc": {
-    "unit": {
-      "lines": 100,
-      "branches": 100,
-      "functions": 100
-    }
-  },
   "src/settings_document.cc": {
     "unit": {
       "lines": 100,
@@ -291,6 +284,39 @@
       "lines": 100,
       "branches": 100,
       "functions": 100
+    }
+  },
+  "src/tuning.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/feeling_store.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/linux/mediapipe_c_shim.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/linux/v4l2_session.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "scripts/fetch_mediapipe_c.sh": {
+    "shell": {
+      "lines": 100
     }
   }
 }

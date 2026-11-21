@@ -7,20 +7,17 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "src/feelings.h"
+#include "src/tuner.h"
 
 namespace facepalm {
 
-constexpr int kLowestScore = 1;
-constexpr int kHighestScore = 5;
-
-ReactionFeed::ReactionFeed(int capacity, OnRating on_rating, Clock clock)
-    : capacity_(capacity),
-      on_rating_(std::move(on_rating)),
-      clock_(std::move(clock)) {}
+ReactionFeed::ReactionFeed(int capacity, Tuner& tuner, Clock clock)
+    : capacity_(capacity), tuner_(tuner), clock_(std::move(clock)) {}
 
 ReactionFeed::Client* ReactionFeed::Ready(const std::string& name) {
   const auto found = clients_.find(name);
@@ -37,15 +34,9 @@ ReactionFeed::Delivery ReactionFeed::Tell(Client& client) {
   if (client.cursor < oldest) {
     delivery.missed = static_cast<int>(oldest - client.cursor);
   }
-  Expire(client);
-  const auto now = clock_();
-  for (const auto& [reading, cue] : timeline_) {
-    if (reading.id >= client.cursor) {
-      delivery.readings.push_back(reading);
-      client.rateable[reading.id] = {
-          .shown_at = now,
-          .summary = reading.summary,
-          .published_at_ms = reading.published_at_ms};
+  for (const Entry& entry : timeline_) {
+    if (entry.reading.id >= client.cursor) {
+      delivery.readings.push_back(entry.reading);
     }
   }
   client.cursor = next_;
@@ -64,12 +55,14 @@ bool ReactionFeed::Connect(const std::string& client) {
   return true;
 }
 
-// ReactionFeed!Disconnect.
+// ReactionFeed!Disconnect. The interpretations go too: a feeling is taken
+// only for one given to this connection (FeelingFeedback's GuardGivenOnly).
 void ReactionFeed::Disconnect(const std::string& client) {
   const std::scoped_lock lock(mutex_);
   Client& entry = clients_[client];
   entry.connected = false;
   entry.waiting = false;
+  entry.given.clear();
   if (entry.wait_canceled) {
     *entry.wait_canceled = true;
   }
@@ -97,12 +90,14 @@ std::int64_t ReactionFeed::React(std::string summary, std::string detail,
   const std::scoped_lock lock(mutex_);
   const std::int64_t id = next_++;
   const Cue cue = CueOf(detail);
+  const std::string sign(SignOf(detail));
   timeline_.push_back({.reading = {.id = id,
                                    .summary = std::move(summary),
                                    .detail = std::move(detail),
                                    .published_at_ms = published_at_ms,
                                    .context = std::move(context)},
-                       .cue = cue});
+                       .cue = cue,
+                       .sign = sign});
   if (std::ssize(timeline_) > capacity_) {
     timeline_.pop_front();
   }
@@ -145,7 +140,9 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Wait(
 // FeelingBeat!Mark, and FeelingBeat!EndBeat when the window has passed. The
 // beat waits out its whole window: a reading wakes it, but does not end it.
 // Disconnect and DisconnectAndForget end it unanswered
-// (GuardCancelOnLeave).
+// (GuardCancelOnLeave). The answer is given to the client
+// (FeelingFeedback!Give), and read as the person's picks say, outside the
+// feed's lock, since the tuner may be saving.
 std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
     const std::string& client, BeatKind kind,
     std::chrono::milliseconds window) {
@@ -167,29 +164,41 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
   // FeelingBeat!EndBeat: one answer, and the beat closed (GuardCloseBeat).
   entry->waiting = false;
   entry->wait_canceled.reset();
-  const Feeling feeling = Answer(start);
+  const Window shown = Answer(start, kind);
   Delivery delivery = Tell(*entry);
-  delivery.interpretation = Interpretation{
-      .id = next_interpretation_++, .feeling = feeling, .beat = kind};
+  const std::int64_t id = next_interpretation_++;
+  Expire(*entry);
+  entry->given[id] = {.given_at = clock_(), .evidence = shown.evidence};
+  lock.unlock();
+  const Feeling feeling = shown.evidence
+                              ? tuner_.Read(*shown.evidence, shown.generic)
+                              : shown.generic;
+  delivery.interpretation =
+      Interpretation{.id = id, .feeling = feeling, .beat = kind};
   return delivery;
 }
 
-Feeling ReactionFeed::Answer(std::int64_t start) const {
+ReactionFeed::Window ReactionFeed::Answer(std::int64_t start,
+                                          BeatKind kind) const {
   const std::int64_t oldest = next_ - std::ssize(timeline_);
   std::vector<Cue> cues;
-  for (const auto& [reading, cue] : timeline_) {
-    if (reading.id >= start) {
-      cues.push_back(cue);
+  std::vector<std::string_view> signs;
+  for (const auto& entry : timeline_) {
+    if (entry.reading.id >= start) {
+      cues.push_back(entry.cue);
+      signs.emplace_back(entry.sign);
     }
   }
   // A reading of the window dropped before it ended (GuardDroppedUnknown).
-  return Interpret(cues, /*complete=*/start >= oldest);
+  const bool complete = start >= oldest;
+  return {.generic = Interpret(cues, complete),
+          .evidence = EvidenceOf(signs, kind, complete)};
 }
 
 void ReactionFeed::Expire(Client& client) {
   const auto now = clock_();
-  std::erase_if(client.rateable, [&](const auto& entry) {
-    return now - entry.second.shown_at > kRatingWindow;
+  std::erase_if(client.given, [&](const auto& entry) {
+    return now - entry.second.given_at > kFeelingWindow;
   });
 }
 
@@ -199,30 +208,40 @@ bool ReactionFeed::Waiting(const std::string& client) {
   return found != clients_.end() && found->second.waiting;
 }
 
-// ReactionFeed!Rate.
-bool ReactionFeed::Rate(const std::string& client, std::int64_t id, int score) {
-  const auto rating = PrepareRating(client, id, score);
-  return rating.has_value() && on_rating_(*rating);
+// FeelingFeedback!Feel: only an interpretation given to this client
+// (GuardGivenOnly), not yet expired (GuardRecent), and taken once
+// (GuardOnce); then FeelingFeedback!Begin, in the tuner, outside the feed's
+// lock.
+bool ReactionFeed::Feel(const std::string& client, std::int64_t interpretation,
+                        Feeling feeling) {
+  std::optional<Evidence> evidence;
+  {
+    const std::scoped_lock lock(mutex_);
+    const auto found = clients_.find(client);
+    if (found == clients_.end() || !found->second.connected) {
+      return false;
+    }
+    Expire(found->second);
+    const auto given = found->second.given.find(interpretation);
+    if (given == found->second.given.end()) {
+      return false;
+    }
+    evidence = std::move(given->second.evidence);
+    found->second.given.erase(given);
+  }
+  return !evidence || tuner_.Learn(*evidence, feeling);
 }
 
-std::optional<ReactionFeed::Rating> ReactionFeed::PrepareRating(
-    const std::string& client, std::int64_t id, int score) {
-  const std::scoped_lock lock(mutex_);
-  const auto found = clients_.find(client);
-  if (found == clients_.end() || !found->second.connected) {
-    return std::nullopt;
+// FeelingFeedback!Reset.
+bool ReactionFeed::Reset(const std::string& client) {
+  {
+    const std::scoped_lock lock(mutex_);
+    const auto found = clients_.find(client);
+    if (found == clients_.end() || !found->second.connected) {
+      return false;
+    }
   }
-  Expire(found->second);
-  const auto item = found->second.rateable.find(id);
-  if (item == found->second.rateable.end() || score < kLowestScore ||
-      score > kHighestScore) {
-    return std::nullopt;
-  }
-  return Rating{.client = client,
-                .id = id,
-                .score = score,
-                .summary = item->second.summary,
-                .published_at_ms = item->second.published_at_ms};
+  return tuner_.Forget();
 }
 
 }  // namespace facepalm

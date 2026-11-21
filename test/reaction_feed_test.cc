@@ -11,8 +11,11 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/feelings.h"
+#include "src/tuner.h"
 
-// Each test stands for the specs/ReactionFeed.tla property it is named for.
+// Each test stands for the specs/ReactionFeed.tla property it is named for,
+// or, from the beats on, specs/FeelingBeat.tla's or
+// specs/FeelingFeedback.tla's.
 
 namespace facepalm {
 namespace {
@@ -21,8 +24,10 @@ using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Field;
 using ::testing::IsEmpty;
-using ::testing::MockFunction;
+using ::testing::NiceMock;
 using ::testing::Optional;
+using ::testing::Return;
+using ::testing::ReturnArg;
 
 constexpr auto kLong = std::chrono::seconds(10);
 constexpr auto kShort = std::chrono::milliseconds(10);
@@ -56,15 +61,34 @@ std::vector<std::string> Summaries(const ReactionFeed::Delivery& delivery) {
   return summaries;
 }
 
+class MockTuner : public Tuner {
+ public:
+  MOCK_METHOD(Feeling, Read, (const Evidence&, Feeling), (override));
+  MOCK_METHOD(bool, Learn, (const Evidence&, Feeling), (override));
+  MOCK_METHOD(bool, Forget, (), (override));
+};
+
+// The id of the interpretation `delivery` holds, or 0 and a failure.
+std::int64_t InterpretationOf(
+    const std::optional<ReactionFeed::Delivery>& delivery) {
+  if (!delivery || !delivery->interpretation) {
+    ADD_FAILURE() << "no interpretation";
+    return 0;
+  }
+  return delivery->interpretation->id;
+}
+
 class ReactionFeedTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    ON_CALL(on_rating_, Call).WillByDefault(testing::Return(true));
+    // With no picks, the person's read is the generic one.
+    ON_CALL(tuner_, Read).WillByDefault(ReturnArg<1>());
+    ON_CALL(tuner_, Learn).WillByDefault(Return(true));
+    ON_CALL(tuner_, Forget).WillByDefault(Return(true));
   }
-  MockFunction<bool(const ReactionFeed::Rating&)> on_rating_;
+  NiceMock<MockTuner> tuner_;
   std::chrono::steady_clock::time_point now_;
-  ReactionFeed feed_{/*capacity=*/2, on_rating_.AsStdFunction(),
-                     [this] { return now_; }};
+  ReactionFeed feed_{/*capacity=*/2, tuner_, [this] { return now_; }};
 };
 
 using NoRepeatTest = ReactionFeedTest;
@@ -115,10 +139,10 @@ TEST_F(NoRepeatTest, AReconnectingClientStartsWithNoBacklog) {
   EXPECT_THAT(Summaries(Got(feed_.Read("agent"))), IsEmpty());
 }
 
-TEST_F(ReactionFeedTest, ForgetEndsAWaitAndRetiresItsRatingHistory) {
+TEST_F(ReactionFeedTest, ForgetEndsAWaitAndRetiresItsInterpretations) {
   ASSERT_TRUE(feed_.Connect("agent"));
-  const auto id = feed_.React("nod", "{}");
-  ASSERT_TRUE(feed_.Read("agent"));
+  const std::int64_t given =
+      InterpretationOf(feed_.Beat("agent", BeatKind::kQuestion, kShort));
   auto waited = std::async(std::launch::async,
                            [this] { return feed_.Wait("agent", kLong); });
   while (!feed_.Waiting("agent")) {
@@ -127,7 +151,7 @@ TEST_F(ReactionFeedTest, ForgetEndsAWaitAndRetiresItsRatingHistory) {
   feed_.DisconnectAndForget("agent");
   EXPECT_FALSE(Answered(waited));
   ASSERT_TRUE(feed_.Connect("agent"));
-  EXPECT_FALSE(feed_.Rate("agent", id, 5));
+  EXPECT_FALSE(feed_.Feel("agent", given, Feeling::kAgreement));
 }
 
 TEST_F(ReactionFeedTest, ForgetAfterDisconnectWaitsForTheOldWaiter) {
@@ -146,11 +170,11 @@ TEST_F(ReactionFeedTest, ForgetAfterDisconnectWaitsForTheOldWaiter) {
 TEST_F(ReactionFeedTest, ForgetRetiresAnIdleOrUnknownClient) {
   feed_.DisconnectAndForget("unknown");
   ASSERT_TRUE(feed_.Connect("agent"));
-  const auto id = feed_.React("nod", "{}");
-  ASSERT_TRUE(feed_.Read("agent"));
+  const std::int64_t given =
+      InterpretationOf(feed_.Beat("agent", BeatKind::kQuestion, kShort));
   feed_.DisconnectAndForget("agent");
   ASSERT_TRUE(feed_.Connect("agent"));
-  EXPECT_FALSE(feed_.Rate("agent", id, 5));
+  EXPECT_FALSE(feed_.Feel("agent", given, Feeling::kAgreement));
 }
 
 using NoSilentGapTest = ReactionFeedTest;
@@ -216,138 +240,6 @@ TEST_F(NoSilentGapTest, AClientNotConnectedGetsNothing) {
   EXPECT_THAT(feed_.Wait("stranger", kShort), Eq(std::nullopt));
   EXPECT_THAT(feed_.Read("left"), Eq(std::nullopt));
   EXPECT_FALSE(feed_.Waiting("stranger"));
-}
-
-using RateOnlyShownTest = ReactionFeedTest;
-
-TEST_F(RateOnlyShownTest, AShownReadingIsRated) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  feed_.Read("agent");
-
-  EXPECT_CALL(on_rating_,
-              Call(AllOf(Field(&ReactionFeed::Rating::client, Eq("agent")),
-                         Field(&ReactionFeed::Rating::id, Eq(id)),
-                         Field(&ReactionFeed::Rating::score, Eq(4)))));
-  EXPECT_TRUE(feed_.Rate("agent", id, 4));
-}
-
-TEST_F(RateOnlyShownTest, AFailedFeedbackSinkIsNotReportedAsSuccess) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("Gesture: nod", "{}", 1234);
-  ASSERT_TRUE(feed_.Read("agent"));
-  EXPECT_CALL(
-      on_rating_,
-      Call(AllOf(Field(&ReactionFeed::Rating::summary, Eq("Gesture: nod")),
-                 Field(&ReactionFeed::Rating::published_at_ms,
-                       Eq(std::optional<std::int64_t>(1234))))))
-      .WillOnce(testing::Return(false));
-  EXPECT_FALSE(feed_.Rate("agent", id, 4));
-}
-
-TEST_F(RateOnlyShownTest, KeepsRatedMetadataAfterTimelineEviction) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("Gesture: nod", "{}", 1234);
-  ASSERT_TRUE(feed_.Read("agent"));
-  feed_.React("later", "{}", 2345);
-  feed_.React("newest", "{}", 3456);
-  EXPECT_CALL(
-      on_rating_,
-      Call(AllOf(Field(&ReactionFeed::Rating::summary, Eq("Gesture: nod")),
-                 Field(&ReactionFeed::Rating::published_at_ms,
-                       Eq(std::optional<std::int64_t>(1234))))))
-      .WillOnce(testing::Return(true));
-  EXPECT_TRUE(feed_.Rate("agent", id, 4));
-}
-
-TEST(ReactionFeedCallbackTest, SinkCanForgetSessionWithoutDeadlock) {
-  ReactionFeed* active = nullptr;
-  ReactionFeed feed(2, [&](const ReactionFeed::Rating& rating) {
-    active->DisconnectAndForget(rating.client);
-    return true;
-  });
-  active = &feed;
-  ASSERT_TRUE(feed.Connect("agent"));
-  const auto id = feed.React("Gesture: nod", "{}", 1234);
-  ASSERT_TRUE(feed.Read("agent"));
-  EXPECT_TRUE(feed.Rate("agent", id, 5));
-  EXPECT_FALSE(feed.Read("agent"));
-}
-
-TEST_F(RateOnlyShownTest, AReadingNotShownToTheClientIsNot) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  ASSERT_TRUE(feed_.Connect("ai-pair"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  feed_.Read("ai-pair");
-
-  EXPECT_CALL(on_rating_, Call).Times(0);
-  EXPECT_FALSE(feed_.Rate("agent", id, 4));
-  EXPECT_FALSE(feed_.Rate("agent", id + 1, 4));
-}
-
-TEST_F(RateOnlyShownTest, AReadingShownBeforeAReconnectStillCan) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  feed_.Read("agent");
-  feed_.Disconnect("agent");
-  ASSERT_TRUE(feed_.Connect("agent"));
-
-  EXPECT_CALL(on_rating_, Call);
-  EXPECT_TRUE(feed_.Rate("agent", id, 2));
-}
-
-TEST_F(RateOnlyShownTest, AScoreOutsideOneToFiveIsRefused) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  feed_.Read("agent");
-
-  EXPECT_CALL(on_rating_, Call).Times(0);
-  EXPECT_FALSE(feed_.Rate("agent", id, 0));
-  EXPECT_FALSE(feed_.Rate("agent", id, 6));
-}
-
-TEST_F(RateOnlyShownTest, AClientNotConnectedCannotRate) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  feed_.Read("agent");
-  feed_.Disconnect("agent");
-
-  EXPECT_CALL(on_rating_, Call).Times(0);
-  EXPECT_FALSE(feed_.Rate("agent", id, 3));
-  EXPECT_FALSE(feed_.Rate("stranger", id, 3));
-}
-
-using RateOnlyRecentTest = ReactionFeedTest;
-
-TEST_F(RateOnlyRecentTest, AReadingCanBeRatedUpToFiveMinutesAfterItWasShown) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  feed_.Read("agent");
-  now_ += std::chrono::minutes(5);
-
-  EXPECT_CALL(on_rating_, Call);
-  EXPECT_TRUE(feed_.Rate("agent", id, 3));
-}
-
-TEST_F(RateOnlyRecentTest, NotOnceFiveMinutesHavePassed) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  feed_.Read("agent");
-  now_ += std::chrono::minutes(5) + std::chrono::seconds(1);
-
-  EXPECT_CALL(on_rating_, Call).Times(0);
-  EXPECT_FALSE(feed_.Rate("agent", id, 3));
-}
-
-TEST_F(RateOnlyRecentTest, TheFiveMinutesRunFromWhenItWasShown) {
-  ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t id = feed_.React("nod", "{}");
-  now_ += std::chrono::minutes(4);
-  feed_.Read("agent");
-  now_ += std::chrono::minutes(4);
-
-  EXPECT_CALL(on_rating_, Call);
-  EXPECT_TRUE(feed_.Rate("agent", id, 3));
 }
 
 using NoWaitPastAReadingTest = ReactionFeedTest;
@@ -681,6 +573,167 @@ TEST_F(BeatEndsTest, ABeatEndsWhenItsWindowDoes) {
 
   ASSERT_TRUE(Answered(beat));
   EXPECT_GE(std::chrono::steady_clock::now() - began, kBeat);
+}
+
+// The beat's evidence goes to the person's own reads (FeelingBeat!Answer,
+// tuned by FeelingFeedback's counts).
+using TunedReadTest = BeatTest;
+
+TEST_F(TunedReadTest, TheBeatIsReadAsThePersonsPicksSay) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_CALL(tuner_,
+              Read(Evidence{.sign = "brows_down", .beat = BeatKind::kQuestion},
+                   Feeling::kConfused))
+      .WillOnce(Return(Feeling::kAnnoyance));
+  auto beat = Mark();
+  feed_.React("Expression: brows_down", kFrownText);
+
+  EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kAnnoyance));
+}
+
+TEST_F(TunedReadTest, ABeatWithNoReactionHasEvidenceToo) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_CALL(tuner_, Read(Evidence{.sign = std::string(kNoSign),
+                                    .beat = BeatKind::kProposal},
+                           Feeling::kUnknown))
+      .WillOnce(Return(Feeling::kEngagement));
+
+  EXPECT_THAT(FeelingOf(Got(feed_.Beat("agent", BeatKind::kProposal, kShort))),
+              Eq(Feeling::kEngagement));
+}
+
+TEST_F(TunedReadTest, ABeatOfMixedReactionsKeepsTheGenericRead) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_CALL(tuner_, Read).Times(0);
+  auto beat = Mark();
+  feed_.React("Gesture: nod", kNodText);
+  feed_.React("Gesture: shake", kShakeText);
+
+  EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kUnknown));
+}
+
+class FeedbackTest : public BeatTest {
+ protected:
+  // The interpretation of a beat in which "agent" frowned.
+  std::int64_t Frowned() {
+    auto beat = Mark();
+    feed_.React("Expression: brows_down", kFrownText);
+    return InterpretationOf(Answered(beat));
+  }
+
+  const Evidence frown_{.sign = "brows_down", .beat = BeatKind::kQuestion};
+};
+
+using OnlyGivenTest = FeedbackTest;
+
+TEST_F(OnlyGivenTest, AFeelingForTheClientsInterpretationIsLearned) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = Frowned();
+  EXPECT_CALL(tuner_, Learn(frown_, Feeling::kAnnoyance))
+      .WillOnce(Return(true));
+
+  EXPECT_TRUE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
+TEST_F(OnlyGivenTest, AnotherClientsOrAnUngivenInterpretationIsNot) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  ASSERT_TRUE(feed_.Connect("ai-pair"));
+  const std::int64_t id = Frowned();
+  EXPECT_CALL(tuner_, Learn).Times(0);
+
+  EXPECT_FALSE(feed_.Feel("ai-pair", id, Feeling::kAnnoyance));
+  EXPECT_FALSE(feed_.Feel("agent", id + 1, Feeling::kAnnoyance));
+  EXPECT_FALSE(feed_.Feel("stranger", id, Feeling::kAnnoyance));
+}
+
+TEST_F(OnlyGivenTest, AnInterpretationGivenBeforeAReconnectIsNot) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = Frowned();
+  feed_.Disconnect("agent");
+  EXPECT_CALL(tuner_, Learn).Times(0);
+
+  EXPECT_FALSE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_FALSE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
+TEST_F(OnlyGivenTest, AFeelingWhoseSaveFailsIsRefused) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = Frowned();
+  EXPECT_CALL(tuner_, Learn).WillOnce(Return(false));
+
+  EXPECT_FALSE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
+TEST_F(OnlyGivenTest, AMixedBeatTakesAFeelingButTeachesNothing) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  auto beat = Mark();
+  feed_.React("Gesture: nod", kNodText);
+  feed_.React("Gesture: shake", kShakeText);
+  const std::int64_t given = InterpretationOf(Answered(beat));
+  EXPECT_CALL(tuner_, Learn).Times(0);
+
+  EXPECT_TRUE(feed_.Feel("agent", given, Feeling::kConfused));
+  EXPECT_FALSE(feed_.Feel("agent", given, Feeling::kConfused));
+}
+
+using OncePerInterpretationTest = FeedbackTest;
+
+TEST_F(OncePerInterpretationTest, ASecondFeelingIsRefused) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = Frowned();
+  EXPECT_CALL(tuner_, Learn).WillOnce(Return(true));
+
+  EXPECT_TRUE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+  EXPECT_FALSE(feed_.Feel("agent", id, Feeling::kConfused));
+}
+
+TEST_F(OncePerInterpretationTest, EvenWhenTheFirstFailedToSave) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = Frowned();
+  EXPECT_CALL(tuner_, Learn).WillOnce(Return(false));
+
+  EXPECT_FALSE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+  EXPECT_FALSE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
+using OnlyRecentTest = FeedbackTest;
+
+TEST_F(OnlyRecentTest, AFeelingCanComeUpToFiveMinutesAfterTheBeat) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = Frowned();
+  now_ += ReactionFeed::kFeelingWindow;
+  EXPECT_CALL(tuner_, Learn);
+
+  EXPECT_TRUE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
+TEST_F(OnlyRecentTest, NotOnceFiveMinutesHavePassed) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  const std::int64_t id = Frowned();
+  now_ += ReactionFeed::kFeelingWindow + std::chrono::seconds(1);
+  EXPECT_CALL(tuner_, Learn).Times(0);
+
+  EXPECT_FALSE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
+using ResetForgetsTest = ReactionFeedTest;
+
+TEST_F(ResetForgetsTest, AConnectedClientCanForgetEveryPick) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_CALL(tuner_, Forget).WillOnce(Return(true)).WillOnce(Return(false));
+
+  EXPECT_TRUE(feed_.Reset("agent"));
+  EXPECT_FALSE(feed_.Reset("agent"));
+}
+
+TEST_F(ResetForgetsTest, AClientNotConnectedCannot) {
+  ASSERT_TRUE(feed_.Connect("left"));
+  feed_.Disconnect("left");
+  EXPECT_CALL(tuner_, Forget).Times(0);
+
+  EXPECT_FALSE(feed_.Reset("stranger"));
+  EXPECT_FALSE(feed_.Reset("left"));
 }
 
 }  // namespace

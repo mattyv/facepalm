@@ -17,10 +17,13 @@
 //   hello <name>          names the client; the first line of a connection
 //   read                  the readings since this client last looked
 //   wait <milliseconds>   as read, waiting up to 60 seconds for one
-//   rate <id> <score>     rates a reading this client was shown, 1 to 5
 //   beat <kind> <milliseconds>
 //                         marks a beat after a question or a proposal, and
 //                         waits out its 1 to 10000 millisecond window
+//   feel <interpretation> <feeling>
+//                         says how the person felt at a beat this client
+//                         was given, once, within five minutes
+//   reset feelings        forgets every feeling the person gave
 namespace facepalm::protocol {
 
 struct Hello {
@@ -30,18 +33,19 @@ struct ReadRequest {};
 struct WaitRequest {
   std::chrono::milliseconds timeout;
 };
-struct RateRequest {
-  std::int64_t id;
-  int score;
+struct FeelRequest {
+  std::int64_t interpretation;
+  Feeling feeling;
 };
+struct ResetRequest {};
 
 struct BeatRequest {
   BeatKind kind;
   std::chrono::milliseconds window;
 };
 
-using Request =
-    std::variant<Hello, ReadRequest, WaitRequest, RateRequest, BeatRequest>;
+using Request = std::variant<Hello, ReadRequest, WaitRequest, BeatRequest,
+                             FeelRequest, ResetRequest>;
 
 // The request on `line`, or nullopt with `error` saying why not.
 std::optional<Request> Parse(std::string_view line, std::string& error);
@@ -53,8 +57,9 @@ std::optional<Request> Parse(std::string_view line, std::string& error);
 // what the screen showed at the moment of the reading, also written by
 // facepalm and passed through as it is.
 // The reply that ends a beat adds
-// "interpretation":{"id":..,"feeling":"..","beat":".."}, with the feeling
-// one of src/feelings.h's names.
+// "interpretation":{"id":..,"feeling":"..","beat":"..","feelings":[..]}:
+// the feeling is one of src/feelings.h's names, and "feelings" all of them,
+// in order, for a client to offer the person.
 // The reply to a request that worked and has nothing to return.
 inline constexpr std::string_view kOkJson = R"({"ok":true})";
 

@@ -1,15 +1,19 @@
 #ifndef FACEPALM_SRC_FEELINGS_H_
 #define FACEPALM_SRC_FEELINGS_H_
 
+#include <array>
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 // What a reaction meant (#70, item 3 of #61): the feelings facepalm reads a
 // reaction as when a client marks a beat, and the generic rule that reads
-// them. This file is the only list of the feelings; every client, and the
-// corrections of #35, name these.
+// them, and what a person's correction of a read is counted under (#35).
+// This file is the only list of the feelings; every client, and the
+// corrections, name these.
 namespace facepalm {
 
 // How the person felt about what was just asked. kEngagement (shown as
@@ -28,9 +32,16 @@ enum class Feeling : std::uint8_t {
 // How many feelings there are.
 inline constexpr int kFeelings = 6;
 
+// Every feeling, in order.
+inline constexpr std::array<Feeling, kFeelings> kEveryFeeling = {
+    Feeling::kAgreement, Feeling::kDisagreement, Feeling::kEngagement,
+    Feeling::kAnnoyance, Feeling::kConfused,     Feeling::kUnknown};
+
 // The feeling's name: agreement, disagreement, engagement, annoyance,
 // confused or unknown.
 std::string_view Name(Feeling feeling);
+// The feeling named `name`, or nullopt.
+std::optional<Feeling> FeelingNamed(std::string_view name);
 
 // What the client just did, which opens the beat: asked a question or made
 // a proposal.
@@ -66,6 +77,33 @@ Cue CueOf(std::string_view reaction);
 // or a window that is not `complete` (some of its readings were dropped)
 // give kUnknown.
 Feeling Interpret(std::span<const Cue> cues, bool complete);
+
+// A reaction's own name, from its JSON text as the readers write it: "nod"
+// for {"gesture":"nod"}, "brows_down" for {"expression":"brows_down"}. Empty
+// for anything else. A name is 1 to 32 of a-z and _.
+std::string_view SignOf(std::string_view reaction);
+
+// Whether `word` can be a sign: 1 to 32 of a-z and _.
+bool IsSign(std::string_view word);
+
+// The sign of a beat in which no reaction was made.
+inline constexpr std::string_view kNoSign = "none";
+
+// What a beat showed, which a person's corrections are counted under (#35):
+// the one kind of reaction made during it, or kNoSign, and what the client
+// marked the beat after.
+struct Evidence {
+  std::string sign;
+  BeatKind beat;
+  friend auto operator<=>(const Evidence&, const Evidence&) = default;
+};
+
+// The evidence of a beat whose window held readings with `signs`. nullopt
+// when they were of more than one kind, one had no sign, or the window was
+// not complete: a correction could not then say which reaction it was
+// about.
+std::optional<Evidence> EvidenceOf(std::span<const std::string_view> signs,
+                                   BeatKind beat, bool complete);
 
 }  // namespace facepalm
 

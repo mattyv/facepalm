@@ -68,12 +68,12 @@ on the next daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facep
 to the daemon command. The dialog shows the path it used. Use one approved MCP
 connection at a time. It receives interpreted gesture and expression events.
 For Claude Code, see the [bundled plugin instructions](/integrations/claude-code/README.md).
-To save ratings locally, add `--ratings-file PATH` with a private file path.
-The owner-only JSONL file stores the summary, reading ID, timestamps and
-score, up to 10 MiB. The daemon rejects ratings when the option is absent,
-the file is full, or a write fails. A failed write or sync disables further
-writes for that run and may leave an unacknowledged record. Saved ratings
-do not yet change detection thresholds automatically. Stop the foreground
+The daemon keeps the feelings you pick in
+`${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/feelings`, or at the path given with
+`--feelings-file PATH`: a private text file of counts, one line for each
+reaction, kind of beat and feeling, with no images, times or summaries. It
+tunes later reads from them. A client clears them with `reset feelings`; so
+does deleting the file while the daemon is stopped. Stop the foreground
 daemon to revoke consent for that run.
 
 The local bundle verification covers startup refusal without consent, rejection

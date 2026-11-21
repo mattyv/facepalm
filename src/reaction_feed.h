@@ -11,10 +11,10 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <vector>
 
 #include "src/feed.h"
 #include "src/feelings.h"
+#include "src/tuner.h"
 
 namespace facepalm {
 
@@ -23,29 +23,21 @@ namespace facepalm {
 // line facepalm writes, keeps the last `capacity`. Each client, an agent
 // session or AI Pair, reads what came since it last looked, or waits for
 // the next reading, or marks a beat and is told how its reaction was read,
-// following specs/FeelingBeat.tla. The person rates a reading the client was
-// shown, 1-5. Thread-safe.
+// following specs/FeelingBeat.tla, read as the person's own picks say
+// (`tuner`). The person then says how they really felt, which goes back to
+// `tuner`, following specs/FeelingFeedback.tla. Thread-safe.
 class ReactionFeed : public Feed {
  public:
-  struct Rating {
-    std::string client;
-    std::int64_t id;
-    int score;
-    std::string summary;
-    std::optional<std::int64_t> published_at_ms;
-  };
-
-  using OnRating = std::function<bool(const Rating&)>;
-
   using Clock = std::function<std::chrono::steady_clock::time_point()>;
 
-  ReactionFeed(int capacity, OnRating on_rating,
+  ReactionFeed(int capacity, Tuner& tuner,
                Clock clock = std::chrono::steady_clock::now);
 
   // Connect: a client starts with no backlog. False, changing nothing, when
   // the name is already connected (specs/Service.tla's UniqueNames).
   [[nodiscard]] bool Connect(const std::string& client) override;
-  // Disconnect: ends the client's wait.
+  // Disconnect: ends the client's wait, and forgets the interpretations it
+  // was given.
   void Disconnect(const std::string& client) override;
   // React: adds a reading, drops the oldest past capacity, and answers every
   // waiting client. Returns the reading's id. `context` is Feed::Reading's
@@ -73,13 +65,17 @@ class ReactionFeed : public Feed {
   // Disconnects an ephemeral identity and removes its history. An older
   // wait holds its own cancellation token and returns no delivery.
   void DisconnectAndForget(const std::string& client);
-  // How long after a reading is shown it can be rated.
-  static constexpr std::chrono::minutes kRatingWindow{5};
+  // How long after a beat ends the person can say how they felt.
+  static constexpr std::chrono::minutes kFeelingWindow{5};
 
-  // Rate: true, and passed on, only for a reading this client was shown in
-  // the last kRatingWindow, and
-  // a score from 1 to 5.
-  bool Rate(const std::string& client, std::int64_t id, int score) override;
+  // FeelingFeedback!Feel: true, and learned, only for an interpretation
+  // this client was given in the last kFeelingWindow, the first time, and
+  // once the tuner has saved it. A beat whose evidence could not say which
+  // reaction it was about takes the feeling, but teaches nothing.
+  bool Feel(const std::string& client, std::int64_t interpretation,
+            Feeling feeling) override;
+  // FeelingFeedback!Reset, for a connected client.
+  bool Reset(const std::string& client) override;
 
  private:
   struct Client {
@@ -87,38 +83,42 @@ class ReactionFeed : public Feed {
     std::shared_ptr<bool> wait_canceled;
     bool waiting = false;
     std::int64_t cursor = 0;  // The first id not yet told about.
-    // When each reading was shown, while it can still be rated; kept across
-    // reconnects.
-    struct Rateable {
-      std::chrono::steady_clock::time_point shown_at;
-      std::string summary;
-      std::optional<std::int64_t> published_at_ms;
+    // The interpretations it was given that can still take a feeling: when
+    // each was given, and its evidence.
+    struct Given {
+      std::chrono::steady_clock::time_point given_at;
+      std::optional<Evidence> evidence;
     };
-    std::map<std::int64_t, Rateable> rateable;
+    std::map<std::int64_t, Given> given;
   };
 
-  // Captures authorized rating metadata under the feed lock.
-  std::optional<Rating> PrepareRating(const std::string& client,
-                                      std::int64_t id, int score);
+  // What a beat's window showed.
+  struct Window {
+    Feeling generic;
+    std::optional<Evidence> evidence;
+  };
+
   // The client, if it is connected and not waiting.
   Client* Ready(const std::string& name);
   // Tell: the readings since the client's cursor, the dropped ones counted
   // as missed, and the cursor moved past them all.
   Delivery Tell(Client& client);
-  // ReactionFeed!Expire: forgets what the client was shown too long ago to
-  // rate.
+  // FeelingFeedback!Expire: forgets the interpretations the client was
+  // given too long ago to take a feeling.
   void Expire(Client& client);
 
-  // FeelingBeat!Answer: the feeling of the readings from id `start` on.
-  [[nodiscard]] Feeling Answer(std::int64_t start) const;
+  // FeelingBeat!Answer: the generic feeling of the readings from id `start`
+  // on, and their evidence.
+  [[nodiscard]] Window Answer(std::int64_t start, BeatKind kind) const;
 
   struct Entry {
     Reading reading;
     Cue cue;
+    std::string sign;  // SignOf the reading's detail.
   };
 
   const int capacity_;
-  const OnRating on_rating_;
+  Tuner& tuner_;
   const Clock clock_;
   std::mutex mutex_;
   std::condition_variable changed_;

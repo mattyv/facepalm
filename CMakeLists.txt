@@ -30,11 +30,18 @@ endif()
 # Each source file gets a library and a test executable of its own, so that
 # its coverage is measured from its own tests alone. A unit's tests write
 # their profiles to profiles/<unit>-<pid>.profraw for scripts/coverage.sh.
+# A unit in a folder of src, such as linux, names it with DIRECTORY; its test
+# is in the same folder of test.
 function(facepalm_unit name)
-  add_library(${name} src/${name}.cc)
+  cmake_parse_arguments(PARSE_ARGV 1 unit "" "DIRECTORY" "")
+  set(path ${name})
+  if(unit_DIRECTORY)
+    set(path ${unit_DIRECTORY}/${name})
+  endif()
+  add_library(${name} src/${path}.cc)
   target_include_directories(${name} PUBLIC ${PROJECT_SOURCE_DIR})
   if(BUILD_TESTING)
-    add_executable(${name}_test test/${name}_test.cc)
+    add_executable(${name}_test test/${path}_test.cc)
     target_link_libraries(${name}_test PRIVATE ${name} GTest::gmock GTest::gtest_main)
     gtest_discover_tests(${name}_test
       DISCOVERY_MODE PRE_TEST
@@ -54,6 +61,13 @@ facepalm_unit(expressions)
 facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
 facepalm_unit(feelings)
+facepalm_unit(tuning)
+# The feelings are pure computation, so the tuning's tests run them for real.
+target_link_libraries(tuning PUBLIC feelings)
+# The tuning is pure computation, so the store's tests run it for real; its
+# POSIX calls are its own, and its tests run them on a real folder too.
+facepalm_unit(feeling_store)
+target_link_libraries(feeling_store PUBLIC tuning)
 facepalm_unit(frame)
 facepalm_unit(frame_pipeline)
 facepalm_unit(frame_recorder)
@@ -90,8 +104,6 @@ facepalm_unit(reaction_feed)
 # The feelings and their rule are pure computation, so the feed's tests run
 # them for real.
 target_link_libraries(reaction_feed PUBLIC feelings)
-facepalm_unit(rating_log)
-target_link_libraries(rating_log PUBLIC protocol)
 facepalm_unit(protocol)
 target_link_libraries(protocol PUBLIC feelings)
 facepalm_unit(service)
@@ -247,7 +259,7 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
     avfoundation_session camera_controller config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
-    screen_context_reporter screen_context_macos reaction_feed rating_log service
+    screen_context_reporter screen_context_macos reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
@@ -264,7 +276,11 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
 endif()
 
-# The Linux daemon uses the pinned native MediaPipe Tasks C library.
+# The Linux daemon uses the pinned native MediaPipe Tasks C library, which
+# scripts/fetch_mediapipe_c.sh fetches with its C headers. Its two Linux
+# sources are units of their own (#83): their tests link fakes of MediaPipe's
+# C API and of libv4l2 in place of the real libraries, so they need the
+# headers but never open a camera or load the model.
 set(FACEPALM_MEDIAPIPE_C_INCLUDE "" CACHE PATH "Root of MediaPipe's native C headers")
 set(FACEPALM_MEDIAPIPE_C_LIBRARY "" CACHE FILEPATH "Linux libmediapipe.so")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
@@ -280,18 +296,26 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   # libx11-dev and libxrandr-dev alongside its existing packages.
   find_package(X11 REQUIRED)
   find_library(XRANDR_LIBRARY NAMES Xrandr REQUIRED)
+  facepalm_unit(mediapipe_c_shim DIRECTORY linux)
+  target_include_directories(mediapipe_c_shim SYSTEM PUBLIC ${FACEPALM_MEDIAPIPE_C_INCLUDE})
+  facepalm_unit(v4l2_session DIRECTORY linux)
+  target_include_directories(v4l2_session SYSTEM PUBLIC ${V4L2_INCLUDE_DIRECTORY})
+  target_link_libraries(v4l2_session PUBLIC Threads::Threads)
+  # screen_context_linux needs a real X server, like avfoundation_session
+  # needs a real camera, so, unlike the two units above, it has no
+  # facepalm_unit of its own: it goes straight into the daemon.
   add_executable(facepalm_daemon tools/daemon/main.cc
-    src/linux/v4l2_session.cc src/linux/mediapipe_c_shim.cc
     src/linux/screen_context_linux.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
-  target_include_directories(facepalm_daemon SYSTEM PRIVATE
-    ${FACEPALM_MEDIAPIPE_C_INCLUDE} ${V4L2_INCLUDE_DIRECTORY})
+  # face_model calls the shim, and the shim MediaPipe, so each comes after
+  # the one that calls it.
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader screen_context_reader screen_context_reporter screen_context
-    reaction_feed rating_log service session_camera unix_socket face_model Threads::Threads
-    ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY} ${X11_LIBRARIES} ${XRANDR_LIBRARY})
+    reaction_feed feeling_store service session_camera unix_socket v4l2_session
+    face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
+    ${X11_LIBRARIES} ${XRANDR_LIBRARY})
   target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"
@@ -324,5 +348,5 @@ endif()
 if(BUILD_TESTING)
   add_executable(mcp_service_fixture EXCLUDE_FROM_ALL
     test/fixtures/mcp_service_fixture.cc)
-  target_link_libraries(mcp_service_fixture PRIVATE service reaction_feed rating_log unix_socket)
+  target_link_libraries(mcp_service_fixture PRIVATE service reaction_feed feeling_store unix_socket)
 endif()
