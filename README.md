@@ -285,6 +285,14 @@ felt, `tell_feeling` takes the interpretation's ID and their pick, sends
 `feel <id> <feeling>`, and Facepalm tunes later reads from it. A client resets
 the person's picks with `reset feelings`.
 
+Where the host cannot render a widget but supports MCP elicitation, such as
+the Claude Code terminal, `ask_feeling` asks the same question as a form: one
+field, an enum of `feelings` with the same plain-word names, Facepalm's own
+read as the default. An accepted pick is sent on as `tell_feeling` already
+is; a decline, a cancel, or a host that refuses to elicit is reported without
+an error. For Claude Code, `/facepalm:feel` calls it with the most recent
+beat's interpretation when given no arguments.
+
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the
 installed adapter against the existing test-only service, first install the
