@@ -4,8 +4,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../server.js';
 
-async function connected(session) {
-  const server = createServer(session);
+async function connected(session, options) {
+  const server = createServer(session, options);
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '1' });
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -133,4 +133,25 @@ test('a beat reply without an interpretation closes the session', async () => {
       assert.equal(closed, true);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+test('settings tool requests only a launch and sanitizes failures', async () => {
+  let calls = 0;
+  const session = { request: async () => { throw new Error('camera should not be touched'); } };
+  const { server, client } = await connected(session, {
+    openSettings: async () => {
+      calls++;
+      if (calls === 2) throw new Error('/private/secret');
+    },
+  });
+  try {
+    assert.ok((await client.listTools()).tools.some((tool) => tool.name === 'open_facepalm_settings'));
+    const opened = await client.callTool({ name: 'open_facepalm_settings', arguments: {} });
+    assert.match(opened.content[0].text, /requested/i);
+    assert.doesNotMatch(opened.content[0].text, /visible/i);
+    const failed = await client.callTool({ name: 'open_facepalm_settings', arguments: {} });
+    assert.equal(failed.isError, true);
+    assert.doesNotMatch(JSON.stringify(failed), /private|secret/);
+    assert.equal(calls, 2);
+  } finally { await client.close(); await server.close(); }
 });

@@ -283,7 +283,9 @@ cannot tell, and `feelings`, every feeling the person can pick instead. The
 feeling is advisory, never an answer. When the person says how they really
 felt, `tell_feeling` takes the interpretation's ID and their pick, sends
 `feel <id> <feeling>`, and Facepalm tunes later reads from it. A client resets
-the person's picks with `reset feelings`.
+the person's picks with `reset feelings`. `open_facepalm_settings` requests
+the installed Facepalm Settings window (#61 item 8); it does not start the
+camera, change consent, or confirm the window became visible.
 
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the
@@ -355,6 +357,11 @@ screen_context.window_titles_enabled = false
 # looking_away.degrees, above, is reused as the away threshold.
 screen_context.other_screen_degrees = 7.5
 ```
+
+The macOS menu's and the Linux tray's **Settings** windows show and save
+every setting above, including looking away's and screen context's
+(#79): window titles still default off there too. Turn Facepalm off and
+on again from the menu to apply a change, as for the other settings.
 
 A nod, a shake or a tilt moves the blendshape scores as much as an
 expression does, so while the head is away from its resting pose, or has

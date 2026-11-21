@@ -14,8 +14,20 @@ const delivery = z.object({
   }).optional(),
 });
 
-export function createServer(session) {
+// `options.openSettings` is mcp/settings-launcher.js's openFacepalmSettings
+// (main.js supplies the real one); a unit test supplies a fake instead, so
+// this file never itself decides whether to use the real one.
+export function createServer(session, options = {}) {
   const server = new McpServer({ name: 'facepalm', version: '0.1.0' });
+  server.registerTool('open_facepalm_settings', {
+    description: 'Open the installed Facepalm Settings window. This does not start the camera or change consent, and does not confirm the window became visible.',
+    inputSchema: {},
+  }, async () => {
+    try {
+      await options.openSettings();
+      return { content: [{ type: 'text', text: 'Opening Facepalm Settings was requested.' }] };
+    } catch { return { isError: true, content: [{ type: 'text', text: 'Facepalm Settings is unavailable or could not be opened.' }] }; }
+  });
   server.registerTool('wait_for_reaction', {
     description: 'Wait for interpreted reactions. Show each summary verbatim with its reading ID; do not present detail as the summary. '
       + 'Right after asking the person a question or making a proposal, pass beat ("question" or "proposal"): Facepalm watches the next timeout_ms '

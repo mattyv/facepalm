@@ -35,12 +35,23 @@ std::optional<std::string> UpdateSettingsDocument(std::string_view original,
     error = "Frames per second must be between 1 and 60.";
     return std::nullopt;
   }
-  constexpr std::array<std::string_view, 10> kNames = {
-      "camera.frames_per_second",  "gestures.enabled",
-      "expressions.enabled",       "gestures.confidence_threshold",
-      "expressions.smallest_rise", "expressions.spreads",
-      "expressions.hold_ms",       "expressions.pose_degrees",
-      "expressions.pose_range",    "expressions.settle_ms"};
+  constexpr std::array<std::string_view, 16> kNames = {
+      "camera.frames_per_second",
+      "gestures.enabled",
+      "expressions.enabled",
+      "gestures.confidence_threshold",
+      "expressions.smallest_rise",
+      "expressions.spreads",
+      "expressions.hold_ms",
+      "expressions.pose_degrees",
+      "expressions.pose_range",
+      "expressions.settle_ms",
+      "looking_away.enabled",
+      "looking_away.degrees",
+      "looking_away.hold_ms",
+      "screen_context.enabled",
+      "screen_context.window_titles_enabled",
+      "screen_context.other_screen_degrees"};
   const std::array<std::string, kNames.size()> values = {
       std::to_string(settings.frames_per_second),
       settings.gestures_enabled ? "true" : "false",
@@ -51,7 +62,13 @@ std::optional<std::string> UpdateSettingsDocument(std::string_view original,
       settings.expression_hold_ms,
       settings.expression_pose_degrees,
       settings.expression_pose_range,
-      settings.expression_settle_ms};
+      settings.expression_settle_ms,
+      settings.looking_away_enabled ? "true" : "false",
+      settings.looking_away_degrees,
+      settings.looking_away_hold_ms,
+      settings.screen_context_enabled ? "true" : "false",
+      settings.screen_context_window_titles_enabled ? "true" : "false",
+      settings.screen_context_other_screen_degrees};
   for (const auto& value : values) {
     if (value.find_first_of("\r\n#\0", 0, 4) != std::string::npos) {
       error = "A setting contains an invalid character.";

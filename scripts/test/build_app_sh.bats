@@ -8,7 +8,8 @@ setup() {
   cp "${BATS_TEST_DIRNAME}/../build_app.sh" \
     "${BATS_TEST_DIRNAME}/../check_app_links.sh" \
     "${BATS_TEST_DIRNAME}/../facepalm-info.plist" "${WORK}/scripts/"
-  for file in main.js server.js session.js hook-broker.js; do
+  for file in main.js server.js session.js hook-broker.js \
+    settings-launcher.js; do
     printf 'adapter' >"${WORK}/mcp/${file}"
   done
   plugin="${WORK}/integrations/claude-code"
@@ -70,6 +71,7 @@ teardown() {
   [[ -f "${app}/Resources/mcp/server.js" ]] || false
   [[ -f "${app}/Resources/mcp/session.js" ]] || false
   [[ -f "${app}/Resources/mcp/hook-broker.js" ]] || false
+  [[ -f "${app}/Resources/mcp/settings-launcher.js" ]] || false
   [[ -f "${app}/Resources/claude-code/.claude-plugin/plugin.json" ]] || false
   grep -q NSCameraUsageDescription "${WORK}/Facepalm.app/Contents/Info.plist"
 }

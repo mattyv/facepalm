@@ -2,7 +2,8 @@
 # Stages a local, unsigned app from already-built inputs; never installs it.
 set -euo pipefail
 
-readonly MCP_FILES=(main.js package.json server.js session.js hook-broker.js)
+readonly MCP_FILES=(main.js package.json server.js session.js hook-broker.js
+  settings-launcher.js)
 
 fail() {
   echo "$*" >&2

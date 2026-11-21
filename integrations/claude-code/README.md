@@ -29,10 +29,10 @@ claude mcp add --scope local facepalm -- \
   "$APP/node/bin/node" "$APP/mcp/main.js"
 ```
 
-Use `/facepalm:settings` to open Settings when the macOS menu build is
-installed. Use `/facepalm:feel INTERPRETATION_ID FEELING` to tell Facepalm how
-you really felt at a beat this session marked; it tunes later reads from your
-picks. The plugin has no daemon
+Use `/facepalm:settings` to open Settings when the menu (macOS) or tray
+(Linux) build is installed. Use `/facepalm:feel INTERPRETATION_ID FEELING`
+to tell Facepalm how you really felt at a beat this session marked; it
+tunes later reads from your picks. The plugin has no daemon
 status or stop command. These slash
 commands are specific to Claude Code.
 
