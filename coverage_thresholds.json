@@ -278,5 +278,24 @@
       "branches": 100,
       "functions": 100
     }
+  },
+  "src/linux/mediapipe_c_shim.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/linux/v4l2_session.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "scripts/fetch_mediapipe_c.sh": {
+    "shell": {
+      "lines": 100
+    }
   }
 }
