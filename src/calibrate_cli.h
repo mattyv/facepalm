@@ -25,15 +25,20 @@ class CalibrateClientIo {
 // A minimal way to drive one calibration request from outside a client
 // with the daemon's full protocol (#36, #35, item 12 of #61): useful for
 // testing, and as a model for the macOS and Linux menu's eventual Settings
-// entry. `arguments` is argv[1:]: the socket path, then "start" (an
-// optional screen count may follow), "next" or "cancel". Writes the
-// daemon's JSON reply to `out`, or what went wrong to `err`. Returns the
-// process's exit code: 0 for a reply with no "error", 2 for a usage
-// problem, 1 for anything else. `out` and `err` follow the standard
-// streams' own order (as main's argc, argv do argv's own), so a swap is
-// unlikely and visible at once in any test.
+// entry. `arguments` is argv[1:]: "start" (an optional screen count may
+// follow), "next" or "cancel". `socket_path` and `token` are the service's
+// socket and this client's approved token (empty when none, as
+// protocol::Hello's is, for a daemon run without approval); the caller
+// resolves both, as mcp/main.js resolves its own, from the fixed per-user
+// paths src/user_paths.h gives unless told otherwise. Writes the daemon's
+// JSON reply to `out`, or what went wrong to `err`. Returns the process's
+// exit code: 0 for a reply with no "error", 2 for a usage problem, 1 for
+// anything else. `out` and `err` follow the standard streams' own order (as
+// main's argc, argv do argv's own), so a swap is unlikely and visible at
+// once in any test.
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int RunCalibrateCli(const std::vector<std::string>& arguments,
+                    const std::string& socket_path, const std::string& token,
                     CalibrateClientIo& io, std::ostream& out,
                     std::ostream& err);
 

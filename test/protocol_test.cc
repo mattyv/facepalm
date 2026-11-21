@@ -3,6 +3,7 @@
 #include <chrono>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include "gmock/gmock.h"
@@ -41,6 +42,16 @@ TEST(ParseTest, ReadsHello) {
 
   ASSERT_TRUE(std::holds_alternative<Hello>(request));
   EXPECT_THAT(std::get<Hello>(request).name, Eq("claude-code.1_a"));
+  EXPECT_THAT(std::get<Hello>(request).token, Eq(""));
+}
+
+TEST(ParseTest, ReadsHelloWithAToken) {
+  const std::string token(64, 'f');
+  const Request request = Parsed("hello mcp-1 " + token);
+
+  ASSERT_TRUE(std::holds_alternative<Hello>(request));
+  EXPECT_THAT(std::get<Hello>(request).name, Eq("mcp-1"));
+  EXPECT_THAT(std::get<Hello>(request).token, Eq(token));
 }
 
 TEST(ParseTest, ReadsRead) {
@@ -55,12 +66,25 @@ TEST(ParseTest, ReadsWait) {
               Eq(std::chrono::milliseconds(2500)));
 }
 
-TEST(ParseTest, ReadsRate) {
-  const Request request = Parsed("rate 12 4");
+TEST(ParseTest, ReadsFeel) {
+  const Request request = Parsed("feel 12 annoyance");
 
-  ASSERT_TRUE(std::holds_alternative<RateRequest>(request));
-  EXPECT_THAT(std::get<RateRequest>(request).id, Eq(12));
-  EXPECT_THAT(std::get<RateRequest>(request).score, Eq(4));
+  ASSERT_TRUE(std::holds_alternative<FeelRequest>(request));
+  EXPECT_THAT(std::get<FeelRequest>(request).interpretation, Eq(12));
+  EXPECT_THAT(std::get<FeelRequest>(request).feeling, Eq(Feeling::kAnnoyance));
+}
+
+TEST(ParseTest, ReadsEveryFeeling) {
+  for (const Feeling feeling : kEveryFeeling) {
+    const Request request =
+        Parsed("feel 1 " + std::string(facepalm::Name(feeling)));
+    ASSERT_TRUE(std::holds_alternative<FeelRequest>(request));
+    EXPECT_THAT(std::get<FeelRequest>(request).feeling, Eq(feeling));
+  }
+}
+
+TEST(ParseTest, ReadsReset) {
+  EXPECT_TRUE(std::holds_alternative<ResetRequest>(Parsed("reset feelings")));
 }
 
 TEST(ParseTest, ReadsABeat) {
@@ -128,7 +152,7 @@ TEST(ParseTest, RefusesAnUnknownRequest) {
 
 TEST(ParseTest, RefusesABadName) {
   EXPECT_THAT(Refused("hello"), Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
-  EXPECT_THAT(Refused("hello two words"),
+  EXPECT_THAT(Refused("hello three more words"),
               Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
   EXPECT_THAT(Refused("hello " + std::string(65, 'a')),
               Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
@@ -138,6 +162,13 @@ TEST(ParseTest, RefusesABadName) {
   for (const char* line : {"hello ", "hello a{b", "hello A[B"}) {
     EXPECT_THAT(Refused(line), Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
   }
+}
+
+TEST(ParseTest, RefusesABadToken) {
+  EXPECT_THAT(Refused("hello name " + std::string(65, 'a')),
+              Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
+  EXPECT_THAT(Refused("hello name a/b"),
+              Eq("a name is 1 to 64 of A-Z a-z 0-9 . _ -"));
 }
 
 TEST(ParseTest, RefusesABadWait) {
@@ -159,15 +190,26 @@ TEST(ParseTest, RefusesABadBeat) {
   EXPECT_THAT(Refused("beat question 1500 1"), Eq(kBadBeat));
 }
 
-TEST(ParseTest, RefusesABadRate) {
-  EXPECT_THAT(Refused("rate"), Eq("rate takes a reading id and a score"));
-  EXPECT_THAT(Refused("rate 12"), Eq("rate takes a reading id and a score"));
-  EXPECT_THAT(Refused("rate x 4"), Eq("rate takes a reading id and a score"));
-  EXPECT_THAT(Refused("rate 12 x"), Eq("rate takes a reading id and a score"));
-  EXPECT_THAT(Refused("rate 12 4 5"),
-              Eq("rate takes a reading id and a score"));
-  EXPECT_THAT(Refused("rate 12 4294967300"),
-              Eq("rate takes a reading id and a score"));
+TEST(ParseTest, RefusesABadFeel) {
+  constexpr std::string_view kError =
+      "feel takes an interpretation id and a feeling: agreement, "
+      "disagreement, engagement, annoyance, confused or unknown";
+  for (const std::string_view line :
+       {"feel", "feel 12", "feel x agreement", "feel 12 happy",
+        "feel 12 Agreement", "feel 12 agreement x"}) {
+    EXPECT_THAT(Refused(line), Eq(kError)) << line;
+  }
+}
+
+TEST(ParseTest, RefusesABadReset) {
+  for (const std::string_view line :
+       {"reset", "reset all", "reset feelings now"}) {
+    EXPECT_THAT(Refused(line), Eq("reset takes feelings")) << line;
+  }
+}
+
+TEST(ParseTest, NoLongerReadsARating) {
+  EXPECT_THAT(Refused("rate 12 4"), Eq("unknown request"));
 }
 
 TEST(JsonTest, WritesADelivery) {
@@ -201,7 +243,8 @@ TEST(JsonTest, WritesABeatsInterpretation) {
       DeliveryJson(delivery),
       Eq(R"({"readings":[{"id":7,"summary":"Gesture: nod","detail":{}}],)"
          R"("missed":0,"interpretation":{"id":2,"feeling":"agreement",)"
-         R"("beat":"question"}})"));
+         R"("beat":"question","feelings":["agreement","disagreement",)"
+         R"("engagement","annoyance","confused","unknown"]}})"));
 }
 
 TEST(JsonTest, EscapesASummary) {

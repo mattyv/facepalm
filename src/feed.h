@@ -17,7 +17,7 @@ class Feed {
  public:
   struct Reading {
     std::int64_t id;
-    std::string summary;  // The one line the person sees and rates.
+    std::string summary;  // The one line the person sees.
     std::string detail;   // The full interpreted context, as JSON.
     std::optional<std::int64_t> published_at_ms = std::nullopt;
   };
@@ -54,8 +54,13 @@ class Feed {
   // disconnected during the beat.
   virtual std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
                                        std::chrono::milliseconds window) = 0;
-  // True only for a reading this client was shown and a score from 1 to 5.
-  virtual bool Rate(const std::string& client, std::int64_t id, int score) = 0;
+  // The person's feeling about an interpretation this client was given
+  // (specs/FeelingFeedback.tla): true only for one given in the last five
+  // minutes, the first time, and once the feeling is saved.
+  virtual bool Feel(const std::string& client, std::int64_t interpretation,
+                    Feeling feeling) = 0;
+  // Forgets every feeling the person gave. True once that is saved.
+  virtual bool Reset(const std::string& client) = 0;
 };
 
 }  // namespace facepalm

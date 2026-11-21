@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -15,6 +16,8 @@
 #include <vector>
 
 #include "src/calibrate_cli.h"
+#include "src/client_token.h"
+#include "src/user_paths.h"
 
 namespace facepalm {
 namespace {
@@ -82,6 +85,18 @@ class PosixCalibrateClientIo : public CalibrateClientIo {
 // NOLINTNEXTLINE(misc-const-correctness,bugprone-exception-escape)
 int main(int argc, char** argv) {
   const std::vector<std::string> arguments(argv + 1, argv + argc);
+  const char* home = std::getenv("HOME");
+  const std::optional<facepalm::UserPaths> paths =
+      home == nullptr ? std::nullopt
+                      : facepalm::PathsFor(home, facepalm::kThisPlatform);
+  if (!paths) {
+    std::cerr << "cannot find the per-user facepalm directory ($HOME)\n";
+    return 1;
+  }
+  const std::string token =
+      facepalm::LoadClientToken(facepalm::ClientTokenPath(*paths, "calibrate"))
+          .value_or(std::string());
   facepalm::PosixCalibrateClientIo io;
-  return facepalm::RunCalibrateCli(arguments, io, std::cout, std::cerr);
+  return facepalm::RunCalibrateCli(arguments, paths->socket, token, io,
+                                   std::cout, std::cerr);
 }

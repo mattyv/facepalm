@@ -12,43 +12,46 @@
 
 namespace facepalm {
 
-ApprovedFeed::ApprovedFeed(Feed& feed, std::string token,
-                           std::function<void(bool)> changed,
-                           std::function<void(const std::string&)> retire,
-                           bool ratings_enabled)
-    : feed_(feed),
-      token_(std::move(token)),
-      changed_(std::move(changed)),
-      retire_(std::move(retire)),
-      ratings_enabled_(ratings_enabled) {}
+ApprovedFeed::ApprovedFeed(Feed& feed, std::function<void(bool)> changed,
+                           std::function<void(const std::string&)> retire)
+    : feed_(feed), changed_(std::move(changed)), retire_(std::move(retire)) {}
 
+// DaemonAdmission!Join: only the first client changes the subscription.
+// Changes are told under the lock, so they reach the control queue in order.
 bool ApprovedFeed::Connect(const std::string& client) {
   const std::scoped_lock lock(mutex_);
-  if (client != token_ || !session_.empty()) {
+  if (sessions_.contains(client)) {
     return false;
   }
-  const std::string name = "approved-" + std::to_string(++next_session_);
-  if (!feed_.Connect(name)) {
+  std::string session = "approved-" + std::to_string(++next_session_);
+  if (!feed_.Connect(session)) {
     return false;
   }
-  session_ = name;
-  changed_(true);
+  sessions_.emplace(client, std::move(session));
+  if (sessions_.size() == 1) {
+    changed_(true);
+  }
   return true;
 }
 
+// DaemonAdmission!Disconnect: only the last client changes the subscription.
 void ApprovedFeed::Disconnect(const std::string& client) {
   const std::scoped_lock lock(mutex_);
-  if (client != token_ || session_.empty()) {
+  const auto found = sessions_.find(client);
+  if (found == sessions_.end()) {
     return;
   }
-  retire_(session_);
-  session_.clear();
-  changed_(false);
+  retire_(found->second);
+  sessions_.erase(found);
+  if (sessions_.empty()) {
+    changed_(false);
+  }
 }
 
 std::string ApprovedFeed::Session(const std::string& client) {
   const std::scoped_lock lock(mutex_);
-  return client == token_ ? session_ : std::string{};
+  const auto found = sessions_.find(client);
+  return found == sessions_.end() ? std::string{} : found->second;
 }
 
 std::optional<Feed::Delivery> ApprovedFeed::Read(const std::string& client) {
@@ -69,9 +72,15 @@ std::optional<Feed::Delivery> ApprovedFeed::Beat(
   return session.empty() ? std::nullopt : feed_.Beat(session, kind, window);
 }
 
-bool ApprovedFeed::Rate(const std::string& client, std::int64_t id, int score) {
+bool ApprovedFeed::Feel(const std::string& client, std::int64_t interpretation,
+                        Feeling feeling) {
   const std::string session = Session(client);
-  return ratings_enabled_ && !session.empty() && feed_.Rate(session, id, score);
+  return !session.empty() && feed_.Feel(session, interpretation, feeling);
+}
+
+bool ApprovedFeed::Reset(const std::string& client) {
+  const std::string session = Session(client);
+  return !session.empty() && feed_.Reset(session);
 }
 
 }  // namespace facepalm

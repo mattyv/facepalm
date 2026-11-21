@@ -6,9 +6,8 @@
 (* Pair, has a cursor: a read, from a hook after an agent action or from   *)
 (* the MCP's check-in, returns the readings since that client last looked. *)
 (* A client can instead wait for the next reading, which a new reading or  *)
-(* a timeout ends. A reading the client was shown can be rated 1-5, for a *)
-(* few minutes after it was shown (Expire is that time passing), and      *)
-(* the rating goes back to facepalm (#35).                                 *)
+(* a timeout ends. The person's feedback is on a feeling, not a reading, *)
+(* and specs/FeelingFeedback.tla models it.                                *)
 (*                                                                         *)
 (* Each Guard constant is one of the design's protections. A mutation sets *)
 (* one to FALSE in a copy of the config, and TLC must then find a          *)
@@ -22,9 +21,7 @@ CONSTANTS
     Capacity,            \* How many readings the timeline keeps.
     GuardAdvanceCursor,  \* A read moves the client's cursor past what it got.
     GuardReportMissed,   \* A read counts the readings dropped before it.
-    GuardWakeWaiters,    \* A new reading ends every wait with it.
-    GuardRateOnlyShown,  \* Only a reading the client was shown can be rated.
-    GuardRateOnlyRecent  \* Only within a few minutes of being shown.
+    GuardWakeWaiters     \* A new reading ends every wait with it.
 
 VARIABLES
     next,       \* The id the next reading gets; readings are 1..next-1.
@@ -35,13 +32,10 @@ VARIABLES
     shown,      \* shown[c]: the ids c was shown.
     missed,     \* missed[c]: the ids c was told it missed.
     waiting,    \* The clients waiting for a reading.
-    expired,    \* expired[c]: the ids shown to c too long ago to rate.
-    rated,      \* <<c, id>> pairs: c rated reading id.
-    lateRated,  \* Some reading was rated after it expired.
     repeated    \* Some reading was shown to the same client twice.
 
 vars == <<next, oldest, connected, since, cursor, shown, missed, waiting,
-          expired, rated, lateRated, repeated>>
+          repeated>>
 
 Ids == 1..MaxReadings
 
@@ -63,25 +57,22 @@ Init ==
     /\ next = 1 /\ oldest = 1 /\ connected = {}
     /\ since = [c \in Clients |-> 1] /\ cursor = [c \in Clients |-> 1]
     /\ shown = [c \in Clients |-> {}] /\ missed = [c \in Clients |-> {}]
-    /\ waiting = {} /\ expired = [c \in Clients |-> {}]
-    /\ rated = {} /\ lateRated = FALSE /\ repeated = FALSE
+    /\ waiting = {} /\ repeated = FALSE
 
 \* A client starts with what happens after it connects: no backlog. What it
-\* was shown before stays shown, so its earlier ratings still stand.
+\* was shown before stays shown.
 Connect(c) ==
     /\ c \notin connected
     /\ connected' = connected \cup {c}
     /\ since' = [since EXCEPT ![c] = next]
     /\ cursor' = [cursor EXCEPT ![c] = next]
-    /\ UNCHANGED <<next, oldest, shown, missed, waiting, expired, rated,
-                   lateRated, repeated>>
+    /\ UNCHANGED <<next, oldest, shown, missed, waiting, repeated>>
 
 Disconnect(c) ==
     /\ c \in connected
     /\ connected' = connected \ {c}
     /\ waiting' = waiting \ {c}
-    /\ UNCHANGED <<next, oldest, since, cursor, shown, missed, expired,
-                   rated, lateRated, repeated>>
+    /\ UNCHANGED <<next, oldest, since, cursor, shown, missed, repeated>>
 
 \* The model interprets a reaction. Past Capacity, the oldest is dropped.
 \* Every waiting client is told at once.
@@ -100,14 +91,13 @@ React ==
                      IF c \in waiting /\ GuardAdvanceCursor THEN next + 1
                      ELSE cursor[c]]
           ELSE UNCHANGED <<waiting, repeated, shown, cursor>>
-    /\ UNCHANGED <<connected, since, missed, expired, rated, lateRated>>
+    /\ UNCHANGED <<connected, since, missed>>
 
 \* A hook after an agent action, or the MCP's check-in.
 Read(c) ==
     /\ c \in connected /\ c \notin waiting
     /\ Tell(c)
-    /\ UNCHANGED <<next, oldest, connected, since, waiting, expired, rated,
-                   lateRated>>
+    /\ UNCHANGED <<next, oldest, connected, since, waiting>>
 
 \* The MCP's wait_for_reaction. With a reading already there, it returns at
 \* once, as a read.
@@ -117,39 +107,19 @@ Wait(c) ==
           THEN /\ Tell(c) /\ UNCHANGED waiting
           ELSE /\ waiting' = waiting \cup {c}
                /\ UNCHANGED <<shown, missed, cursor, repeated>>
-    /\ UNCHANGED <<next, oldest, connected, since, expired, rated,
-                   lateRated>>
+    /\ UNCHANGED <<next, oldest, connected, since>>
 
 WaitTimesOut(c) ==
     /\ c \in waiting
     /\ waiting' = waiting \ {c}
     /\ UNCHANGED <<next, oldest, connected, since, cursor, shown, missed,
-                   expired, rated, lateRated, repeated>>
-
-\* The person rates a reading 1-5; the score itself does not matter here.
-Rate(c, i) ==
-    /\ c \in connected /\ i < next
-    /\ (i \in shown[c] \/ ~GuardRateOnlyShown)
-    /\ (i \notin expired[c] \/ ~GuardRateOnlyRecent)
-    /\ rated' = rated \cup {<<c, i>>}
-    /\ lateRated' = (lateRated \/ i \in expired[c])
-    /\ UNCHANGED <<next, oldest, connected, since, cursor, shown, missed,
-                   waiting, expired, repeated>>
-
-\* Time passes: a reading shown to c a few minutes ago can no longer be
-\* rated, and facepalm forgets it was shown.
-Expire(c, i) ==
-    /\ i \in shown[c] /\ i \notin expired[c]
-    /\ expired' = [expired EXCEPT ![c] = @ \cup {i}]
-    /\ UNCHANGED <<next, oldest, connected, since, cursor, shown, missed,
-                   waiting, rated, lateRated, repeated>>
+                   repeated>>
 
 Next ==
     \/ React
     \/ \E c \in Clients :
           \/ Connect(c) \/ Disconnect(c) \/ Read(c) \/ Wait(c)
           \/ WaitTimesOut(c)
-          \/ \E i \in Ids : Rate(c, i) \/ Expire(c, i)
 
 Spec ==
     /\ Init /\ [][Next]_vars
@@ -162,8 +132,6 @@ TypeOK ==
     /\ cursor \in [Clients -> 1..(MaxReadings + 1)]
     /\ shown \in [Clients -> SUBSET Ids]
     /\ missed \in [Clients -> SUBSET Ids]
-    /\ expired \in [Clients -> SUBSET Ids]
-    /\ rated \subseteq Clients \X Ids /\ lateRated \in BOOLEAN
     /\ repeated \in BOOLEAN
 
 \* No reading is shown to the same client twice.
@@ -174,14 +142,6 @@ NoRepeat == ~repeated
 NoSilentGap ==
     \A c \in connected :
         \A i \in since[c]..(cursor[c] - 1) : i \in shown[c] \cup missed[c]
-
-\* A client only rates a reading it was shown, so a rating always judges
-\* the summary line the person saw.
-RateOnlyShown == \A pair \in rated : pair[2] \in shown[pair[1]]
-
-\* A rating comes within a few minutes of the reading being shown, so the
-\* person still remembers what it was about.
-RateOnlyRecent == ~lateRated
 
 \* A waiting client is never left waiting while a reading it has not seen
 \* exists.

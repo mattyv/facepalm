@@ -9,12 +9,13 @@ namespace facepalm {
 DaemonControl::DaemonControl(DaemonController& controller,
                              DaemonPipeline& pipeline,
                              std::function<void()> stop_service,
-                             std::function<void()> stopped)
+                             std::function<void(bool failed)> exit)
     : controller_(controller),
       pipeline_(pipeline),
       stop_service_(std::move(stop_service)),
-      stopped_(std::move(stopped)) {}
+      exit_(std::move(exit)) {}
 
+// specs/DaemonAdmission.tla, Subscription: ignored once stopping.
 void DaemonControl::Subscription(bool joined) {
   if (stopping_) {
     return;
@@ -26,6 +27,10 @@ void DaemonControl::Subscription(bool joined) {
   }
 }
 
+// specs/DaemonAdmission.tla, Stop: revokes consent, which closes the camera
+// (GuardStopRevokes), stops the service, and with the camera already closed
+// retires the model at once (GuardStopRetires). A second Stop, such as one
+// from OnOpenFailed, changes nothing.
 void DaemonControl::Stop() {
   if (stopping_) {
     return;
@@ -38,6 +43,13 @@ void DaemonControl::Stop() {
   }
 }
 
+void DaemonControl::Fail() {
+  failed_ = true;
+  Stop();
+}
+
+// specs/DaemonAdmission.tla, OnOpened: only the camera that was opening
+// creates a model (GuardOpenOnce).
 void DaemonControl::OnOpened() {
   const bool opening = controller_.State() == CameraController::State::kOpening;
   controller_.Opened();
@@ -46,20 +58,31 @@ void DaemonControl::OnOpened() {
   }
 }
 
+// specs/DaemonAdmission.tla, OnOpenFailed: a camera that was opening and
+// failed stops the daemon as a failure (GuardOpenFailStops). One that
+// already began closing reports Closed next.
 void DaemonControl::OnOpenFailed() {
+  const bool opening = controller_.State() == CameraController::State::kOpening;
   controller_.OpenFailed();
-  if (stopping_ && !retiring_ &&
-      controller_.State() == CameraController::State::kClosed) {
-    Retire(false);
+  if (opening) {
+    Fail();
   }
 }
+
+// specs/DaemonAdmission.tla, OnClosed: the controller counts the camera
+// closed only once the model is retired (GuardAckAfterRetire).
 void DaemonControl::OnClosed() { Retire(true); }
+
+// specs/DaemonAdmission.tla, OnDeviceLost.
 void DaemonControl::OnDeviceLost() {
   controller_.DeviceLost();
   if (controller_.State() == CameraController::State::kClosed) {
     Retire(false);
   }
 }
+
+// specs/DaemonAdmission.tla, OnDeviceBack: waits for a retirement under way
+// (GuardDeferDeviceBack), and is ignored once stopping.
 void DaemonControl::OnDeviceBack() {
   if (retiring_) {
     device_back_ = true;
@@ -68,6 +91,8 @@ void DaemonControl::OnDeviceBack() {
   }
 }
 
+// specs/DaemonAdmission.tla, Retire, one at a time (GuardRetireOnce), then
+// Retired once the pipeline has destroyed the model.
 void DaemonControl::Retire(bool acknowledge_close) {
   if (retiring_) {
     return;
@@ -79,7 +104,7 @@ void DaemonControl::Retire(bool acknowledge_close) {
       controller_.Closed();
     }
     if (stopping_) {
-      stopped_();
+      exit_(failed_);
       return;
     }
     if (device_back_) {

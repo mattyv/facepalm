@@ -24,6 +24,7 @@ constexpr std::int64_t kLongestWaitMs = 60000;
 // A reaction to a question comes within a few seconds of it, if at all.
 constexpr std::int64_t kLongestBeatMs = 10000;
 constexpr std::size_t kBeatWords = 3;
+constexpr std::size_t kFeelWords = 3;
 constexpr std::size_t kCalibrateWords = 2;
 constexpr std::size_t kCalibrateStartWithScreens = 3;
 constexpr auto kCalibrateUsage =
@@ -77,6 +78,28 @@ std::optional<Request> ParseBeat(const std::vector<std::string_view>& words,
     return std::nullopt;
   }
   return BeatRequest{.kind = *kind, .window = std::chrono::milliseconds(*ms)};
+}
+
+// The feel request of `words`: feel, an interpretation's id, and a feeling.
+std::optional<Request> ParseFeel(const std::vector<std::string_view>& words,
+                                 std::string& error) {
+  const std::optional<std::int64_t> id =
+      words.size() == kFeelWords ? Number(words[1]) : std::nullopt;
+  const std::optional<Feeling> feeling =
+      words.size() == kFeelWords ? FeelingNamed(words[2]) : std::nullopt;
+  if (!id || !feeling) {
+    error = "feel takes an interpretation id and a feeling: ";
+    for (std::size_t i = 0; i < kEveryFeeling.size(); ++i) {
+      error += Name(kEveryFeeling.at(i));
+      if (i + 2 < kEveryFeeling.size()) {
+        error += ", ";
+      } else if (i + 2 == kEveryFeeling.size()) {
+        error += " or ";
+      }
+    }
+    return std::nullopt;
+  }
+  return FeelRequest{.interpretation = *id, .feeling = *feeling};
 }
 
 // The calibrate request of `words`: start (with an optional screen count),
@@ -136,11 +159,15 @@ std::optional<Request> Parse(std::string_view line, std::string& error) {
   const std::vector<std::string_view> words = Words(line);
   const std::string_view verb = words.front();
   if (verb == "hello") {
-    if (words.size() != 2 || !IsName(words[1])) {
+    constexpr std::size_t kWithToken = 3;
+    if (words.size() < 2 || words.size() > kWithToken || !IsName(words[1]) ||
+        (words.size() == kWithToken && !IsName(words[2]))) {
       error = "a name is 1 to 64 of A-Z a-z 0-9 . _ -";
       return std::nullopt;
     }
-    return Hello{.name = std::string(words[1])};
+    return Hello{.name = std::string(words[1]),
+                 .token = words.size() == kWithToken ? std::string(words[2])
+                                                     : std::string()};
   }
   if (verb == "read" && words.size() == 1) {
     return ReadRequest{};
@@ -154,20 +181,18 @@ std::optional<Request> Parse(std::string_view line, std::string& error) {
     }
     return WaitRequest{.timeout = std::chrono::milliseconds(*ms)};
   }
-  if (verb == "rate") {
-    const std::optional<std::int64_t> id =
-        words.size() == 3 ? Number(words[1]) : std::nullopt;
-    const std::optional<std::int64_t> score =
-        words.size() == 3 ? Number(words[2]) : std::nullopt;
-    if (!id || !score || !std::in_range<int>(*score)) {
-      error = "rate takes a reading id and a score";
-      return std::nullopt;
-    }
-    // The feed refuses a score outside 1 to 5; this only keeps it an int.
-    return RateRequest{.id = *id, .score = static_cast<int>(*score)};
-  }
   if (verb == "beat") {
     return ParseBeat(words, error);
+  }
+  if (verb == "feel") {
+    return ParseFeel(words, error);
+  }
+  if (verb == "reset") {
+    if (words.size() != 2 || words[1] != "feelings") {
+      error = "reset takes feelings";
+      return std::nullopt;
+    }
+    return ResetRequest{};
   }
   if (verb == "calibrate") {
     return ParseCalibrate(words, error);
@@ -194,7 +219,15 @@ std::string DeliveryJson(const Feed::Delivery& delivery) {
   if (const auto& interpretation = delivery.interpretation) {
     json += R"(,"interpretation":{"id":)" + std::to_string(interpretation->id) +
             R"(,"feeling":)" + Quoted(Name(interpretation->feeling)) +
-            R"(,"beat":)" + Quoted(Name(interpretation->beat)) + "}";
+            R"(,"beat":)" + Quoted(Name(interpretation->beat)) +
+            R"(,"feelings":[)";
+    for (const Feeling feeling : kEveryFeeling) {
+      if (json.back() != '[') {
+        json += ',';
+      }
+      json += Quoted(Name(feeling));
+    }
+    json += "]}";
   }
   return json + "}";
 }

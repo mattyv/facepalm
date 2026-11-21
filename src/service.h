@@ -1,6 +1,7 @@
 #ifndef FACEPALM_SRC_SERVICE_H_
 #define FACEPALM_SRC_SERVICE_H_
 
+#include <functional>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -25,6 +26,13 @@ class Stream {
   virtual void WriteLine(std::string_view line) = 0;
   // Ends a ReadLine blocked in another thread, and every one after it.
   virtual void Shutdown() = 0;
+  // Blocks while the connection's thread waits, until the peer hangs up or
+  // the stream is shut down (true), or until EndAwaitHangUp, or the peer
+  // sends something, which stays to be read (false). Call it from one
+  // thread, and EndAwaitHangUp once for each call, from another.
+  virtual bool AwaitHangUp() = 0;
+  // Ends the AwaitHangUp under way, or the next one if none has started.
+  virtual void EndAwaitHangUp() = 0;
 };
 
 // Where connections come from: a socket only its user can open.
@@ -37,16 +45,25 @@ class Listener {
   virtual void Close() = 0;
 };
 
+// Which tokens the person approved (#37).
+class Approvals {
+ public:
+  virtual ~Approvals() = default;
+  // Whether `token` is one the person approved; "" when a client shows none.
+  [[nodiscard]] virtual bool Approved(std::string_view token) = 0;
+};
+
 // facepalm's background service (#37), following specs/Service.tla. Each
 // connection gets its own thread, which speaks src/protocol.h to the feed
-// for the client the connection names.
-// A "calibrate" request (specs/Calibration.tla, item 12 of #61) goes to
+// for the client the connection names. Only a client showing an approved
+// token is let in; several connections may show the same one. A
+// "calibrate" request (specs/Calibration.tla, item 12 of #61) goes to
 // `calibration` instead, when the service is given one: a nullptr refuses
 // every calibrate request, which lets every existing caller build a
 // Service unchanged.
 class Service {
  public:
-  Service(std::unique_ptr<Listener> listener, Feed& feed,
+  Service(std::unique_ptr<Listener> listener, Feed& feed, Approvals& approvals,
           CalibrationController* calibration = nullptr);
   ~Service();
   Service(const Service&) = delete;
@@ -77,11 +94,16 @@ class Service {
   bool BeginStop();
   // The reply to one request from a named client; false to end.
   bool Answer(const std::string& name, std::string_view line, Stream& stream);
+  // Runs `wait`, a wait or a beat, while watching for a hang-up.
+  std::optional<Feed::Delivery> Watched(
+      const std::string& name, Stream& stream,
+      const std::function<std::optional<Feed::Delivery>()>& wait);
   // The reply to a calibrate request, whether or not calibration_ is set.
   std::string CalibrateReply(const protocol::CalibrateRequest& request);
 
   std::unique_ptr<Listener> listener_;
   Feed& feed_;
+  Approvals& approvals_;
   CalibrationController* calibration_;
   std::mutex mutex_;
   bool stopping_ = false;

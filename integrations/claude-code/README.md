@@ -14,27 +14,25 @@ claude --plugin-dir /path/to/facepalm/integrations/claude-code
 
 The plugin does not configure MCP, start Facepalm, or grant camera consent.
 Configure the Facepalm stdio MCP server separately for that Claude Code
-session, using the daemon's socket and private token file. The daemon currently
-allows one approved connection: another active listener can prevent this
-session from connecting. The token file path may be passed as a process
-argument; never paste the token itself into chat or a command.
+session. Given no arguments, the adapter finds the daemon's socket and its
+approved token in their per-user places, so approve it once with
+`facepalm-daemon approve mcp`. Several sessions, and other apps such as
+Claude Desktop, can be connected at once, and each gets every reaction.
+Never paste the token itself into chat or a command.
 
-For example, after choosing the socket and token-file paths used by the daemon,
-register the installed MCP adapter in the current project's local Claude Code
-configuration (replace the placeholders):
+For example, register the installed MCP adapter in the current project's
+local Claude Code configuration:
 
 ```shell
-SOCKET_PATH=/path/to/facepalm.sock
-TOKEN_FILE=/path/to/private-token
 APP="$HOME/Applications/Facepalm.app/Contents/Resources"
 claude mcp add --scope local facepalm -- \
-  "$APP/node/bin/node" "$APP/mcp/main.js" "$SOCKET_PATH" \
-  --client-token-file "$TOKEN_FILE"
+  "$APP/node/bin/node" "$APP/mcp/main.js"
 ```
 
 Use `/facepalm:settings` to open Settings when the macOS menu build is
-installed. Use `/facepalm:rate READING_ID SCORE` to rate a reading from this
-session when local rating storage is enabled. The plugin has no daemon
+installed. Use `/facepalm:feel INTERPRETATION_ID FEELING` to tell Facepalm how
+you really felt at a beat this session marked; it tunes later reads from your
+picks. The plugin has no daemon
 status or stop command. These slash
 commands are specific to Claude Code.
 

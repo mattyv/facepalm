@@ -2,6 +2,8 @@
 #
 # Builds facepalm with coverage, runs every unit's tests, and holds each
 # source file to its unit floors in coverage_thresholds.json from its tests.
+# Arguments go to CMake's configure step, such as the MediaPipe C paths that
+# add the units in src/linux (#83), whose floors count on Linux only.
 
 set -euo pipefail
 
@@ -14,6 +16,10 @@ readonly MEASURES=(lines branches functions)
 SUMMARY='.data[0].files[0].summary | [.lines, .branches, .functions]'
 SUMMARY+=' | map(if .count == 0 then 100 else .percent end) | @tsv'
 readonly SUMMARY
+LISTED='map_values(.unit // empty) | keys[]'
+# shellcheck disable=SC2016 # $os is jq's own variable.
+LISTED+=' | select($os == "Linux" or (startswith("src/linux/") | not))'
+readonly LISTED
 
 #######################################
 # Prints the path of an LLVM tool that matches the compiler: xcrun's on macOS.
@@ -31,36 +37,26 @@ llvm_tool() {
 }
 
 #######################################
-# Writes a unit's coverage to profiles/<unit>.tsv as "lines branches functions"
-# percentages. A measure with nothing to count, such as branches in
-# straight-line code, is 100.
+# Measures a unit's coverage from its own tests, writing it to
+# profiles/<unit>.tsv as "lines branches functions" percentages, and prints
+# each measure below its floor. A measure with nothing to count, such as
+# branches in straight-line code, is 100.
 # Globals:
-#   BUILD, PROFILES, ROOT, SUMMARY
+#   BUILD, MEASURES, PROFILES, ROOT, SUMMARY, THRESHOLDS
 # Arguments:
-#   The unit's name, such as head_pose.
+#   The unit's name, such as head_pose, and its source file, from the root.
 #######################################
 measure() {
-  local unit="$1" profdata cov
+  local unit="$1" file="$2" profdata cov i floor
+  local -a actual query
   profdata="$(llvm_tool llvm-profdata)"
   cov="$(llvm_tool llvm-cov)"
   "${profdata}" merge -sparse "${PROFILES}/${unit}"-*.profraw \
     -o "${PROFILES}/${unit}.profdata"
   "${cov}" export -summary-only -instr-profile="${PROFILES}/${unit}.profdata" \
-    "${BUILD}/${unit}_test" "${ROOT}/src/${unit}.cc" \
+    "${BUILD}/${unit}_test" "${ROOT}/${file}" \
     | jq -r "${SUMMARY}" >"${PROFILES}/${unit}.tsv"
-}
-
-#######################################
-# Prints each measure of a unit that is below its floor.
-# Globals:
-#   MEASURES, PROFILES, THRESHOLDS
-# Arguments:
-#   The unit's name.
-#######################################
-check_unit() {
-  local file="src/$1.cc" i floor
-  local -a actual query
-  read -r -a actual <"${PROFILES}/$1.tsv"
+  read -r -a actual <"${PROFILES}/${unit}.tsv"
   for i in "${!MEASURES[@]}"; do
     query=(-r --arg f "${file}" --arg m "${MEASURES[i]}")
     floor="$(jq "${query[@]}" '.[$f].unit[$m] // 100' "${THRESHOLDS}")"
@@ -71,23 +67,24 @@ check_unit() {
 }
 
 main() {
-  cmake -S "${ROOT}" -B "${BUILD}" -G Ninja -DFACEPALM_COVERAGE=ON
+  cmake -S "${ROOT}" -B "${BUILD}" -G Ninja -DFACEPALM_COVERAGE=ON "$@"
   cmake --build "${BUILD}"
   rm -rf "${PROFILES}"
   ctest --test-dir "${BUILD}" --output-on-failure
   mkdir -p "${PROFILES}"
-  local test_binary unit listed listed_files units=' '
+  local test_binary unit file listed listed_files os files=' '
   local shortfalls="${PROFILES}/shortfalls.txt"
   for test_binary in "${BUILD}"/*_test; do
     unit="$(basename "${test_binary}" _test)"
-    units+="${unit} "
-    measure "${unit}"
-    check_unit "${unit}" >>"${shortfalls}"
+    file="src/linux/${unit}.cc"
+    [[ -e "${ROOT}/${file}" ]] || file="src/${unit}.cc"
+    files+="${file} "
+    measure "${unit}" "${file}" >>"${shortfalls}"
   done
-  listed_files="$(jq -r 'map_values(.unit // empty) | keys[]' "${THRESHOLDS}")"
+  os="$(uname)"
+  listed_files="$(jq -r --arg os "${os}" "${LISTED}" "${THRESHOLDS}")"
   while read -r listed; do
-    unit="${listed#src/}"
-    if [[ -n "${listed}" && "${units}" != *" ${unit%.cc} "* ]]; then
+    if [[ -n "${listed}" && "${files}" != *" ${listed} "* ]]; then
       echo "${listed}: has floors but no test executable" >>"${shortfalls}"
     fi
   done <<<"${listed_files}"

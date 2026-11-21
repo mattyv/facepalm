@@ -38,39 +38,41 @@ flow for the eventual app host has not been established by this staging step.
 
 ## Run the development bundle
 
-If you want Facepalm to access your camera, create a private runtime directory
-and an approval token yourself. Keep the token file private. Set `APP` to the
-copied bundle's absolute path.
+If you want Facepalm to access your camera, approve the bundled MCP adapter
+once, then start the daemon. Set `APP` to the copied bundle's absolute path.
+`approve` writes a new random token to
+`~/Library/Application Support/Facepalm/clients/mcp`, private to you, and
+prints its path; the daemon listens at `service.sock` in the same folder.
 
 ```shell
-runtime=$(mktemp -d /tmp/facepalm.XXXXXX)
-(umask 077 && openssl rand -hex 32 >"$runtime/client-token")
+"$APP/Contents/MacOS/facepalm-daemon" approve mcp
 "$APP/Contents/MacOS/facepalm-daemon" --consent \
-  --socket "$runtime/service.sock" \
-  --model "$APP/Contents/Resources/model/face_landmarker.task" \
-  --client-token-file "$runtime/client-token"
+  --model "$APP/Contents/Resources/model/face_landmarker.task"
 ```
 
-Configure the MCP host to run the bundled Node with these arguments, using
-the same absolute runtime path:
+Configure the MCP host to run the bundled Node with the adapter and no
+arguments; it finds the socket and its token in that folder:
 
 ```text
-Contents/Resources/node/bin/node
-Contents/Resources/mcp/main.js RUNTIME/service.sock --client-token-file RUNTIME/client-token
+Contents/Resources/node/bin/node Contents/Resources/mcp/main.js
 ```
+
+`facepalm-daemon revoke mcp` removes the approval; the next connection is
+refused. Another client, such as AI Pair, is approved under its own name.
 
 Choose **Settings** from the 🤦 menu to set the frame rate, enable detectors,
 or adjust gesture confidence and expression tuning. To apply saved settings
 on the next daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"`
-to the daemon command. The dialog shows the path it used. Use one approved MCP
-connection at a time. It receives interpreted gesture and expression events.
+to the daemon command. The dialog shows the path it used. Several approved
+MCP connections, such as Claude Desktop's and Claude Code's, can be open at
+once; each receives every interpreted gesture and expression event.
 For Claude Code, see the [bundled plugin instructions](/integrations/claude-code/README.md).
-To save ratings locally, add `--ratings-file PATH` with a private file path.
-The owner-only JSONL file stores the summary, reading ID, timestamps and
-score, up to 10 MiB. The daemon rejects ratings when the option is absent,
-the file is full, or a write fails. A failed write or sync disables further
-writes for that run and may leave an unacknowledged record. Saved ratings
-do not yet change detection thresholds automatically. Stop the foreground
+The daemon keeps the feelings you pick in
+`${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/feelings`, or at the path given with
+`--feelings-file PATH`: a private text file of counts, one line for each
+reaction, kind of beat and feeling, with no images, times or summaries. It
+tunes later reads from them. A client clears them with `reset feelings`; so
+does deleting the file while the daemon is stopped. Stop the foreground
 daemon to revoke consent for that run.
 
 The local bundle verification covers startup refusal without consent, rejection
@@ -83,17 +85,19 @@ A short guided session improves on the coarse, uncalibrated gaze of item 11
 (#36, #35): it records the resting pose and, for each screen, the head pose
 at its centre and four corners, then saves them to a private file the daemon
 owns. `calibrate_cli` drives one against a running daemon, for testing and as
-a model for the eventual menu entry (item 8):
+a model for the eventual menu entry (item 8). Approve it once, as any other
+client:
 
 ```shell
-calibrate_cli "$runtime/service.sock" start 1
-calibrate_cli "$runtime/service.sock" next   # Once per prompted target.
-calibrate_cli "$runtime/service.sock" cancel # Instead of next, to give up.
+facepalm-daemon approve calibrate
+calibrate_cli start 1
+calibrate_cli next   # Once per prompted target.
+calibrate_cli cancel # Instead of next, to give up.
 ```
 
 Any client already speaking the protocol can send the same `calibrate start
-[screens]|next|cancel` line directly. The daemon itself is not yet wired to a
-calibration session or the camera's lifecycle (that is item 7's follow-up, so
-`calibrate_cli` has nothing to talk to on a running daemon until it lands);
-until then, every `calibrate` request gets `{"error":"calibration is not
-available"}`.
+[screens]|next|cancel` line directly, with its own name and token. The daemon
+itself is not yet wired to a calibration session or the camera's lifecycle
+(that is item 7's follow-up, so `calibrate_cli` has nothing to talk to on a
+running daemon until it lands); until then, every `calibrate` request gets
+`{"error":"calibration is not available"}`.

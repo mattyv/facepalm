@@ -45,9 +45,16 @@ class MockFeed : public Feed {
               (const std::string& client, BeatKind kind,
                std::chrono::milliseconds window),
               (override));
-  MOCK_METHOD(bool, Rate,
-              (const std::string& client, std::int64_t id, int score),
+  MOCK_METHOD(bool, Feel,
+              (const std::string& client, std::int64_t interpretation,
+               Feeling feeling),
               (override));
+  MOCK_METHOD(bool, Reset, (const std::string& client), (override));
+};
+
+class MockApprovals : public Approvals {
+ public:
+  MOCK_METHOD(bool, Approved, (std::string_view token), (override));
 };
 
 class MockCalibrationController : public CalibrationController {
@@ -70,6 +77,8 @@ class FakeStream : public Stream {
     std::vector<std::string> replies;
     bool hung_up = false;
     bool shut_down = false;
+    int ends = 0;     // EndAwaitHangUp calls an await has yet to see.
+    int noticed = 0;  // Awaits that ended on their own, yet to be ended.
 
     void Send(std::string line) {
       const std::scoped_lock lock(mutex);
@@ -126,6 +135,30 @@ class FakeStream : public Stream {
     peer_->changed.notify_all();
   }
 
+  // As UnixStream: true on a hang-up or shutdown, false once ended.
+  bool AwaitHangUp() override {
+    std::unique_lock lock(peer_->mutex);
+    peer_->changed.wait(lock, [&] {
+      return peer_->hung_up || peer_->shut_down || peer_->ends > 0;
+    });
+    if (peer_->ends > 0) {
+      --peer_->ends;
+      return false;
+    }
+    ++peer_->noticed;
+    return true;
+  }
+
+  void EndAwaitHangUp() override {
+    const std::scoped_lock lock(peer_->mutex);
+    if (peer_->noticed > 0) {
+      --peer_->noticed;
+      return;
+    }
+    ++peer_->ends;
+    peer_->changed.notify_all();
+  }
+
  private:
   std::shared_ptr<Peer> peer_;
 };
@@ -170,8 +203,10 @@ class FakeListener : public Listener {
 
 class ServiceTest : public ::testing::Test {
  protected:
-  ServiceTest() : service_(std::make_unique<FakeListener>(queue_), feed_) {
+  ServiceTest()
+      : service_(std::make_unique<FakeListener>(queue_), feed_, approvals_) {
     ON_CALL(feed_, Connect).WillByDefault(Return(true));
+    ON_CALL(approvals_, Approved).WillByDefault(Return(true));
   }
 
   // A new connection to the service.
@@ -194,6 +229,7 @@ class ServiceTest : public ::testing::Test {
   std::shared_ptr<FakeListener::Queue> queue_ =
       std::make_shared<FakeListener::Queue>();
   NiceMock<MockFeed> feed_;
+  NiceMock<MockApprovals> approvals_;
   Service service_;
 };
 
@@ -215,22 +251,40 @@ TEST_F(CanAcceptTest, AClientSaysHelloAndReads) {
   service_.Stop();
 }
 
-TEST_F(CanAcceptTest, AClientWaitsAndRates) {
+TEST_F(CanAcceptTest, AClientWaitsAndSaysHowThePersonFelt) {
   service_.Start();
   EXPECT_CALL(feed_, Wait("agent", std::chrono::milliseconds(2000)))
       .WillOnce(Return(Feed::Delivery{}));
-  EXPECT_CALL(feed_, Rate("agent", 7, 4)).WillOnce(Return(true));
-  EXPECT_CALL(feed_, Rate("agent", 8, 4)).WillOnce(Return(false));
+  EXPECT_CALL(feed_, Feel("agent", 7, Feeling::kAnnoyance))
+      .WillOnce(Return(true));
+  EXPECT_CALL(feed_, Feel("agent", 8, Feeling::kUnknown))
+      .WillOnce(Return(false));
   const auto peer = Named("agent");
 
   peer->Send("wait 2000");
-  peer->Send("rate 7 4");
-  peer->Send("rate 8 4");
+  peer->Send("feel 7 annoyance");
+  peer->Send("feel 8 unknown");
 
   EXPECT_THAT(
       peer->Replies(4),
       ElementsAre(R"({"ok":true})", R"({"readings":[],"missed":0})",
-                  R"({"ok":true})", R"({"error":"cannot rate that reading"})"));
+                  R"({"ok":true})", R"({"error":"cannot take that feeling"})"));
+  service_.Stop();
+}
+
+TEST_F(CanAcceptTest, AClientResetsThePersonsFeelings) {
+  service_.Start();
+  EXPECT_CALL(feed_, Reset("agent"))
+      .WillOnce(Return(true))
+      .WillOnce(Return(false));
+  const auto peer = Named("agent");
+
+  peer->Send("reset feelings");
+  peer->Send("reset feelings");
+
+  EXPECT_THAT(peer->Replies(3),
+              ElementsAre(R"({"ok":true})", R"({"ok":true})",
+                          R"({"error":"cannot reset feelings"})"));
   service_.Stop();
 }
 
@@ -252,7 +306,9 @@ TEST_F(CanAcceptTest, AClientMarksABeatAndIsToldTheFeeling) {
               ElementsAre(R"({"ok":true})",
                           R"({"readings":[],"missed":0,"interpretation":)"
                           R"({"id":1,"feeling":"disagreement",)"
-                          R"("beat":"proposal"}})"));
+                          R"("beat":"proposal","feelings":["agreement",)"
+                          R"("disagreement","engagement","annoyance",)"
+                          R"("confused","unknown"]}})"));
   service_.Stop();
 }
 
@@ -365,6 +421,77 @@ TEST_F(StopWakesWaitersTest, StoppingEndsAWaitAndTheConnection) {
   EXPECT_THAT(peer->Reply(2), Eq(R"({"error":"closing"})"));
 }
 
+using HangUpEndsTest = ServiceTest;
+
+// Service!Noticed: a client that hangs up mid-wait leaves the feed at once,
+// not when its wait times out.
+TEST_F(HangUpEndsTest, AHangUpDuringAWaitDisconnectsTheClient) {
+  service_.Start();
+  std::promise<void> waiting;
+  std::promise<void> disconnected;
+  auto woken = disconnected.get_future().share();
+  std::once_flag once;
+  EXPECT_CALL(feed_, Wait("agent", _)).WillOnce([&] {
+    waiting.set_value();
+    woken.wait_for(2 * kPrompt);
+    return std::optional<Feed::Delivery>();
+  });
+  EXPECT_CALL(feed_, Disconnect("agent")).WillRepeatedly([&] {
+    std::call_once(once, [&] { disconnected.set_value(); });
+  });
+  const auto peer = Named("agent");
+  peer->Send("wait 60000");
+  ASSERT_THAT(waiting.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+
+  peer->HangUp();
+
+  EXPECT_THAT(woken.wait_for(kPrompt), Eq(std::future_status::ready));
+  service_.Stop();
+}
+
+TEST_F(HangUpEndsTest, AHangUpDuringABeatDisconnectsTheClient) {
+  service_.Start();
+  std::promise<void> beating;
+  std::promise<void> disconnected;
+  auto woken = disconnected.get_future().share();
+  std::once_flag once;
+  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal, _)).WillOnce([&] {
+    beating.set_value();
+    woken.wait_for(2 * kPrompt);
+    return std::optional<Feed::Delivery>();
+  });
+  EXPECT_CALL(feed_, Disconnect("agent")).WillRepeatedly([&] {
+    std::call_once(once, [&] { disconnected.set_value(); });
+  });
+  const auto peer = Named("agent");
+  peer->Send("beat proposal 10000");
+  ASSERT_THAT(beating.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+
+  peer->HangUp();
+
+  EXPECT_THAT(woken.wait_for(kPrompt), Eq(std::future_status::ready));
+  service_.Stop();
+}
+
+TEST_F(HangUpEndsTest, AWaitThatEndsOnItsOwnLeavesTheClientConnected) {
+  service_.Start();
+  EXPECT_CALL(feed_, Wait("agent", _))
+      .Times(2)
+      .WillRepeatedly(Return(Feed::Delivery{}));
+  EXPECT_CALL(feed_, Disconnect("agent")).Times(0);
+  const auto peer = Named("agent");
+
+  peer->Send("wait 10");
+  EXPECT_THAT(peer->Reply(2), Eq(R"({"readings":[],"missed":0})"));
+  peer->Send("wait 10");
+  EXPECT_THAT(peer->Reply(3), Eq(R"({"readings":[],"missed":0})"));
+
+  testing::Mock::VerifyAndClearExpectations(&feed_);
+  service_.Stop();
+}
+
 // A beat is a wait like any other: Stop ends it too.
 TEST_F(StopWakesWaitersTest, StoppingEndsABeatAndTheConnection) {
   service_.Start();
@@ -415,11 +542,59 @@ TEST_F(StopEndsTest, StoppingANeverStartedServiceReturns) { service_.Stop(); }
 TEST_F(StopEndsTest, DestroyingAStartedServiceStopsIt) {
   const auto queue = std::make_shared<FakeListener::Queue>();
   NiceMock<MockFeed> feed;
+  NiceMock<MockApprovals> approvals;
   {
-    Service service(std::make_unique<FakeListener>(queue), feed);
+    Service service(std::make_unique<FakeListener>(queue), feed, approvals);
     service.Start();
   }
   EXPECT_TRUE(queue->closed);
+}
+
+using ApprovedOnlyTest = ServiceTest;
+
+TEST_F(ApprovedOnlyTest, ATokenNotApprovedIsRefusedBeforeTheFeed) {
+  service_.Start();
+  EXPECT_CALL(approvals_, Approved(Eq("stranger"))).WillOnce(Return(false));
+  EXPECT_CALL(feed_, Connect).Times(0);
+  const auto peer = Connect();
+
+  peer->Send("hello agent stranger");
+
+  EXPECT_THAT(peer->Reply(1), Eq(R"({"error":"client not approved"})"));
+  service_.Stop();
+}
+
+TEST_F(ApprovedOnlyTest, AHelloWithoutATokenShowsAnEmptyOne) {
+  service_.Start();
+  EXPECT_CALL(approvals_, Approved(Eq(""))).WillOnce(Return(false));
+  const auto peer = Connect();
+
+  peer->Send("hello agent");
+
+  EXPECT_THAT(peer->Reply(1), Eq(R"({"error":"client not approved"})"));
+  service_.Stop();
+}
+
+using ApprovedAdmittedTest = ServiceTest;
+
+TEST_F(ApprovedAdmittedTest, TwoConnectionsShowingOneTokenAreTwoClients) {
+  service_.Start();
+  EXPECT_CALL(approvals_, Approved(Eq("approved")))
+      .Times(2)
+      .WillRepeatedly(Return(true));
+  EXPECT_CALL(feed_, Connect("desktop")).WillOnce(Return(true));
+  EXPECT_CALL(feed_, Connect("code")).WillOnce(Return(true));
+  EXPECT_CALL(feed_, Read("desktop")).WillOnce(Return(Feed::Delivery{}));
+  EXPECT_CALL(feed_, Read("code")).WillOnce(Return(Feed::Delivery{}));
+  const auto desktop = Named("desktop approved");
+  const auto code = Named("code approved");
+
+  desktop->Send("read");
+  code->Send("read");
+
+  EXPECT_THAT(desktop->Reply(2), Eq(R"({"readings":[],"missed":0})"));
+  EXPECT_THAT(code->Reply(2), Eq(R"({"readings":[],"missed":0})"));
+  service_.Stop();
 }
 
 using NothingAfterStopTest = ServiceTest;
@@ -456,8 +631,9 @@ TEST(NothingAfterStopLateTest, AConnectionArrivingWhileStoppingIsShut) {
   const auto queue = std::make_shared<FakeListener::Queue>();
   const auto late = std::make_shared<FakeStream::Peer>();
   NiceMock<MockFeed> feed;
+  NiceMock<MockApprovals> approvals;
   EXPECT_CALL(feed, Connect).Times(0);
-  Service service(std::make_unique<LateListener>(queue, late), feed);
+  Service service(std::make_unique<LateListener>(queue, late), feed, approvals);
   service.Start();
 
   service.Stop();
@@ -514,8 +690,10 @@ TEST_F(CalibrateTest, RefusesCalibrateWithNoControllerGiven) {
 class ServiceWithCalibrationTest : public ::testing::Test {
  protected:
   ServiceWithCalibrationTest()
-      : service_(std::make_unique<FakeListener>(queue_), feed_, &calibration_) {
+      : service_(std::make_unique<FakeListener>(queue_), feed_, approvals_,
+                 &calibration_) {
     ON_CALL(feed_, Connect).WillByDefault(Return(true));
+    ON_CALL(approvals_, Approved).WillByDefault(Return(true));
   }
 
   std::shared_ptr<FakeStream::Peer> Named(const std::string& name) {
@@ -533,6 +711,7 @@ class ServiceWithCalibrationTest : public ::testing::Test {
   std::shared_ptr<FakeListener::Queue> queue_ =
       std::make_shared<FakeListener::Queue>();
   NiceMock<MockFeed> feed_;
+  NiceMock<MockApprovals> approvals_;
   NiceMock<MockCalibrationController> calibration_;
   Service service_;
 };

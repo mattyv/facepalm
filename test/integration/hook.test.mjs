@@ -15,7 +15,7 @@ test('hook and MCP share the real native feed cursor', { timeout: 15000 }, async
   const dir = await mkdtemp(path.join(os.tmpdir(), 'fph-'));
   const nativePath = path.join(dir, 'native');
   const hookPath = path.join(dir, 'hook');
-  const fixture = spawn(fixturePath, [nativePath]);
+  const fixture = spawn(fixturePath, [nativePath, path.join(dir, 'feelings')]);
   const fixtureExited = once(fixture, 'exit');
   const fixtureLines = createInterface({ input: fixture.stdout })[Symbol.asyncIterator]();
   let mcp;

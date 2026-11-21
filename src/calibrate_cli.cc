@@ -8,20 +8,22 @@
 
 namespace facepalm {
 namespace {
-constexpr std::string_view kClientName = "calibrate-cli";
+// The client name this tool shows the service; approve it with
+// `facepalm-daemon approve calibrate` (src/client_approvals.h).
+constexpr std::string_view kClientName = "calibrate";
 // protocol::ErrorJson (src/protocol.cc) always starts a reply this way.
 constexpr std::string_view kErrorPrefix = R"({"error":)";
 constexpr int kExitOk = 0;
 constexpr int kExitError = 1;
 constexpr int kExitUsage = 2;
 
-std::string Join(const std::vector<std::string>& words, std::size_t from) {
+std::string Join(const std::vector<std::string>& words) {
   std::string joined;
-  for (std::size_t index = from; index < words.size(); ++index) {
+  for (const std::string& word : words) {
     if (!joined.empty()) {
       joined += ' ';
     }
-    joined += words[index];
+    joined += word;
   }
   return joined;
 }
@@ -29,20 +31,24 @@ std::string Join(const std::vector<std::string>& words, std::size_t from) {
 
 // NOLINTBEGIN(bugprone-easily-swappable-parameters): see the header.
 int RunCalibrateCli(const std::vector<std::string>& arguments,
+                    const std::string& socket_path, const std::string& token,
                     CalibrateClientIo& io, std::ostream& out,
                     std::ostream& err) {
   // NOLINTEND(bugprone-easily-swappable-parameters)
-  if (arguments.size() < 2) {
-    err << "usage: calibrate_cli SOCKET start [SCREENS]|next|cancel\n";
+  if (arguments.empty()) {
+    err << "usage: calibrate_cli start [SCREENS]|next|cancel\n";
     return kExitUsage;
   }
-  const std::string& socket_path = arguments[0];
-  const std::string command = "calibrate " + Join(arguments, 1);
+  const std::string command = "calibrate " + Join(arguments);
   if (!io.Connect(socket_path)) {
     err << "cannot connect to " << socket_path << "\n";
     return kExitError;
   }
-  io.WriteLine(std::string("hello ") + std::string(kClientName));
+  std::string hello_line = "hello " + std::string(kClientName);
+  if (!token.empty()) {
+    hello_line += " " + token;
+  }
+  io.WriteLine(hello_line);
   const std::optional<std::string> hello = io.ReadLine();
   if (!hello || hello->starts_with(kErrorPrefix)) {
     err << "daemon refused the connection" << (hello ? ": " + *hello : "")
