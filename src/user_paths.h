@@ -25,6 +25,9 @@ struct UserPaths {
   std::string directory;
   std::string socket;   // The service's socket, in `directory`.
   std::string clients;  // One token file per approved client, in `directory`.
+  // The saved calibration profile (#36, #35, item 12 of #61), in
+  // `directory`, if a session has ever finished one.
+  std::string calibration;
 };
 
 // The paths under `home`, or nullopt when `home` is not an absolute path.
