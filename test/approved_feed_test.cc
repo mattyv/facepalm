@@ -31,15 +31,17 @@ class MockFeed : public Feed {
   MOCK_METHOD(std::optional<Delivery>, Beat,
               (const std::string&, BeatKind, std::chrono::milliseconds),
               (override));
-  MOCK_METHOD(bool, Rate, (const std::string&, std::int64_t, int), (override));
+  MOCK_METHOD(bool, Feel, (const std::string&, std::int64_t, Feeling),
+              (override));
+  MOCK_METHOD(bool, Reset, (const std::string&), (override));
 };
 
 class ApprovedFeedTest : public ::testing::Test {
  protected:
-  ApprovedFeed Make(bool ratings_enabled = true) {
-    return {inner_, [this](bool joined) { changes_.push_back(joined); },
-            [this](const std::string& session) { retired_.push_back(session); },
-            ratings_enabled};
+  ApprovedFeed Make() {
+    return {
+        inner_, [this](bool joined) { changes_.push_back(joined); },
+        [this](const std::string& session) { retired_.push_back(session); }};
   }
 
   MockFeed inner_;
@@ -101,7 +103,8 @@ TEST_F(ApprovedFeedTest, EachClientUsesItsOwnSession) {
   ApprovedFeed feed = Make();
   EXPECT_FALSE(feed.Read("desktop"));
   EXPECT_FALSE(feed.Wait("desktop", std::chrono::milliseconds(1)));
-  EXPECT_FALSE(feed.Rate("desktop", 1, 4));
+  EXPECT_FALSE(feed.Feel("desktop", 1, Feeling::kAgreement));
+  EXPECT_FALSE(feed.Reset("desktop"));
   EXPECT_FALSE(
       feed.Beat("desktop", BeatKind::kQuestion, std::chrono::milliseconds(1)));
   EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
@@ -113,8 +116,11 @@ TEST_F(ApprovedFeedTest, EachClientUsesItsOwnSession) {
   EXPECT_CALL(inner_, Wait("approved-1", std::chrono::milliseconds(4)))
       .WillOnce(Return(Feed::Delivery{}));
   EXPECT_TRUE(feed.Wait("desktop", std::chrono::milliseconds(4)));
-  EXPECT_CALL(inner_, Rate("approved-2", 3, 5)).WillOnce(Return(true));
-  EXPECT_TRUE(feed.Rate("code", 3, 5));
+  EXPECT_CALL(inner_, Feel("approved-2", 3, Feeling::kConfused))
+      .WillOnce(Return(true));
+  EXPECT_TRUE(feed.Feel("code", 3, Feeling::kConfused));
+  EXPECT_CALL(inner_, Reset("approved-2")).WillOnce(Return(true));
+  EXPECT_TRUE(feed.Reset("code"));
   EXPECT_CALL(inner_, Beat("approved-1", BeatKind::kProposal,
                            std::chrono::milliseconds(6)))
       .WillOnce(Return(Feed::Delivery{}));
@@ -122,20 +128,15 @@ TEST_F(ApprovedFeedTest, EachClientUsesItsOwnSession) {
       feed.Beat("desktop", BeatKind::kProposal, std::chrono::milliseconds(6)));
 }
 
-TEST_F(ApprovedFeedTest, ARejectedInnerRatingIsReportedToTheClient) {
+TEST_F(ApprovedFeedTest, ARefusedFeelingOrResetIsReportedToTheClient) {
   ApprovedFeed feed = Make();
   EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
   ASSERT_TRUE(feed.Connect("desktop"));
-  EXPECT_CALL(inner_, Rate("approved-1", 8, 4)).WillOnce(Return(false));
-  EXPECT_FALSE(feed.Rate("desktop", 8, 4));
-}
-
-TEST_F(ApprovedFeedTest, RefusesRatingsWhenNoFeedbackSinkExists) {
-  ApprovedFeed feed = Make(/*ratings_enabled=*/false);
-  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
-  ASSERT_TRUE(feed.Connect("desktop"));
-  EXPECT_CALL(inner_, Rate).Times(0);
-  EXPECT_FALSE(feed.Rate("desktop", 1, 5));
+  EXPECT_CALL(inner_, Feel("approved-1", 8, Feeling::kUnknown))
+      .WillOnce(Return(false));
+  EXPECT_FALSE(feed.Feel("desktop", 8, Feeling::kUnknown));
+  EXPECT_CALL(inner_, Reset("approved-1")).WillOnce(Return(false));
+  EXPECT_FALSE(feed.Reset("desktop"));
 }
 
 }  // namespace

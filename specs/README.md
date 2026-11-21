@@ -31,13 +31,13 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 7,908 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none | holds | 3,815,485 |
+| `FeelingFeedback.cfg` | two clients, two interpretations, two feelings, one reset, one restart | holds | 264,176 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
 | `McpSocket.cfg` | one session, up to two requests | holds | 4 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
-| `RatingPersistence.cfg` | one rating, a sync that may fail | holds | 6 |
-| `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
+| `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
 | `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
 
@@ -50,15 +50,6 @@ respective invariant. Cancellation closes the local socket while the native
 wait may still be running. Socket session tests cover serialization, active
 and queued cancellation, terminal failure and bounded requests. The model does
 not prove the remote service has retired or that a host displayed a delivery.
-
-## `RatingPersistence`: acknowledge only synced feedback
-
-The bounded model checks six states, with one serialized append and no fairness
-assumptions. `OnlyAckSynced` and `NoWriteAfterFailure` hold; disabling
-`GuardSync` or `GuardPoison` violates the respective invariant. The log tests
-exercise partial writes, sync failures and the disabled sink. The model does
-not prove filesystem crash recovery; a failed sync can leave an unacknowledged
-record.
 
 ## `DaemonAdmission`: the daemon's clients, camera and stop
 
@@ -489,18 +480,15 @@ Past `Capacity`, the oldest reading is dropped. Each client, an agent session
 or AI Pair, has a cursor. A read returns the readings since that client last
 looked, whether it comes from a hook after an agent action or from the MCP's
 check-in. A client can instead wait for the next reading, which a new reading
-or a timeout ends. The person can rate a reading the client was shown, 1 to
-5, for five minutes after it was shown, and the rating goes back to facepalm
-for #35; `Expire` is that time passing. A client that connects
-starts with no backlog, and keeps what it was shown before, so its earlier
-ratings stand.
+or a timeout ends. A client that connects starts with no backlog. The
+person's feedback is on a beat's feeling, not on a reading, and
+`FeelingFeedback` models it: this spec's rating of a reading, and its
+`RateOnlyShown` and `RateOnlyRecent`, went with the 1 to 5 rating (#35).
 
 | Property | What it says | Test |
 |---|---|---|
 | `NoRepeat` | No reading is shown to the same client twice. | `NoRepeatTest` in `test/reaction_feed_test.cc` |
 | `NoSilentGap` | Every reading made while a client was connected, up to its cursor, was shown to it or counted as missed. | `NoSilentGapTest` |
-| `RateOnlyShown` | A client rates only a reading it was shown, so a rating judges the summary the person saw. | `RateOnlyShownTest` |
-| `RateOnlyRecent` | A rating comes within five minutes of the reading being shown, so the person still remembers it; older ones are forgotten. | `RateOnlyRecentTest` |
 | `NoWaitPastAReading` | A waiting client is never left waiting while a reading it has not seen exists. | `NoWaitPastAReadingTest` |
 | `CanShow` | Something must happen: a connected client with a reading it has not seen can be shown it. | `CanShowTest` |
 | `WaitEnds` | Every wait ends, with a reading or a timeout. | `WaitEndsTest` |
@@ -509,14 +497,15 @@ Each mutation, and what TLC found:
 
 | Mutation | Broke |
 |---|---|
-| `GuardAdvanceCursor = FALSE`: a read leaves the cursor where it was | `CanShow`, 4 states; with `CanShow` left out, `NoRepeat`, 6 states |
-| `GuardReportMissed = FALSE`: dropped readings are skipped without a word | `NoSilentGap`, 5 states |
-| `GuardWakeWaiters = FALSE`: a new reading leaves waiters waiting | `NoWaitPastAReading`, 6 states |
-| `GuardRateOnlyShown = FALSE`: any reading can be rated | `RateOnlyShown`, 5 states |
-| `GuardRateOnlyRecent = FALSE`: a reading can be rated however long ago it was shown | `RateOnlyRecent`, 8 states |
-| A read shows nothing | `CanShow`, 3 states |
+| `GuardAdvanceCursor = FALSE`: a read leaves the cursor where it was | `CanShow`, 5 states; with `CanShow` left out, `NoRepeat`, 5 states |
+| `GuardReportMissed = FALSE`: dropped readings are skipped without a word | `NoSilentGap`, 6 states |
+| `GuardWakeWaiters = FALSE`: a new reading leaves waiters waiting | `NoWaitPastAReading`, 4 states |
+| A read shows nothing | `CanShow`, 5 states |
 | A read counts an id outside the type as missed | `TypeOK`, 3 states |
-| No fairness on `WaitTimesOut` | `WaitEnds` |
+| No fairness on `WaitTimesOut` | `WaitEnds`, 4 states |
+
+These were run again on 2026-11-21, once the rating had gone; the state
+counts are the counterexamples' lengths.
 
 `src/reaction_feed.cc` implements the spec, and each of its methods names
 the action it implements. The same mutations, made to that code, fail the
@@ -529,9 +518,7 @@ tests that stand for the properties they break:
 | A new reading does not wake waiters | `NoWaitPastAReadingTest.ANewReadingEndsTheWait`, and two others |
 | Disconnecting does not wake the client's wait | `WaitEndsTest.DisconnectingEndsTheWait` |
 | A wait ended by a disconnect answers once the name reconnects | `WaitEndsTest.DisconnectingEndsTheWaitEvenWhenTheNameReconnects` |
-| Any reading can be rated | `RateOnlyShownTest.AReadingNotShownToTheClientIsNot` |
-| A rating ignores the five minutes | `RateOnlyRecentTest.NotOnceFiveMinutesHavePassed` |
-| A read shows nothing | `CanShowTest.AConnectedClientIsShownANewReading`, and nine others |
+| A read shows nothing | `CanShowTest.AConnectedClientIsShownANewReading`, and twelve others |
 
 A wait's tests require it to end within 5 seconds of a 10 second timeout, so
 a missing wake fails them rather than passing late.
@@ -595,11 +582,104 @@ stand for the properties they break:
 | A dropped reading of the window is ignored | `UnknownWhenIncompleteTest.ADroppedReadingMakesTheBeatUnknown` |
 | Cues of different feelings: the last wins | `UnknownWhenUnclearTest.CuesOfDifferentFeelingsAreUnknown`, `UnknownWhenUnclearTest.ANodAndAShakeAreUnknown` |
 | Disconnecting does not end the beat | `OneAnswerPerBeatTest.DisconnectingEndsTheBeatUnanswered` |
-| Every beat reads as unknown | `CanAgreeTest.ANodDuringTheBeatIsAgreement`, and four others |
+| Every beat reads as unknown | `CanAgreeTest.ANodDuringTheBeatIsAgreement`, and five others |
 | A reading ends the beat before its window | `BeatEndsTest.ABeatEndsWhenItsWindowDoes`, and two others |
 
 A beat's tests make their readings once the beat is seen open, inside a 500 ms
 window, and fail rather than hang when the beat ends before it is seen open.
+
+## `FeelingFeedback`: the person's feeling, taken once and kept
+
+Models #35, item 4 of #61. A beat's reply carries an interpretation
+(`FeelingBeat`); the person picks how they really felt, and the client sends
+`feel <id> <feeling>`. facepalm takes it only for an interpretation it gave
+that client, the first time, and within five minutes (`Expire` is that time
+passing), then counts it in the person's own file, which the daemon alone
+writes. `reset feelings` forgets every count. A save writes the counts to a
+temporary file, syncs it, renames it over the file, and syncs the folder; one
+save runs at a time. Any step can fail, and the daemon can stop at any moment
+(`Restart`): a rename the folder sync has not kept may be lost then, and so may
+data never synced. The model holds the counts as the set of corrections they
+hold, each an interpretation and a feeling: which ones the file and the reads
+hold is what matters here, and how they tune a read is `src/tuning.cc`'s, held
+by its own tests. A feeling for a beat whose evidence cannot say which reaction
+it was about (mixed reactions, or a dropped reading) is taken but counted
+nowhere; the model leaves that out.
+
+| Property | What it says | Test |
+|---|---|---|
+| `OnlyGiven` | A feeling is taken only for an interpretation given to that client, in this connection. | `OnlyGivenTest` in `test/reaction_feed_test.cc` |
+| `OncePerInterpretation` | At most one feeling is taken for each interpretation, even when its save failed. | `OncePerInterpretationTest` |
+| `OnlyRecent` | A feeling comes within five minutes of the beat. | `OnlyRecentTest` |
+| `NoTornFile` | The file is always whole: a crash leaves the old counts or the new. | `AckedKeptTest` in `test/feeling_store_test.cc`, `FeelingStoreFileTest.KeepsPicksInAPrivateFileAcrossRuns` |
+| `ReadsTheFile` | The reads use the counts in the file, never ones it failed to save. | `ReadsTheFileTest`, `FeelingStoreFileTest.PicksMadeAtOnceAreAllKept` |
+| `AckedKept` | A feeling answered ok stays in the file, through a crash, until a reset. | `AckedKeptTest`, `ReadsTheFileTest.APickRenamedInButNotDurableIsReadButNotAcknowledged` |
+| `ResetForgets` | A reset answered ok has cleared every count there was when it was asked. | `ResetForgetsTest` in both |
+| `CanLearn` | Something must happen: a fresh feeling from a client with nothing under way is taken. | `OnlyGivenTest.AFeelingForTheClientsInterpretationIsLearned` |
+| `Answered` | Liveness: every feel and reset taken is answered, ok or not. | `CanAcceptTest.AClientWaitsAndSaysHowThePersonFelt`, `CanAcceptTest.AClientResetsThePersonsFeelings` in `test/service_test.cc` |
+| `TypeOK` | Every variable keeps its type. | none: the C++ types hold it |
+
+The one writer is two locks in the code: the store's mutex, within the daemon,
+and `<path>.lock`, held while the store is open, so a second daemon cannot open
+the file (`FeelingStoreOpenTest.RefusesALockAnotherWriterHolds`,
+`FeelingStoreFileTest.ASecondStoreCannotOpenTheSameFile`, and the integration
+test `a second service cannot open the same feelings file`). The model has one
+daemon, so `GuardOneWriter` stands for both.
+
+Each mutation, and what TLC found. The invariant mutations ran without
+`Answered`, so the check stops at the first violation; the state counts are
+the counterexamples' lengths:
+
+| Mutation | Broke |
+|---|---|
+| `GuardGivenOnly = FALSE`: any client's interpretation takes a feeling | `OnlyGiven`, 3 states |
+| `GuardOnce = FALSE`: an interpretation takes a feeling again | `OncePerInterpretation`, 8 states |
+| `GuardRecent = FALSE`: a feeling is taken after the time limit | `OnlyRecent`, 5 states |
+| `GuardOneWriter = FALSE`: two saves run at once | `ReadsTheFile`, 11 states; without it, `NoTornFile`, 12 states (the other save renames a temporary file this one left part written) |
+| `GuardTempFile = FALSE`: a save writes over the file | `NoTornFile`, 5 states; without it, `ReadsTheFile`, 5 states |
+| `GuardSyncBeforeRename = FALSE`: the temporary file is renamed unsynced | `NoTornFile`, 6 states (a crash loses its data) |
+| `GuardAckDurable = FALSE`: ok once renamed, before the folder sync | `AckedKept`, 9 states (a crash loses the rename) |
+| `GuardCommitOnRename = FALSE`: the reads take the counts when a save begins | `ReadsTheFile`, 5 states; without it, `AckedKept`, 20 states |
+| `GuardResetEmpties = FALSE`: a reset saves what there is | `ResetForgets`, 14 states |
+| `Feel` never takes a feeling | `CanLearn`, 2 states |
+| A feel names an interpretation outside the type | `TypeOK`, 4 states |
+| No fairness on the save's steps and replies | `Answered`, 11 states |
+
+`src/reaction_feed.cc` implements `Give`, `Expire`, `Feel` and `Reset` in
+`ReactionFeed::Beat`, `Expire`, `Feel` and `Reset`; `src/feeling_store.cc`
+implements `Begin` to `ReplyError` in `FeelingStore::Learn`, `Forget`,
+`Commit` and `Save`; and `src/service.cc` answers the protocol's lines. The
+same mutations, made to that code, fail the tests that stand for the
+properties they break:
+
+| Mutation to the code | Fails |
+|---|---|
+| Disconnecting keeps the interpretations | `OnlyGivenTest.AnInterpretationGivenBeforeAReconnectIsNot` |
+| A feeling does not use up its interpretation | `OncePerInterpretationTest.ASecondFeelingIsRefused`, and two others |
+| A feeling is taken however late | `OnlyRecentTest.NotOnceFiveMinutesHavePassed` |
+| No feeling is ever taken | `OnlyGivenTest.AFeelingForTheClientsInterpretationIsLearned`, and five others |
+| `Learn` takes no lock | `FeelingStoreFileTest.PicksMadeAtOnceAreAllKept` |
+| The lock file is not locked | `FeelingStoreOpenTest.RefusesALockAnotherWriterHolds`, `FeelingStoreFileTest.ASecondStoreCannotOpenTheSameFile` |
+| A save writes over the file | `AckedKeptTest.APickIsAcknowledgedOnlyOnceItsSaveIsDurable`, and three others |
+| The temporary file is not synced | `AckedKeptTest.APickIsAcknowledgedOnlyOnceItsSaveIsDurable`, `ReadsTheFileTest.APickWhoseSaveFailsIsNotRead` |
+| ok once renamed | `ReadsTheFileTest.APickRenamedInButNotDurableIsReadButNotAcknowledged` |
+| The reads take a failed save | `ReadsTheFileTest.APickWhoseSaveFailsIsNotRead`, `ResetForgetsTest.AFailedResetKeepsThePicks` |
+| A reset saves what there is | `ResetForgetsTest.ForgettingSavesNoPicksAndRestoresTheGenericRead`, `FeelingStoreFileTest.KeepsPicksInAPrivateFileAcrossRuns` |
+| The beat ignores the person's picks | `TunedReadTest.TheBeatIsReadAsThePersonsPicksSay`, `TunedReadTest.ABeatWithNoReactionHasEvidenceToo` |
+
+The tuning rule itself is pure computation, outside the model; mutations to it
+fail its tests in `test/tuning_test.cc`:
+
+| Mutation to `Tuning` | Fails |
+|---|---|
+| The person's majority wins without the held-out check | `TuningReadTest.TwoPicksAreNotEnough`, `TuningReadTest.ASplitThatDoesNotBeatTheGenericReadKeepsIt` |
+| A plurality is enough for the person's read | `TuningReadTest.ASplitThatDoesNotBeatTheGenericReadKeepsIt` |
+| One pick is enough | `TuningReadTest.TwoPicksAreNotEnough` |
+
+The integration test `test/integration/tuning.test.mjs` runs the whole path
+against the real feed, store and service: three `annoyance` picks for a frown at
+question beats change the next frown's read at a question, not at a proposal;
+they last when the service restarts; and `reset feelings` restores `confused`.
 
 ## `Service`: the background service and its connections
 
@@ -608,10 +688,10 @@ open, and gives each its own thread. A connection's first line names its
 client and shows its token; only a token the person approved is let in,
 and several connections may show the same one, so two sessions of one
 approved app are two clients. A client let in is connected to
-`ReactionFeed`; the thread then reads, waits for a reading, or rates. The
-peer can hang up at any time. A thread blocked in a wait or a beat is not
-reading its socket, so a watcher (`Noticed`) sees the hang-up and
-disconnects the client, which ends the wait at once: a client gone does
+`ReactionFeed`; the thread then reads, waits for a reading, or gives a
+feeling. The peer can hang up at any time. A thread blocked in a wait or a
+beat is not reading its socket, so a watcher (`Noticed`) sees the hang-up
+and disconnects the client, which ends the wait at once: a client gone does
 not keep its session, and the camera, for the up to 60 seconds its wait
 could last. Stopping the service closes every connection, and must not
 hang on a waiting one, since a wait can last its whole timeout.

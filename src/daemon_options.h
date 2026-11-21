@@ -14,7 +14,7 @@ namespace facepalm {
 // What facepalm-daemon was asked to do (#37):
 //
 //   facepalm-daemon --consent --model PATH [--socket PATH]
-//       [--clients DIRECTORY] [--config PATH] [--ratings-file PATH]
+//       [--clients DIRECTORY] [--config PATH] [--feelings-file PATH]
 //   facepalm-daemon approve NAME [--clients DIRECTORY]
 //   facepalm-daemon revoke NAME [--clients DIRECTORY]
 //
@@ -27,13 +27,13 @@ struct DaemonOptions {
   std::string socket;
   std::string model;
   std::string clients;
-  std::string config;        // Empty for the defaults.
-  std::string ratings_file;  // Empty for no ratings.
+  std::string config;         // Empty for the defaults.
+  std::string feelings_file;  // Empty for the default (DefaultFeelingsPath).
 };
 
 inline constexpr std::string_view kDaemonUsage =
     "usage: facepalm-daemon --consent --model PATH [--socket PATH]\n"
-    "         [--clients DIRECTORY] [--config PATH] [--ratings-file PATH]\n"
+    "         [--clients DIRECTORY] [--config PATH] [--feelings-file PATH]\n"
     "       facepalm-daemon approve NAME [--clients DIRECTORY]\n"
     "       facepalm-daemon revoke NAME [--clients DIRECTORY]\n";
 

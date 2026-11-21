@@ -23,8 +23,7 @@ namespace facepalm {
 class ApprovedFeed : public Feed {
  public:
   ApprovedFeed(Feed& feed, std::function<void(bool)> changed,
-               std::function<void(const std::string&)> retire,
-               bool ratings_enabled = true);
+               std::function<void(const std::string&)> retire);
   // DaemonAdmission!Join.
   bool Connect(const std::string& client) override;
   // DaemonAdmission!Disconnect.
@@ -34,7 +33,9 @@ class ApprovedFeed : public Feed {
                                std::chrono::milliseconds timeout) override;
   std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
                                std::chrono::milliseconds window) override;
-  bool Rate(const std::string& client, std::int64_t id, int score) override;
+  bool Feel(const std::string& client, std::int64_t interpretation,
+            Feeling feeling) override;
+  bool Reset(const std::string& client) override;
 
  private:
   // The client's session, or "" when it is not connected.
@@ -43,7 +44,6 @@ class ApprovedFeed : public Feed {
   Feed& feed_;
   std::function<void(bool)> changed_;
   std::function<void(const std::string&)> retire_;
-  bool ratings_enabled_;
   std::mutex mutex_;
   std::map<std::string, std::string> sessions_;  // Under mutex_.
   std::uint64_t next_session_ = 0;               // Under mutex_.

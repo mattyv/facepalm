@@ -141,10 +141,18 @@ bool Service::Answer(const std::string& name, std::string_view line,
     stream.WriteLine(protocol::ErrorJson("already said hello"));
     return true;
   }
-  if (const auto* rate = std::get_if<protocol::RateRequest>(&*request)) {
-    stream.WriteLine(feed_.Rate(name, rate->id, rate->score)
+  // specs/FeelingFeedback.tla's Feel and Reset, answered once the feed has
+  // saved them, or refused.
+  if (const auto* feel = std::get_if<protocol::FeelRequest>(&*request)) {
+    stream.WriteLine(feed_.Feel(name, feel->interpretation, feel->feeling)
                          ? std::string(protocol::kOkJson)
-                         : protocol::ErrorJson("cannot rate that reading"));
+                         : protocol::ErrorJson("cannot take that feeling"));
+    return true;
+  }
+  if (std::holds_alternative<protocol::ResetRequest>(*request)) {
+    stream.WriteLine(feed_.Reset(name)
+                         ? std::string(protocol::kOkJson)
+                         : protocol::ErrorJson("cannot reset feelings"));
     return true;
   }
   // Service!Wait and Service!Answered, for a wait or a beat

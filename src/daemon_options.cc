@@ -25,8 +25,8 @@ std::string* Field(DaemonOptions& options, std::string_view option) {
   if (option == "--config") {
     return &options.config;
   }
-  if (option == "--ratings-file") {
-    return &options.ratings_file;
+  if (option == "--feelings-file") {
+    return &options.feelings_file;
   }
   return nullptr;
 }

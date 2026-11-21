@@ -13,12 +13,8 @@
 namespace facepalm {
 
 ApprovedFeed::ApprovedFeed(Feed& feed, std::function<void(bool)> changed,
-                           std::function<void(const std::string&)> retire,
-                           bool ratings_enabled)
-    : feed_(feed),
-      changed_(std::move(changed)),
-      retire_(std::move(retire)),
-      ratings_enabled_(ratings_enabled) {}
+                           std::function<void(const std::string&)> retire)
+    : feed_(feed), changed_(std::move(changed)), retire_(std::move(retire)) {}
 
 // DaemonAdmission!Join: only the first client changes the subscription.
 // Changes are told under the lock, so they reach the control queue in order.
@@ -76,9 +72,15 @@ std::optional<Feed::Delivery> ApprovedFeed::Beat(
   return session.empty() ? std::nullopt : feed_.Beat(session, kind, window);
 }
 
-bool ApprovedFeed::Rate(const std::string& client, std::int64_t id, int score) {
+bool ApprovedFeed::Feel(const std::string& client, std::int64_t interpretation,
+                        Feeling feeling) {
   const std::string session = Session(client);
-  return ratings_enabled_ && !session.empty() && feed_.Rate(session, id, score);
+  return !session.empty() && feed_.Feel(session, interpretation, feeling);
+}
+
+bool ApprovedFeed::Reset(const std::string& client) {
+  const std::string session = Session(client);
+  return !session.empty() && feed_.Reset(session);
 }
 
 }  // namespace facepalm

@@ -21,7 +21,7 @@ test('two approved MCP sessions get the same nod, each its own beat, and a stran
   await mkdir(clients, { mode: 0o700 });
   const tokenPath = path.join(clients, 'mcp');
   await writeFile(tokenPath, `${'c'.repeat(64)}\n`, { mode: 0o600 });
-  const fixture = spawn(fixturePath, ['--clients', clients, socketPath]);
+  const fixture = spawn(fixturePath, ['--clients', clients, socketPath, path.join(dir, 'feelings')]);
   const fixtureExited = once(fixture, 'exit');
   const children = [];
   const lines = createInterface({ input: fixture.stdout })[Symbol.asyncIterator]();
@@ -94,10 +94,17 @@ test('two approved MCP sessions get the same nod, each its own beat, and a stran
   assert.equal((await lines.next()).value, 'reacted 2');
   const beaten = unpack(await desktopBeat);
   assert.deepEqual(beaten.readings.map((reading) => reading.id), [2]);
-  assert.deepEqual(beaten.interpretation, { id: 1, feeling: 'agreement', beat: 'question' });
+  const { id, feeling, beat } = beaten.interpretation;
+  assert.deepEqual({ id, feeling, beat }, { id: 1, feeling: 'agreement', beat: 'question' });
   const plain = unpack(await codeAgain);
   assert.deepEqual(plain.readings.map((reading) => reading.id), [2]);
   assert.equal(plain.interpretation, undefined);
+  // Only the client given the interpretation can say how the person felt.
+  const tell = (session, feeling) => session.call('tools/call', {
+    name: 'tell_feeling', arguments: { id: 1, feeling },
+  });
+  assert.equal((await tell(code, 'engagement')).isError, true);
+  assert.notEqual((await tell(desktop, 'engagement')).isError, true);
 
   desktop.child.stdin.end();
   await desktop.exited;

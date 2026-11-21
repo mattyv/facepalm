@@ -15,8 +15,8 @@
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/feed.h"
+#include "src/feeling_store.h"
 #include "src/feelings.h"
-#include "src/rating_log.h"
 #include "src/reaction_feed.h"
 #include "src/service.h"
 #include "src/unix_socket.h"
@@ -59,9 +59,11 @@ class AnnouncingFeed : public facepalm::Feed {
     beating_.clear();
     return delivery;
   }
-  bool Rate(const std::string& client, std::int64_t id, int score) override {
-    return feed_.Rate(client, id, score);
+  bool Feel(const std::string& client, std::int64_t interpretation,
+            facepalm::Feeling feeling) override {
+    return feed_.Feel(client, interpretation, feeling);
   }
+  bool Reset(const std::string& client) override { return feed_.Reset(client); }
 
   // Returns once the beat announced, if any, has opened its window.
   void AwaitBeat() {
@@ -91,11 +93,13 @@ class EveryClient : public facepalm::Approvals {
 
 }  // namespace
 
-// A deterministic service controlled by stdin, for the cross-process MCP
-// tests: mcp_service_fixture [--clients DIRECTORY] SOCKET [RATINGS]. With
-// --clients, it admits clients as the daemon does, through ClientApprovals
-// and ApprovedFeed, and prints "camera on" and "camera off" when the camera
-// subscription they share changes.
+// A deterministic service controlled by stdin, for the cross-process MCP and
+// tuning tests: `fixture [--clients DIRECTORY] SOCKET FEELINGS_FILE`. Each
+// "react" line makes a nod; "react DETAIL" makes the reaction whose JSON is
+// DETAIL, such as {"expression":"brows_down"}. With --clients, it admits
+// clients as the daemon does, through ClientApprovals and ApprovedFeed, and
+// prints "camera on" and "camera off" when the camera subscription they
+// share changes.
 // NOLINTNEXTLINE(misc-const-correctness,readability-function-cognitive-complexity)
 int main(int argc, char** argv) try {
   std::span<char*> args(argv + 1, argc - 1);
@@ -104,33 +108,22 @@ int main(int argc, char** argv) try {
     clients = args[1];
     args = args.subspan(2);
   }
-  if (args.size() != 1 && args.size() != 2) {
+  if (args.size() != 2) {
     return 2;
   }
   std::string error;
+  const auto feelings = facepalm::FeelingStore::Open(args[1], error);
+  if (!feelings) {
+    std::cerr << error << '\n';
+    return 1;
+  }
   auto listener = facepalm::UnixListener::Create(args[0], error);
   if (!listener) {
     std::cerr << error << '\n';
     return 1;
   }
-  std::unique_ptr<facepalm::RatingLog> ratings;
-  if (args.size() == 2) {
-    ratings = facepalm::RatingLog::Open(args[1], error);
-    if (!ratings) {
-      return 1;
-    }
-  }
   std::mutex output_mutex;
-  facepalm::ReactionFeed feed(10, [&](const auto& rating) {
-    if (ratings && !ratings->Record(rating)) {
-      return false;
-    }
-    const std::scoped_lock lock(output_mutex);
-    std::cout << "rated " << rating.client << ' ' << rating.id << ' '
-              << rating.score << '\n'
-              << std::flush;
-    return true;
-  });
+  facepalm::ReactionFeed feed(10, *feelings);
   AnnouncingFeed announcing(feed, output_mutex);
   const std::unique_ptr<facepalm::ApprovalsIo> io =
       facepalm::PosixApprovalsIo();
@@ -156,14 +149,19 @@ int main(int argc, char** argv) try {
   service.Start();
   std::cout << "ready" << '\n' << std::flush;
   std::string command;
+  constexpr std::string_view kReact = "react";
   while (std::getline(std::cin, command)) {
-    if (command != "react") {
+    if (!command.starts_with(kReact)) {
       return 2;
     }
+    const std::string detail = command == kReact
+                                   ? std::string(R"({"gesture":"nod"})")
+                                   : command.substr(kReact.size() + 1);
     announcing.AwaitBeat();
     constexpr std::int64_t kSyntheticPublishedMs = 1763658000123;
-    const auto id = feed.React("synthetic nod", R"({"gesture":"nod"})",
-                               kSyntheticPublishedMs);
+    const auto id =
+        feed.React("synthetic " + std::string(facepalm::SignOf(detail)), detail,
+                   kSyntheticPublishedMs);
     const std::scoped_lock lock(output_mutex);
     std::cout << "reacted " << id << '\n' << std::flush;
   }

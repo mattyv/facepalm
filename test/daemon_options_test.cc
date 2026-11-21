@@ -47,19 +47,19 @@ TEST(DaemonOptionsTest, RunsWithTheDefaultPaths) {
   EXPECT_THAT(options.socket, Eq("/h/fp/service.sock"));
   EXPECT_THAT(options.clients, Eq("/h/fp/c"));
   EXPECT_THAT(options.config, Eq(""));
-  EXPECT_THAT(options.ratings_file, Eq(""));
+  EXPECT_THAT(options.feelings_file, Eq(""));
 }
 
 TEST(DaemonOptionsTest, RunsWithEveryPathGiven) {
   const DaemonOptions options =
       Parsed({"--model", "m", "--socket", "s", "--clients", "c", "--config",
-              "f.conf", "--ratings-file", "r.jsonl", "--consent"},
+              "f.conf", "--feelings-file", "f.counts", "--consent"},
              std::nullopt);
 
   EXPECT_THAT(options.socket, Eq("s"));
   EXPECT_THAT(options.clients, Eq("c"));
   EXPECT_THAT(options.config, Eq("f.conf"));
-  EXPECT_THAT(options.ratings_file, Eq("r.jsonl"));
+  EXPECT_THAT(options.feelings_file, Eq("f.counts"));
 }
 
 TEST(DaemonOptionsTest, AGivenSocketOverridesTheDefault) {
