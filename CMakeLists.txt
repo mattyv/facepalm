@@ -62,6 +62,8 @@ facepalm_unit(frame_times)
 target_link_libraries(frame_pipeline PUBLIC frame)
 facepalm_unit(expression_reader)
 facepalm_unit(gesture_reader)
+facepalm_unit(look_away)
+facepalm_unit(look_away_reader)
 facepalm_unit(head_pose)
 facepalm_unit(head_pose_reader)
 facepalm_unit(head_gesture_model)
@@ -93,13 +95,25 @@ target_link_libraries(reaction PUBLIC head_pose)
 target_link_libraries(head_pose_reader PUBLIC reaction)
 target_link_libraries(gesture_reader PUBLIC head_gesture_model)
 target_link_libraries(expression_reader PUBLIC expressions head_pose)
+# The look-away reader runs the real detector and tracker, pure computation
+# like the expression reader's (#35).
+target_link_libraries(look_away PUBLIC head_pose)
+target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose)
 facepalm_unit(session_camera)
 
 facepalm_unit(gesture_replay)
 target_link_libraries(gesture_replay PUBLIC gesture_reader)
+# The look-away replay runs the real tracker and detector (pure computation)
+# over recorded head poses in test/fixtures (#35).
+facepalm_unit(look_away_replay)
+target_link_libraries(look_away_replay PUBLIC look_away expressions config)
+if(BUILD_TESTING)
+  target_compile_definitions(look_away_replay_test PRIVATE
+    FACEPALM_FIXTURES="${PROJECT_SOURCE_DIR}/test/fixtures")
+endif()
 add_executable(gesture_replay_cli tools/gesture_replay/main.cc)
 set_target_properties(gesture_replay_cli PROPERTIES OUTPUT_NAME gesture_replay)
-target_link_libraries(gesture_replay_cli PRIVATE gesture_replay)
+target_link_libraries(gesture_replay_cli PRIVATE gesture_replay look_away_replay)
 
 # A normal install retains the MCP source and lockfile for user-managed Node 22.
 # Debian packages select Runtime only and do not install or fetch MCP dependencies.
@@ -186,7 +200,7 @@ if(APPLE)
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
     config frame_pipeline frame_recorder face_analyzer expression_reader
-    gesture_reader head_pose_reader
+    gesture_reader head_pose_reader look_away_reader
     "-framework CoreGraphics"
     "-framework ImageIO")
 endif()
@@ -207,8 +221,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     INSTALL_RPATH "@executable_path/../Frameworks")
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
     avfoundation_session camera_controller config frame_pipeline face_analyzer
-    expression_reader gesture_reader reaction_feed rating_log service unix_socket face_model
-    facepalm_mediapipe "-framework CoreFoundation")
+    expression_reader gesture_reader look_away_reader reaction_feed rating_log service
+    unix_socket face_model facepalm_mediapipe "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
     head_gesture_model facepalm_mediapipe
@@ -244,7 +258,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     ${FACEPALM_MEDIAPIPE_C_INCLUDE} ${V4L2_INCLUDE_DIRECTORY})
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_token daemon_control
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
-    reaction_feed rating_log service session_camera unix_socket face_model Threads::Threads
+    look_away_reader reaction_feed rating_log service session_camera unix_socket face_model Threads::Threads
     ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"

@@ -79,6 +79,29 @@ jobs:
       - name: Script tests
         run: bats scripts/test specs/test tools/fixtures/test
 
+  # Shell scripts' line coverage, with kcov over every bats test (#2), as
+  # ai-pair measures it. Linux only: on macOS, kcov's bash tracing rides on
+  # stderr, which bats captures. Debian packages kcov; Ubuntu 24.04 does not.
+  shell-coverage:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            bats binutils ca-certificates clang git jq kcov nodejs perl
+      - uses: actions/checkout@v7
+      # The scripts run git over files another user owns.
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Shell coverage
+        run: bash scripts/coverage_shell.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: shell-coverage
+          path: build-shell-coverage
+
   debian-package:
     runs-on: ubuntu-latest
     container: debian:13-slim

@@ -32,6 +32,50 @@ every client feeds the same corrections (#61); and its
 [#70](https://github.com/mattyv/facepalm/issues/70),
 [#61](https://github.com/mattyv/facepalm/issues/61).
 
+## 2026-11-21: Read looking away from the resting pose, held a second
+
+-   **Decision:** report `{"gesture":"looking_away"}` once when the head's
+    yaw or pitch stays more than 15 degrees from its resting pose for 1,000
+    ms, and again only after it comes back within half that. The resting
+    pose is `ExpressionTracker`'s, learned from the same faces with the
+    expression settings; nothing is reported while it is being learned.
+    `looking_away.enabled`, `.degrees` and `.hold_ms` are in the config file.
+    `specs/LookAway.tla` models the rule.
+-   **Why:** #35's design reads reactions from head pose and blendshapes
+    judged against the person's own resting state, with no calibration up
+    front. On one person's recordings, replayed through the detector, each
+    prompted look down and each turn the face model kept tracking was
+    reported once, and nods, which stay within about 12 degrees and leave
+    for under half a second, were not.
+-   **Rejected:** reading gaze, which needs eye landmarks no reader uses yet
+    (#61 item 11); counting roll, which is a tilt, not a look away; and a new
+    reaction key, such as `attention`, which the daemon's feed filter and
+    every client would have to learn.
+-   **Cost:** a pose held for long enough, under a minute, becomes the resting
+    pose, so turning back from it is reported as a look away. A face the
+    model loses, as on a wide turn, gives no frames and so no report. The
+    thresholds come from one person's recordings.
+-   **Evidence:** [#35](https://github.com/mattyv/facepalm/issues/35).
+
+## 2026-11-21: Hold the shell scripts to 100 percent of lines with kcov on Linux
+
+`scripts/coverage_shell.sh` runs every bats test under kcov, in a Debian
+trixie container on CI, and holds each shell script to 100 percent of its
+lines (its `shell` floor in `coverage_thresholds.json`), as the C++ and
+JavaScript are held. The tests run copies of the scripts in temporary
+folders, so a script's lines are counted over every copy. kcov counts lines
+that bash never traces: each line of a multi-line quoted string or array, a
+`$(...)` continued over lines, and `done <file`. The scripts are written so
+none occurs: awk programs come from here-documents, which kcov skips; long
+lists are built with `+=`; each `$(...)` sits on one line; and loops read
+here-strings. Rejected: floors at the measured number for the lines kcov
+miscounts (this PR's first version), since the user holds every file to 100;
+kcov on macOS, where its bash tracing rides on stderr and bats captures it,
+so every script reads 0 (ai-pair's finding; here, Homebrew's kcov 43 running
+one bats file had not finished after two minutes); bashcov, a Ruby gem
+neither repository uses; and Ubuntu's runner, which does not package kcov.
+Evidence: [#2](https://github.com/mattyv/facepalm/issues/2).
+
 ## 2026-11-21: A turn's suppression ends once the head settles anywhere
 
 -   **Decision:** after a turn, later turns stay suppressed until the model

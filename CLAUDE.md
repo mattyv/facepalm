@@ -75,6 +75,13 @@ tools. The design and its decisions are on
     2026-11-21, #67): each file in `mcp/` and `integrations/claude-code/`
     is covered for lines, branches and functions by its own test file,
     `x.js` by `test/x.test.js`, with its collaborators mocked.
+-   **Shell is held to 100 percent of lines too** (set by the user on
+    2026-11-21, #2): `scripts/coverage_shell.sh` runs every bats test under
+    kcov on CI's Linux job and fails a script below 100. Write scripts so
+    kcov counts no line bash never traces: an awk program in a
+    here-document, a long list built with `+=` a line at a time, each
+    `$(...)` on one line, and a `while read` loop over a here-string rather
+    than `done <file`.
 -   **A coverage floor is never lowered.** A run below one gets the test cases
     that bring it back up.
 -   **Every test is idempotent and cleans up after itself.**

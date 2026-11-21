@@ -51,6 +51,15 @@ made since, each with its reason, are in the
     to expressions, judged against the person's own resting face. Its
     defaults were tuned on one person's 80-second recording; the frown
     (brows down) was the weakest of the five to read reliably.
+-   `src/look_away_reader`, `src/look_away`: a `FaceReader` that reacts
+    `{"gesture":"looking_away"}` once each time the head stays away from its
+    resting pose (#35): yaw or pitch more than 15 degrees from it for a
+    second. `LookAwayDetector`, in `src/look_away`, is the rule; the
+    resting pose is `ExpressionTracker`'s, learned from the same faces with
+    the expression settings. Nods and shakes leave the resting pose for
+    less than a second and are not reported. A pose held for long enough,
+    under a minute, becomes the resting pose, so turning back from it reads
+    as a look away of its own. `specs/LookAway.tla` models the rule.
 -   `src/config`: the settings file, below.
 -   `src/reaction_feed`: the readings each client is told about (#36): one
     timeline of interpreted reactions, each with the summary line the person
@@ -129,11 +138,25 @@ CXX=clang++ cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 cmake --build build-sanitizers && ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
 bats scripts/test specs/test tools/fixtures/test  # Tests for the scripts.
 bash scripts/check_bats.sh        # Every bats assertion ends in || false.
+# On Linux with kcov: every shell script's lines, at 100 percent.
+bash scripts/coverage_shell.sh
 cmake --build build --target format-check
 cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
   && cmake --build build-tidy     # clang-tidy on every source.
 bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
+
+`coverage_shell.sh` runs every bats test under kcov and holds each shell
+script in git to 100 percent of its lines, its `shell` floor in
+`coverage_thresholds.json`; it names the lines a script's tests miss. It runs
+on Linux only, in CI's `shell-coverage` job: on macOS, kcov's bash tracing
+rides on stderr, which bats captures, so every script would read 0. kcov
+counts some lines bash never traces, so the scripts avoid them: an awk
+program is read from a here-document, a long list is built up with `+=` one
+line at a time, a `$(...)` stays on one line (its arguments in an array when
+they are long), and a `while read` loop reads a here-string, not
+`done <file`. A command continued with a trailing backslash is fine: kcov
+counts only its first line.
 
 See [local macOS app staging](docs/local-app.md) for the development installer.
 
@@ -260,6 +283,11 @@ expressions.pose_degrees = 10
 expressions.pose_range = 3
 # How long after the head was last away or moving it keeps pausing.
 expressions.settle_ms = 600
+# Looking away (#35): yaw or pitch this many degrees from the resting pose,
+# held this long. Nods and shakes are shorter than the hold.
+looking_away.enabled = true
+looking_away.degrees = 15
+looking_away.hold_ms = 1000
 ```
 
 A nod, a shake or a tilt moves the blendshape scores as much as an
@@ -398,6 +426,13 @@ run `build/gesture_replay < camera-probe.log`. Each ready window prints its
 timestamp, six model probabilities, classified gesture and reported gesture.
 The class and report numbers are 0 none, 1 nod, 2 shake, 3 tilt, 4 turn and
 5 up/down. The default confidence threshold is used.
+
+Run `build/gesture_replay --looking-away < camera-probe.log` to replay a
+recording's looks away instead: it reads the probe's `head_pose <timestamp>
+<yaw> <pitch> <roll>` lines and prints `looking_away <timestamp>` for each
+look away reported with the default settings. Probe logs from before #35
+have no `head_pose` lines; `test/fixtures/README.md` shows how the three
+recordings there were converted.
 
 New probe logs include `gesture_no_face` when tracking is lost; replay resets
 the window and reporting gate there. Older logs have no such markers, so their

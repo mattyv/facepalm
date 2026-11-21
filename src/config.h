@@ -25,6 +25,12 @@ struct Config {
   static constexpr float kDefaultExpressionsPoseDegrees = 10.0F;
   static constexpr float kDefaultExpressionsPoseRange = 3.0F;
   static constexpr int kDefaultExpressionsSettleMs = 600;
+  // LookAwayDetector's defaults (#35), tuned on one person's recordings:
+  // their turns and looks down held 20 to 45 degrees from the resting pose
+  // for seconds, while their nods stayed within about 12 degrees of it,
+  // each swing lasting about half a second (#34).
+  static constexpr float kDefaultLookingAwayDegrees = 15.0F;
+  static constexpr int kDefaultLookingAwayHoldMs = 1000;
 
   int frames_per_second = kDefaultFramesPerSecond;
   bool head_pose_enabled = true;
@@ -37,16 +43,21 @@ struct Config {
   float expressions_pose_degrees = kDefaultExpressionsPoseDegrees;
   float expressions_pose_range = kDefaultExpressionsPoseRange;
   int expressions_settle_ms = kDefaultExpressionsSettleMs;
+  bool looking_away_enabled = true;
+  float looking_away_degrees = kDefaultLookingAwayDegrees;
+  int looking_away_hold_ms = kDefaultLookingAwayHoldMs;
 };
 
 // Reads a config file's text: one `name = value` a line, blank lines, and
 // `#` comments. Names are camera.frames_per_second (1 to 60),
-// head_pose.enabled, gestures.enabled and expressions.enabled (true or
-// false), gestures.confidence_threshold (0 to 1), expressions.smallest_rise
-// (0 to 1), expressions.spreads (0 to 100), expressions.hold_ms (a whole
-// number from 0 to 5000), expressions.pose_degrees (0 to 180),
-// expressions.pose_range (0 to 180), and expressions.settle_ms (a whole
-// number from 0 to 5000). Returns the config, or nothing with `error`
+// head_pose.enabled, gestures.enabled, expressions.enabled and
+// looking_away.enabled (true or false), gestures.confidence_threshold (0 to
+// 1), expressions.smallest_rise (0 to 1), expressions.spreads (0 to 100),
+// expressions.hold_ms (a whole number from 0 to 5000),
+// expressions.pose_degrees (0 to 180), expressions.pose_range (0 to 180),
+// expressions.settle_ms (a whole number from 0 to 5000),
+// looking_away.degrees (0 to 180), and looking_away.hold_ms (a whole number
+// from 0 to 10000). Returns the config, or nothing with `error`
 // naming the line, for an unknown name, a bad value, a repeated name or a
 // line with no `=`.
 std::optional<Config> ParseConfig(std::string_view text, std::string& error);

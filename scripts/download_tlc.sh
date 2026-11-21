@@ -6,10 +6,11 @@ readonly OUTPUT="$1"
 readonly SHA256="$2"
 readonly DIRECT='https://github.com/tlaplus/tlaplus/releases/download/'
 readonly API='https://api.github.com/repos/tlaplus/tlaplus/releases/assets/'
-readonly -a CURL_ARGS=(--fail --silent --show-error --location --retry 3
-  --retry-all-errors --connect-timeout 20 --max-time 300 --retry-max-time 600
-  -H 'Accept: application/octet-stream' -H 'X-GitHub-Api-Version: 2022-11-28'
-  -o "${OUTPUT}")
+CURL_ARGS=(--fail --silent --show-error --location --retry 3)
+CURL_ARGS+=(--retry-all-errors --connect-timeout 20 --max-time 300)
+CURL_ARGS+=(--retry-max-time 600 -H 'Accept: application/octet-stream')
+CURL_ARGS+=(-H 'X-GitHub-Api-Version: 2022-11-28' -o "${OUTPUT}")
+readonly CURL_ARGS
 mkdir -p "$(dirname "${OUTPUT}")"
 
 if curl "${CURL_ARGS[@]}" "${DIRECT}v1.7.4/tla2tools.jar" \
