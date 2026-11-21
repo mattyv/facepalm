@@ -200,9 +200,10 @@ The tray is displayed by desktops with StatusNotifierItem support. GNOME
 may need the [AppIndicator support extension](https://extensions.gnome.org/extension/615/appindicator-support/).
 The applications menu opens **Facepalm Settings** for frame rate, gesture
 and expression detection, and advanced tuning. Choose **Settings…** from the
-tray to reopen the form. The tray also shows local camera service readiness
-and offline replay availability. Start the daemon with `--config` and the
-path displayed in the form to apply saved settings.
+tray to reopen the form. **Turn On Facepalm…** in the tray, as in the macOS
+menu, gives consent and starts the camera daemon as a systemd user service
+with the saved settings; **Turn Off Facepalm** stops it. The tray also shows
+local camera service readiness and offline replay availability.
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 

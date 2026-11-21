@@ -332,5 +332,12 @@
       "branches": 100,
       "functions": 100
     }
+  },
+  "src/user_service.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
   }
 }
