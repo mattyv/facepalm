@@ -51,10 +51,12 @@ class MockMediaPipe {
 
 MockMediaPipe* media_pipe = nullptr;
 
-// Handles that stand in for MediaPipe's own; never dereferenced.
-MpFaceLandmarkerPtr const fake_landmarker =
+// Handles that stand in for MediaPipe's own; never dereferenced. Spelled
+// through the pointee, not the MpFaceLandmarkerPtr/MpImagePtr typedefs, so
+// const plainly binds to the pointer rather than an invisible pointee.
+struct MpFaceLandmarkerInternal* const fake_landmarker =
     reinterpret_cast<MpFaceLandmarkerPtr>(0x1234);
-MpImagePtr const fake_image = reinterpret_cast<MpImagePtr>(0x5678);
+struct MpImageInternal* const fake_image = reinterpret_cast<MpImagePtr>(0x5678);
 
 constexpr int kWidth = 2;
 constexpr int kHeight = 3;
@@ -149,7 +151,12 @@ class MediaPipeCShimTest : public ::testing::Test {
   FakeResult fake_;
 };
 
+// Checks every option the shim sets on MediaPipe's create call.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(MediaPipeCShimTest, CreateLoadsTheModelForVideoWithEveryOutput) {
+  // RunningMode has no zero-valued enumerator, but the whole struct is
+  // overwritten below before options is read.
+  // NOLINTNEXTLINE(bugprone-invalid-enum-default-initialization)
   FaceLandmarkerOptions options{};
   EXPECT_CALL(mock_, Create(NotNull(), NotNull(), NotNull()))
       .WillOnce([&options](FaceLandmarkerOptions* given,
@@ -174,10 +181,10 @@ TEST_F(MediaPipeCShimTest, CreateLoadsTheModelForVideoWithEveryOutput) {
 }
 
 TEST_F(MediaPipeCShimTest, CreateFailingGivesMediaPipesReasonAndFreesIt) {
-  char reason[] = "no such model";
+  auto reason = std::to_array("no such model");
   EXPECT_CALL(mock_, Create(_, _, _))
-      .WillOnce(DoAll(SetArgPointee<2>(reason), Return(kMpNotFound)));
-  EXPECT_CALL(mock_, FreeError(reason));
+      .WillOnce(DoAll(SetArgPointee<2>(reason.data()), Return(kMpNotFound)));
+  EXPECT_CALL(mock_, FreeError(reason.data()));
   FpFaceModel* model = nullptr;
 
   EXPECT_THAT(
@@ -312,8 +319,8 @@ TEST_P(BadShapeTest, DetectRefusesIt) {
   Destroy(model);
 }
 
-constexpr char kBadCount[] = "unexpected MediaPipe face count";
-constexpr char kBadShape[] = "unexpected MediaPipe result shape";
+constexpr const char* kBadCount = "unexpected MediaPipe face count";
+constexpr const char* kBadShape = "unexpected MediaPipe result shape";
 
 INSTANTIATE_TEST_SUITE_P(
     EachCheck, BadShapeTest,
@@ -334,11 +341,12 @@ INSTANTIATE_TEST_SUITE_P(
 
 TEST_F(MediaPipeCShimTest, DetectFailingGivesMediaPipesReasonAndClosesAll) {
   FpFaceModel* model = Created();
-  char reason[] = "timestamp went backwards";
+  auto reason = std::to_array("timestamp went backwards");
   ExpectImage();
   EXPECT_CALL(mock_, DetectForVideo(_, _, _, _, _, _))
-      .WillOnce(DoAll(SetArgPointee<5>(reason), Return(kMpInvalidArgument)));
-  EXPECT_CALL(mock_, FreeError(reason));
+      .WillOnce(
+          DoAll(SetArgPointee<5>(reason.data()), Return(kMpInvalidArgument)));
+  EXPECT_CALL(mock_, FreeError(reason.data()));
   EXPECT_CALL(mock_, CloseResult(NotNull()));
   ::testing::internal::CaptureStderr();
 
@@ -352,10 +360,11 @@ TEST_F(MediaPipeCShimTest, DetectFailingGivesMediaPipesReasonAndClosesAll) {
 
 TEST_F(MediaPipeCShimTest, DetectGivesMediaPipesReasonWhenNoImageIsMade) {
   FpFaceModel* model = Created();
-  char reason[] = "bad pixels";
+  auto reason = std::to_array("bad pixels");
   EXPECT_CALL(mock_, CreateImage(_, _, _, _, _, _, _))
-      .WillOnce(DoAll(SetArgPointee<6>(reason), Return(kMpInvalidArgument)));
-  EXPECT_CALL(mock_, FreeError(reason));
+      .WillOnce(
+          DoAll(SetArgPointee<6>(reason.data()), Return(kMpInvalidArgument)));
+  EXPECT_CALL(mock_, FreeError(reason.data()));
 
   EXPECT_THAT(fp_face_model_detect(model, rgba_.data(), kWidth, kHeight, 0,
                                    &face_, error_.data(), error_.size()),
@@ -396,7 +405,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(BadSize{.name = "NoWidth", .width = 0, .height = 1},
                       BadSize{.name = "NoHeight", .width = 1, .height = 0},
                       BadSize{.name = "TooManyBytesForAnInt",
-                              .width = kIntMax / 4 + 1,
+                              .width = (kIntMax / 4) + 1,
                               .height = 1}),
     [](const ::testing::TestParamInfo<BadSize>& info) {
       return info.param.name;
@@ -421,10 +430,10 @@ TEST_F(MediaPipeCShimTest, DestroyClosesTheLandmarker) {
 
 TEST_F(MediaPipeCShimTest, DestroyFreesTheReasonAClosingFailureGives) {
   FpFaceModel* model = Created();
-  char reason[] = "already closed";
+  auto reason = std::to_array("already closed");
   EXPECT_CALL(mock_, Close(fake_landmarker, NotNull()))
-      .WillOnce(DoAll(SetArgPointee<1>(reason), Return(kMpInternal)));
-  EXPECT_CALL(mock_, FreeError(reason));
+      .WillOnce(DoAll(SetArgPointee<1>(reason.data()), Return(kMpInternal)));
+  EXPECT_CALL(mock_, FreeError(reason.data()));
 
   fp_face_model_destroy(model);
 }

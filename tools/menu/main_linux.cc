@@ -23,6 +23,7 @@
 #include <QVBoxLayout>
 #include <array>
 #include <charconv>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <string>
@@ -51,7 +52,7 @@ QIcon FacepalmIcon() {
 }
 
 QString SocketPath() {
-  const QString override_path = qEnvironmentVariable("FACEPALM_SOCKET");
+  QString override_path = qEnvironmentVariable("FACEPALM_SOCKET");
   if (!override_path.isEmpty()) {
     return override_path;
   }
@@ -61,10 +62,11 @@ QString SocketPath() {
 }
 
 bool ServiceReady(const QString& path) {
+  constexpr int kConnectTimeoutMs = 50;
   QLocalSocket socket;
   socket.connectToServer(path);
   return socket.state() == QLocalSocket::ConnectedState ||
-         socket.waitForConnected(50);
+         socket.waitForConnected(kConnectTimeoutMs);
 }
 
 QString ConfigPath() {
@@ -73,15 +75,18 @@ QString ConfigPath() {
       .filePath(QStringLiteral("facepalm/facepalm.conf"));
 }
 
+// A plain comparable value, not a class with an invariant to protect.
 struct ConfigSnapshot {
+  // NOLINTNEXTLINE(misc-non-private-member-variables-in-classes)
   QByteArray bytes;
+  // NOLINTNEXTLINE(misc-non-private-member-variables-in-classes)
   bool missing = false;
 
   bool operator==(const ConfigSnapshot&) const = default;
 };
 
 std::optional<ConfigSnapshot> ReadConfig(const QString& path, QString& error) {
-  constexpr qint64 kMaxConfigBytes = 1024 * 1024;
+  constexpr qint64 kMaxConfigBytes = qint64{1024} * 1024;
   const QFileInfo info(path);
   if (!info.exists() && !info.isSymLink()) {
     return ConfigSnapshot{.bytes = {}, .missing = true};
@@ -165,19 +170,22 @@ bool ServiceIsOn() {
 }
 
 QString Number(float value) {
-  char buffer[64];
-  const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
-  return QString::fromLatin1(buffer, result.ptr - buffer);
+  constexpr std::size_t kBufferSize = 64;
+  std::array<char, kBufferSize> buffer{};
+  const auto result =
+      std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+  return QString::fromLatin1(buffer.data(), result.ptr - buffer.data());
 }
 
 class SettingsDialog : public QDialog {
  public:
   SettingsDialog() {
     setWindowTitle(QStringLiteral("Facepalm Settings"));
-    resize(560, 610);
+    resize(kWindowWidth, kWindowHeight);
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(24, 24, 24, 24);
-    layout->setSpacing(12);
+    layout->setContentsMargins(kFormMargin, kFormMargin, kFormMargin,
+                               kFormMargin);
+    layout->setSpacing(kFormSpacing);
 
     auto* note = new QLabel(
         QStringLiteral("Start the daemon with --config and this file to apply "
@@ -185,12 +193,12 @@ class SettingsDialog : public QDialog {
         this);
     note->setWordWrap(true);
     layout->addWidget(note);
-    layout->addSpacing(14);
+    layout->addSpacing(kHeadingSpacing);
 
     auto* basic = new QGridLayout;
     ConfigureForm(*basic);
     fps_ = new QSpinBox(this);
-    fps_->setRange(1, 60);
+    fps_->setRange(1, kMaxFramesPerSecond);
     AddField(*basic, 0, QStringLiteral("Frames per second (1–60)"), *fps_);
     layout->addLayout(basic);
     gestures_ = new QCheckBox(QStringLiteral("Detect head gestures"), this);
@@ -258,14 +266,17 @@ class SettingsDialog : public QDialog {
     path_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
     path_label->setWordWrap(true);
     layout->addWidget(path_label);
-    layout->addSpacing(10);
+    layout->addSpacing(kPathSpacing);
     save_ = new QPushButton(QStringLiteral("Save Settings"), this);
     save_->setDefault(true);
-    save_->setMinimumSize(136, 28);
+    save_->setMinimumSize(kSaveButtonWidth, kSaveButtonHeight);
     layout->addWidget(save_, 0, Qt::AlignRight);
     connect(save_, &QPushButton::clicked, this, [this] { Save(); });
   }
 
+  // Not QDialog::open(): raises and reloads an already-open dialog instead
+  // of opening a new one.
+  // NOLINTNEXTLINE(bugprone-virtual-near-miss)
   void Open() {
     if (!isVisible()) {
       Reload();
@@ -280,6 +291,18 @@ class SettingsDialog : public QDialog {
   // the rest are looking away's and screen context's own numeric fields
   // (#35, #61 item 11, #79).
   static constexpr std::size_t kAdvancedFieldCount = 7;
+  static constexpr int kWindowWidth = 560;
+  static constexpr int kWindowHeight = 610;
+  static constexpr int kFormMargin = 24;
+  static constexpr int kFormSpacing = 12;
+  static constexpr int kHeadingSpacing = 14;
+  static constexpr int kMaxFramesPerSecond = 60;
+  static constexpr int kPathSpacing = 10;
+  static constexpr int kSaveButtonWidth = 136;
+  static constexpr int kSaveButtonHeight = 28;
+  static constexpr int kFieldFormRightMargin = 26;
+  static constexpr int kFieldFormVerticalSpacing = 8;
+  static constexpr int kFieldWidth = 110;
 
   static constexpr std::array kFieldLabels{
       "Gesture confidence (0–1)",   "Expression smallest rise (0–1)",
@@ -303,9 +326,9 @@ class SettingsDialog : public QDialog {
   };
 
   static void ConfigureForm(QGridLayout& form) {
-    form.setContentsMargins(0, 0, 26, 0);
+    form.setContentsMargins(0, 0, kFieldFormRightMargin, 0);
     form.setColumnStretch(0, 1);
-    form.setVerticalSpacing(8);
+    form.setVerticalSpacing(kFieldFormVerticalSpacing);
   }
 
   template <typename Field>
@@ -314,7 +337,7 @@ class SettingsDialog : public QDialog {
     auto* label = new QLabel(title, this);
     label->setBuddy(&field);
     field.setAccessibleName(title);
-    field.setFixedWidth(110);
+    field.setFixedWidth(kFieldWidth);
     field.setAlignment(Qt::AlignRight);
     form.addWidget(label, row, 0);
     form.addWidget(&field, row, 1);
@@ -450,7 +473,7 @@ int main(int argc, char* argv[]) {
   parser.process(app);
 
   const QIcon icon = FacepalmIcon();
-  app.setWindowIcon(icon);
+  QApplication::setWindowIcon(icon);
   SettingsDialog window;
 
   QMenu menu;
@@ -489,10 +512,10 @@ int main(int argc, char* argv[]) {
     show_power();
   });
   menu.addSeparator();
-  QAction* show = menu.addAction(QStringLiteral("Settings…"));
+  const QAction* show = menu.addAction(QStringLiteral("Settings…"));
   const auto show_window = [&window] { window.Open(); };
   QObject::connect(show, &QAction::triggered, &window, show_window);
-  QAction* quit_action = menu.addAction(QStringLiteral("Quit"));
+  const QAction* quit_action = menu.addAction(QStringLiteral("Quit"));
   QObject::connect(quit_action, &QAction::triggered, &app, &QApplication::quit);
 
   const QString socket_path = SocketPath();
@@ -501,16 +524,17 @@ int main(int argc, char* argv[]) {
     services->setText(QString::fromUtf8(ready ? kCameraReady : kCameraOffline));
   };
   refresh();
+  constexpr int kRefreshIntervalMs = 3000;
   QTimer refresh_timer;
   QObject::connect(&refresh_timer, &QTimer::timeout, &window, refresh);
-  refresh_timer.start(3000);
+  refresh_timer.start(kRefreshIntervalMs);
 
   if (!QSystemTrayIcon::isSystemTrayAvailable()) {
     show_window();
-    return app.exec();
+    return QApplication::exec();
   }
 
-  app.setQuitOnLastWindowClosed(false);
+  QApplication::setQuitOnLastWindowClosed(false);
   QSystemTrayIcon tray(icon);
   tray.setToolTip(QStringLiteral("Facepalm"));
   tray.setContextMenu(&menu);
@@ -524,5 +548,5 @@ int main(int argc, char* argv[]) {
   if (parser.isSet(settings)) {
     show_window();
   }
-  return app.exec();
+  return QApplication::exec();
 }

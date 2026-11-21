@@ -5,6 +5,84 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Add an optional calibration session, in plain text
+
+-   **Decision:** a short guided session, started with `calibrate start
+    [screens]` and stepped with `calibrate next` or ended early with
+    `calibrate cancel`, records the resting pose and, for each screen, the
+    head pose at its centre and four corners. It saves to a private file
+    (mode 0600) the daemon owns, at `UserPaths::calibration` (#37's fixed
+    per-user paths, alongside `clients` and `socket`), written to a
+    temporary file beside it and renamed over it, in a hand-rolled
+    `name = value` text format rather than JSON, since nothing else here
+    needs to parse that format back. `src/calibration.h`'s
+    `CalibrationController` is the session; `src/calibration_store.h`
+    saves and loads the file; `src/calibration_reader.h` feeds it each
+    frame's pose, as `LookAwayReader` does its detector.
+    `specs/Calibration.tla` models the lifecycle, including the camera
+    going away mid-session, which cancels it. Like every client (#89), the
+    CLI built for testing here, `calibrate_cli`, needs its own token,
+    approved with `facepalm-daemon approve calibrate`.
+-   **Why:** #36 and #35 want calibration kept optional, against the
+    low-calibration goal on #35: without it, gaze stays coarse (#36, item
+    11). The session's own protocol line, not a new top-level verb pair,
+    keeps every client (`calibrate_cli`, the eventual menu entry of item 8,
+    and MCP, which can already send any line through
+    `SocketSession.request`) talking to one place.
+-   **Rejected:** JSON for the saved profile, which would need a JSON
+    parser this codebase does not otherwise have, just to read back a file
+    only this code writes; and wiring the session into
+    `tools/daemon/main.cc` and the camera's lifecycle callbacks in the same
+    change, which belongs with item 7's daemon work landing alongside it
+    (`CalibrationController::OnCameraLost` and `OnCameraUp` are ready for
+    that wiring, covered by `NoRunningWithoutCameraTest`, but nothing calls
+    them yet).
+-   **Cost:** until item 7 wires `OnCameraLost` and `OnCameraUp` into the
+    daemon's camera lifecycle, a session only ever sees the camera as up;
+    the daemon's own `calibrate` support is likewise unwired until then,
+    so `calibrate_cli` and the protocol line have nothing to talk to on a
+    running daemon until that follow-up lands. Item 11's coarse gaze (#92,
+    landed after this entry was first written) still reads `CoarseGazeFrom`
+    exactly as it did: `src/screen_context.cc`'s rule and the `gaze` field
+    it writes are untouched. `main.cc` loads a saved profile, if any, at
+    `UserPaths::calibration`, and `ScreenContextReporter` now takes it as
+    an optional fourth constructor argument; when given one with at least
+    one screen, and a pose to judge, `Json()` adds an additive
+    `calibrated_screen` field alongside `gaze` (never replacing it) from
+    `NearestCalibratedScreen`. Whether `calibrated_screen` should instead
+    replace or refine `gaze` itself (for instance, mapping a calibrated
+    screen other than the nearest-to-resting one onto `other_screen`) is
+    #92's design to make, not this item's.
+-   **Evidence:** [#61 item 12](https://github.com/mattyv/facepalm/issues/61),
+    [#36](https://github.com/mattyv/facepalm/issues/36),
+    [#35](https://github.com/mattyv/facepalm/issues/35).
+
+## 2026-11-21: Run clang-tidy for the Linux-only sources in CI's linux job
+
+-   **Decision:** the `linux` job gets its own `clang-tidy` step, configuring
+    with the project's `-DFACEPALM_TIDY=ON` (the same flag and `.clang-tidy`
+    the `macos` job uses) once against `src/linux/*`, `test/linux/*` and the
+    Linux branches of `tools/daemon/main.cc` (with the MediaPipe C paths
+    already fetched for that job), and once with `-DFACEPALM_LINUX_TRAY=ON
+    -DBUILD_TESTING=OFF` to also reach `tools/menu/main_linux.cc`, the Linux
+    tray menu that otherwise only builds under the `debian-package` job's
+    Qt and GUI test stack. `clang-tidy` itself is installed from
+    apt.llvm.org at the major version Homebrew's `llvm` formula currently
+    resolves to (23), so a shared source that `FACEPALM_TIDY` re-checks on
+    both jobs gets the same checker on each; the comment above the `linux`
+    job says to bump that number with Homebrew's.
+-   **Why:** clang-tidy only ran on macOS, so it never saw the sources that
+    build only on Linux, against the rule that clang-tidy checks all C++ and
+    fails CI on any finding (#88).
+-   **Rejected:** scoping `CXX_CLANG_TIDY` to the Linux-only targets instead
+    of reusing `FACEPALM_TIDY`, which would have skipped re-checking the
+    sources the `macos` job already covers, at the cost of a second
+    clang-tidy wiring to keep in step with `.clang-tidy`'s checks; enabling
+    `FACEPALM_LINUX_TRAY` in the main Linux build so one configure covers
+    everything, which would have pulled dbus/xvfb/xdotool into the `linux`
+    job for a tidy pass that never runs its GUI test. Evidence:
+    [#88](https://github.com/mattyv/facepalm/issues/88).
+
 ## 2026-11-21: Report the screen context a reaction was read in
 
 -   **Decision:** every reading, when `screen_context.enabled` (default on),

@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/calibration.h"
 #include "src/feed.h"
 #include "src/feelings.h"
 
@@ -24,6 +25,10 @@ constexpr std::int64_t kLongestWaitMs = 60000;
 constexpr std::int64_t kLongestBeatMs = 10000;
 constexpr std::size_t kBeatWords = 3;
 constexpr std::size_t kFeelWords = 3;
+constexpr std::size_t kCalibrateWords = 2;
+constexpr std::size_t kCalibrateStartWithScreens = 3;
+constexpr auto kCalibrateUsage =
+    "calibrate takes start [screens], next or cancel";
 
 // The words of `line`, split at each space.
 std::vector<std::string_view> Words(std::string_view line) {
@@ -97,6 +102,33 @@ std::optional<Request> ParseFeel(const std::vector<std::string_view>& words,
   return FeelRequest{.interpretation = *id, .feeling = *feeling};
 }
 
+// The calibrate request of `words`: start (with an optional screen count),
+// next or cancel.
+std::optional<Request> ParseCalibrate(
+    const std::vector<std::string_view>& words, std::string& error) {
+  using Action = CalibrateRequest::Action;
+  if (words.size() == kCalibrateWords) {
+    if (words[1] == "start") {
+      return CalibrateRequest{.action = Action::kStart, .screens = 1};
+    }
+    if (words[1] == "next") {
+      return CalibrateRequest{.action = Action::kNext};
+    }
+    if (words[1] == "cancel") {
+      return CalibrateRequest{.action = Action::kCancel};
+    }
+  } else if (words.size() == kCalibrateStartWithScreens &&
+             words[1] == "start") {
+    const std::optional<std::int64_t> screens = Number(words[2]);
+    if (screens && *screens >= 1 && std::in_range<int>(*screens)) {
+      return CalibrateRequest{.action = Action::kStart,
+                              .screens = static_cast<int>(*screens)};
+    }
+  }
+  error = kCalibrateUsage;
+  return std::nullopt;
+}
+
 }  // namespace
 
 std::string Quoted(std::string_view text) {
@@ -162,6 +194,9 @@ std::optional<Request> Parse(std::string_view line, std::string& error) {
     }
     return ResetRequest{};
   }
+  if (verb == "calibrate") {
+    return ParseCalibrate(words, error);
+  }
   error = "unknown request";
   return std::nullopt;
 }
@@ -202,6 +237,23 @@ std::string DeliveryJson(const Feed::Delivery& delivery) {
 
 std::string ErrorJson(std::string_view message) {
   return R"({"error":)" + Quoted(message) + "}";
+}
+
+std::string CalibrationStatusJson(const CalibrationController::Status& status) {
+  if (!status.running) {
+    return status.done ? R"({"ok":true,"calibration":{"state":"done"}})"
+                       : R"({"ok":true,"calibration":{"state":"idle"}})";
+  }
+  std::string json = R"({"ok":true,"calibration":{"state":"running","index":)" +
+                     std::to_string(status.index) + R"(,"total":)" +
+                     std::to_string(status.total);
+  if (status.resting_step) {
+    json += R"(,"step":"resting"})";
+  } else {
+    json += R"(,"step":"screen","screen":)" + std::to_string(status.screen) +
+            R"(,"point":)" + Quoted(Name(status.point)) + "}";
+  }
+  return json + "}";
 }
 
 }  // namespace facepalm::protocol
