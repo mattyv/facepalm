@@ -34,9 +34,11 @@ class GestureReportGate {
   // Feeds one classified frame's answer at `timestamp_ms` (must increase
   // from call to call), and returns the gesture to report, or
   // head_gesture::Gesture::kNone when nothing should be reported now. Yaw
-  // and the yaw at the start of the model window are radians. A turn is
-  // suppressed until the face returns within ten degrees of the estimated
-  // pre-turn yaw and the model reads none for 750 ms (#34).
+  // and the yaw at the start of the model window are radians. After a turn,
+  // later turns are suppressed until the model has read none for 750 ms with
+  // the face back within ten degrees of the estimated pre-turn yaw (#34), or
+  // for 2,000 ms with the face within ten degrees of wherever it settled
+  // (#62): a new posture becomes the origin, so the suppression is bounded.
   head_gesture::Gesture Update(head_gesture::Gesture gesture,
                                std::int64_t timestamp_ms, TurnPose pose);
   head_gesture::Gesture Update(head_gesture::Gesture gesture,
@@ -55,6 +57,9 @@ class GestureReportGate {
   bool turn_latched_ = false;
   bool turn_settling_ = false;
   std::int64_t turn_settling_ms_ = 0;
+  bool turn_holding_ = false;
+  std::int64_t turn_hold_ms_ = 0;
+  double turn_hold_yaw_ = 0;
   double turn_origin_ = 0;
   double candidate_origin_ = 0;
   bool episode_open_ = false;
