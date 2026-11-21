@@ -20,6 +20,7 @@ constexpr float kMostExpressionsPoseRange = 180;
 constexpr int kMostExpressionsSettleMs = 5000;
 constexpr float kMostLookingAwayDegrees = 180;
 constexpr int kMostLookingAwayHoldMs = 10000;
+constexpr float kMostScreenContextOtherScreenDegrees = 180;
 
 // `text` without spaces or tabs at either end.
 std::string_view Trim(std::string_view text) {
@@ -72,7 +73,8 @@ std::optional<std::string> SetFramesPerSecond(std::string_view value,
 
 // Sets the on/off setting `setting.name` names from `setting.value`, or
 // returns why it cannot. `setting.name` is one of head_pose.enabled,
-// gestures.enabled, expressions.enabled or looking_away.enabled, as `Set`
+// gestures.enabled, expressions.enabled, looking_away.enabled,
+// screen_context.enabled or screen_context.window_titles_enabled, as `Set`
 // has already checked.
 std::optional<std::string> SetSwitch(const Setting& setting, Config& config) {
   const std::optional<bool> enabled = Boolean(setting.value);
@@ -85,6 +87,10 @@ std::optional<std::string> SetSwitch(const Setting& setting, Config& config) {
     config.gestures_enabled = *enabled;
   } else if (setting.name == "looking_away.enabled") {
     config.looking_away_enabled = *enabled;
+  } else if (setting.name == "screen_context.enabled") {
+    config.screen_context_enabled = *enabled;
+  } else if (setting.name == "screen_context.window_titles_enabled") {
+    config.screen_context_window_titles_enabled = *enabled;
   } else {
     config.expressions_enabled = *enabled;
   }
@@ -202,6 +208,20 @@ std::optional<std::string> SetLookingAwayHoldMs(std::string_view value,
   return std::nullopt;
 }
 
+// Sets screen_context.other_screen_degrees from `value`, or returns why it
+// cannot.
+std::optional<std::string> SetScreenContextOtherScreenDegrees(
+    std::string_view value, Config& config) {
+  const std::optional<float> degrees = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!degrees || std::isnan(*degrees) || *degrees < 0 ||
+      *degrees > kMostScreenContextOtherScreenDegrees) {
+    return "expected a number from 0 to 180";
+  }
+  config.screen_context_other_screen_degrees = *degrees;
+  return std::nullopt;
+}
+
 // Sets the setting in `config`, or returns why it cannot.
 std::optional<std::string> Set(const Setting& setting, Config& config) {
   const std::string_view name = setting.name;
@@ -210,7 +230,9 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
     return SetFramesPerSecond(value, config);
   }
   if (name == "head_pose.enabled" || name == "gestures.enabled" ||
-      name == "expressions.enabled" || name == "looking_away.enabled") {
+      name == "expressions.enabled" || name == "looking_away.enabled" ||
+      name == "screen_context.enabled" ||
+      name == "screen_context.window_titles_enabled") {
     return SetSwitch(setting, config);
   }
   if (name == "gestures.confidence_threshold") {
@@ -239,6 +261,9 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   }
   if (name == "looking_away.hold_ms") {
     return SetLookingAwayHoldMs(value, config);
+  }
+  if (name == "screen_context.other_screen_degrees") {
+    return SetScreenContextOtherScreenDegrees(value, config);
   }
   return "unknown setting " + std::string(name);
 }

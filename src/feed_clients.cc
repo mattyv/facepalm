@@ -2,14 +2,17 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
 namespace facepalm {
 
-FeedClients::FeedClients(React react, Clock now)
-    : react_(std::move(react)), now_(std::move(now)) {}
+FeedClients::FeedClients(React react, Clock now, ContextProvider context)
+    : react_(std::move(react)),
+      now_(std::move(now)),
+      context_(std::move(context)) {}
 
 // specs/CameraLifecycle.tla's Emit reaches the one subscription the daemon
 // holds for every client, so each reaction is one reading.
@@ -32,7 +35,7 @@ void FeedClients::Deliver(const ClientId& /*client*/,
   }
   react_(
       std::string(gesture ? "Gesture: " : "Expression: ") + std::string(name),
-      reaction, now_());
+      reaction, now_(), context_ ? context_() : std::nullopt);
 }
 
 std::int64_t UnixMilliseconds() {

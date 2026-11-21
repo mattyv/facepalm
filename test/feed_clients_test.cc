@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "gmock/gmock.h"
@@ -10,24 +11,30 @@
 namespace facepalm {
 namespace {
 
+using ::testing::Eq;
 using ::testing::Ge;
 using ::testing::Le;
+using ::testing::Optional;
 
 class FeedClientsTest : public ::testing::Test {
  protected:
-  ::testing::MockFunction<void(std::string, std::string, std::int64_t)> react_;
+  ::testing::MockFunction<void(std::string, std::string, std::int64_t,
+                               std::optional<std::string>)>
+      react_;
   FeedClients clients_{react_.AsStdFunction(), [] { return 1234; }};
 };
 
 TEST_F(FeedClientsTest, AGestureIsAReading) {
-  EXPECT_CALL(react_, Call("Gesture: nod", R"({"gesture":"nod"})", 1234));
+  EXPECT_CALL(react_, Call("Gesture: nod", R"({"gesture":"nod"})", 1234,
+                           Eq(std::nullopt)));
 
   clients_.Deliver("feed", R"({"gesture":"nod"})");
 }
 
 TEST_F(FeedClientsTest, AnExpressionIsAReading) {
-  EXPECT_CALL(react_, Call("Expression: brows_down",
-                           R"({"expression":"brows_down"})", 1234));
+  EXPECT_CALL(react_,
+              Call("Expression: brows_down", R"({"expression":"brows_down"})",
+                   1234, Eq(std::nullopt)));
 
   clients_.Deliver("feed", R"({"expression":"brows_down"})");
 }
@@ -41,6 +48,36 @@ TEST_F(FeedClientsTest, AnythingElseIsNot) {
         R"({"gesture":"})", R"({"gesture":""})", R"({"looking":"away"})"}) {
     clients_.Deliver("feed", reaction);
   }
+}
+
+// Screen context (#61 item 11): FeedClients does not know what a context
+// is, only that something can be asked for one.
+TEST(ContextProviderTest, AskedForEachReadingWhenGiven) {
+  ::testing::MockFunction<void(std::string, std::string, std::int64_t,
+                               std::optional<std::string>)>
+      react;
+  FeedClients clients(
+      react.AsStdFunction(), [] { return 1234; },
+      [] {
+        return std::make_optional(std::string(R"({"gaze":"this_screen"})"));
+      });
+  EXPECT_CALL(react, Call("Gesture: nod", R"({"gesture":"nod"})", 1234,
+                          Optional(Eq(R"({"gaze":"this_screen"})"))));
+
+  clients.Deliver("feed", R"({"gesture":"nod"})");
+}
+
+TEST(ContextProviderTest, ItsOwnNulloptPassesThrough) {
+  ::testing::MockFunction<void(std::string, std::string, std::int64_t,
+                               std::optional<std::string>)>
+      react;
+  FeedClients clients(
+      react.AsStdFunction(), [] { return 1234; },
+      [] { return std::optional<std::string>(std::nullopt); });
+  EXPECT_CALL(react, Call("Gesture: nod", R"({"gesture":"nod"})", 1234,
+                          Eq(std::nullopt)));
+
+  clients.Deliver("feed", R"({"gesture":"nod"})");
 }
 
 TEST(UnixMillisecondsTest, ReadsTheSystemClock) {
