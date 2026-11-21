@@ -5,6 +5,17 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Remove only facepalm's own socket at the socket path
+
+At startup, facepalm still replaces a socket that nothing answers on, so it
+starts again after a crash without help. It now refuses a path that holds
+anything other than a socket, and leaves it alone. On close, it removes the
+socket file only if it is still the one it bound, so it cannot delete a newer
+facepalm's socket. Rejected: never removing an existing socket (a draft on
+`fix/delivery-audit`), because a daemon started from the menu after a crash
+could not recover without someone deleting the file by hand. Evidence:
+[#37](https://github.com/mattyv/facepalm/issues/37).
+
 ## 2026-11-20: Use the macOS settings layout on Linux
 
 Use Qt Widgets to present the same detection controls and field order as the

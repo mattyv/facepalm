@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <memory>
 #include <optional>
@@ -236,6 +237,31 @@ TEST_F(UnixSocketTest, ASocketFileLeftBehindIsReplaced) {
 
   EXPECT_THAT(listener, NotNull());
   EXPECT_GE(Dial(path_), 0);
+}
+
+TEST_F(UnixSocketTest, AFileThatIsNotASocketIsKept) {
+  {
+    std::ofstream file(path_);
+    file << "not a socket";
+  }
+  std::string error;
+
+  EXPECT_THAT(UnixListener::Create(path_, error), IsNull());
+  EXPECT_THAT(error, HasSubstr("is not a socket"));
+  std::ifstream kept(path_);
+  std::string contents;
+  std::getline(kept, contents);
+  EXPECT_THAT(contents, Eq("not a socket"));
+}
+
+TEST_F(UnixSocketTest, CloseLeavesASocketThatReplacedIt) {
+  auto first = Listen();
+  ASSERT_THAT(unlink(path_.c_str()), Eq(0));
+  const auto second = Listen();  // Another facepalm now owns the path.
+
+  first->Close();
+
+  EXPECT_GE(Dial(path_), 0);  // The second still listens.
 }
 
 TEST_F(UnixSocketTest, APathTooLongIsRefused) {
