@@ -38,10 +38,17 @@ install -D -m 0644 "$MODEL" \
 
 ## Run
 
-Approve the MCP adapter once, then run the daemon in a terminal to grant
-consent for that run. `approve` writes a new random token to
-`~/.local/state/facepalm/clients/mcp`, private to your user, and the daemon
-listens at `service.sock` in the same folder. The camera opens when an
+Choose **Turn On Facepalm…** from the tray to give your consent and start the
+daemon as a systemd user unit, `~/.config/systemd/user/facepalm.service`,
+which runs it again if it fails and at each login until you choose **Turn
+Off Facepalm**. The tray looks for the daemon and its model in its own
+install, then in `~/.local/facepalm`, where the commands above put them.
+Turning on also approves the MCP adapter.
+
+To run it by hand instead, approve the MCP adapter once, then run the daemon
+in a terminal to grant consent for that run. `approve` writes a new random
+token to `~/.local/state/facepalm/clients/mcp`, private to your user, and the
+daemon listens at `service.sock` in the same folder. The camera opens when an
 approved client requests reactions and closes after the last one
 disconnects. Start a new MCP session after starting the daemon if an
 earlier connection failed.
