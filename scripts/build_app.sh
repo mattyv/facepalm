@@ -3,7 +3,7 @@
 set -euo pipefail
 
 MCP_FILES=(main.js package.json server.js session.js hook-broker.js)
-MCP_FILES+=(feeling-widget.js feeling-widget.html)
+MCP_FILES+=(feeling-widget.js feeling-widget.html feeling-elicitation.js)
 readonly MCP_FILES
 
 fail() {
