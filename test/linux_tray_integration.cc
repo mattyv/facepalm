@@ -223,6 +223,122 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
   return true;
 }
 
+// #98: a second launch while the first still runs must not open a second
+// tray icon, and its --settings should raise the first's Settings window
+// instead (specs/SingleInstance.tla's TryLockHeld and Forward).
+bool RunSecondLaunch(const QString& executable) {
+  QTemporaryDir runtime;
+  QTemporaryDir config_home;
+  if (!runtime.isValid() || !config_home.isValid()) return false;
+  auto bus = QDBusConnection::sessionBus();
+  Watcher watcher;
+  if (!bus.registerService("org.kde.StatusNotifierWatcher") ||
+      !bus.registerObject("/StatusNotifierWatcher", &watcher,
+                          QDBusConnection::ExportAllSlots |
+                              QDBusConnection::ExportAllSignals |
+                              QDBusConnection::ExportAllProperties)) {
+    std::cerr << "Could not register test watcher\n";
+    return false;
+  }
+  auto environment = QProcessEnvironment::systemEnvironment();
+  // No server ever listens on this socket, so both launches see the
+  // camera as offline, deterministically; each gets its own isolated
+  // config so neither touches a real one.
+  environment.insert("FACEPALM_SOCKET", runtime.filePath("service.sock"));
+  environment.insert("FACEPALM_MENU_LOCK", runtime.filePath("menu.lock"));
+  environment.insert("FACEPALM_MENU_SOCKET", runtime.filePath("menu.sock"));
+  environment.insert("XDG_CONFIG_HOME", config_home.path());
+
+  QProcess first;
+  first.setProcessChannelMode(QProcess::ForwardedChannels);
+  first.setProcessEnvironment(environment);
+  first.start(executable);
+  if (!first.waitForStarted(kTimeoutMs) ||
+      !WaitUntil([&] { return !watcher.service().isEmpty(); })) {
+    std::cerr << "First instance did not register a StatusNotifierItem\n";
+    first.kill();
+    first.waitForFinished(kTimeoutMs);
+    return false;
+  }
+
+  QProcess second;
+  second.setProcessChannelMode(QProcess::ForwardedChannels);
+  second.setProcessEnvironment(environment);
+  second.start(executable, {"--settings"});
+  const bool second_exited =
+      second.waitForStarted(kTimeoutMs) &&
+      WaitUntil([&] { return second.state() == QProcess::NotRunning; }) &&
+      second.exitStatus() == QProcess::NormalExit && second.exitCode() == 0;
+  if (!second_exited) {
+    std::cerr << "Second launch did not hand off and exit cleanly\n";
+    first.kill();
+    first.waitForFinished(kTimeoutMs);
+    second.kill();
+    second.waitForFinished(kTimeoutMs);
+    return false;
+  }
+  if (watcher.registeredItems().size() != 1) {
+    std::cerr << "A second launch opened its own tray icon\n";
+    first.kill();
+    first.waitForFinished(kTimeoutMs);
+    return false;
+  }
+
+  const bool settings_shown = WaitUntil([&] {
+    QProcess search;
+    search.start("xdotool",
+                 {"search", "--onlyvisible", "--name", "^Facepalm Settings$"});
+    return search.waitForFinished(kTimeoutMs) && search.exitCode() == 0;
+  });
+  if (!settings_shown) {
+    std::cerr << "The second launch's --settings did not raise the first "
+                 "instance's window\n";
+    first.kill();
+    first.waitForFinished(kTimeoutMs);
+    return false;
+  }
+
+  QDBusInterface properties(watcher.service(), "/StatusNotifierItem",
+                            "org.freedesktop.DBus.Properties", bus);
+  const auto menu =
+      Call(properties, "Get", {"org.kde.StatusNotifierItem", "Menu"});
+  if (menu.type() == QDBusMessage::ErrorMessage || menu.arguments().isEmpty()) {
+    std::cerr << "Tray menu unavailable while quitting the first instance\n";
+    first.kill();
+    first.waitForFinished(kTimeoutMs);
+    return false;
+  }
+  const QString menu_path =
+      qvariant_cast<QDBusObjectPath>(
+          qvariant_cast<QDBusVariant>(menu.arguments().first()).variant())
+          .path();
+  QDBusInterface menu_interface(watcher.service(), menu_path,
+                                "com.canonical.dbusmenu", bus);
+  const auto layout = Call(menu_interface, "GetLayout", {0, -1, QStringList{}});
+  MenuScan scan;
+  scan.expected_camera = "Camera service is offline.";
+  if (layout.type() != QDBusMessage::ErrorMessage &&
+      layout.arguments().size() >= 2) {
+    ScanMenu(qvariant_cast<QDBusArgument>(layout.arguments().at(1)), scan);
+  }
+  const bool quit_ok =
+      scan.quit >= 0 &&
+      Call(menu_interface, "Event",
+           {scan.quit, "clicked", QVariant::fromValue(QDBusVariant(0)),
+            QVariant::fromValue(uint{0})})
+              .type() != QDBusMessage::ErrorMessage &&
+      WaitUntil([&] { return first.state() == QProcess::NotRunning; }) &&
+      first.exitStatus() == QProcess::NormalExit && first.exitCode() == 0;
+  if (!quit_ok) {
+    std::cerr << "First instance did not quit cleanly\n";
+    first.kill();
+    first.waitForFinished(kTimeoutMs);
+  }
+  bus.unregisterObject("/StatusNotifierWatcher");
+  bus.unregisterService("org.kde.StatusNotifierWatcher");
+  return quit_ok;
+}
+
 bool RunWithoutWatcher(const QString& executable, bool close_window) {
   QTemporaryDir config_home;
   if (!config_home.isValid() || !QDir(config_home.path()).mkpath("facepalm")) {
@@ -321,6 +437,7 @@ int main(int argc, char** argv) {
   const QString executable = app.arguments().at(1);
   return RunWithWatcher(executable, false) &&
                  RunWithWatcher(executable, true) &&
+                 RunSecondLaunch(executable) &&
                  RunWithoutWatcher(executable, false) &&
                  RunWithoutWatcher(executable, true)
              ? 0

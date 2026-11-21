@@ -63,6 +63,7 @@ facepalm_unit(daemon_options)
 facepalm_unit(feed_clients)
 facepalm_unit(user_paths)
 facepalm_unit(user_service)
+facepalm_unit(single_instance)
 facepalm_unit(camera_controller)
 facepalm_unit(config)
 facepalm_unit(expressions)
@@ -174,7 +175,8 @@ target_link_libraries(calibrate_cli_tool PRIVATE calibrate_cli client_token user
 install(TARGETS gesture_replay_cli calibrate_cli_tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
 install(FILES LICENSE THIRDPARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm COMPONENT Runtime)
 install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
-  mcp/feeling-widget.js mcp/feeling-widget.html mcp/package.json mcp/package-lock.json
+  mcp/feeling-widget.js mcp/feeling-widget.html mcp/feeling-elicitation.js
+  mcp/package.json mcp/package-lock.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm/mcp COMPONENT MCP)
 
 if(FACEPALM_LINUX_TRAY)
@@ -186,7 +188,7 @@ if(FACEPALM_LINUX_TRAY)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths Qt6::Widgets Qt6::Network)
+    client_token user_paths single_instance Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -202,6 +204,7 @@ if(FACEPALM_LINUX_TRAY)
     find_program(DBUS_RUN_SESSION NAMES dbus-run-session REQUIRED)
     find_program(XVFB_RUN NAMES xvfb-run REQUIRED)
     find_program(XDOTOOL NAMES xdotool REQUIRED)
+    find_program(XDPYINFO NAMES xdpyinfo REQUIRED)
     # Use the same sibling share directory that the installed tray searches.
     set_target_properties(facepalm_menu PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
     configure_file(tools/menu/linux/facepalm.png
@@ -210,8 +213,12 @@ if(FACEPALM_LINUX_TRAY)
     set_target_properties(linux_tray_integration PROPERTIES AUTOMOC ON)
     add_dependencies(linux_tray_integration facepalm_menu)
     target_link_libraries(linux_tray_integration PRIVATE Qt6::Core Qt6::DBus Qt6::Network Qt6::Widgets)
+    # xvfb-run's own readiness check only waits for the server's lock file
+    # to appear, which can be ready before the server accepts clients, so
+    # wait_for_display.sh polls xdpyinfo first (#101).
     add_test(NAME linux_tray_integration COMMAND ${DBUS_RUN_SESSION} --
-      ${XVFB_RUN} -a $<TARGET_FILE:linux_tray_integration> $<TARGET_FILE:facepalm_menu>)
+      ${XVFB_RUN} -a "${PROJECT_SOURCE_DIR}/scripts/wait_for_display.sh"
+      $<TARGET_FILE:linux_tray_integration> $<TARGET_FILE:facepalm_menu>)
     set_tests_properties(linux_tray_integration PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=xcb" TIMEOUT 40)
   endif()
 

@@ -17,8 +17,8 @@ a line saying which entry replaced it.
     that MCP, AI Pair or any other client reaches: that service has no
     verb for a preview, and never will, so an image can leave the daemon
     only by a process on the same machine, as the same user, directly
-    reading the file (the same boundary #89's client tokens and #94's
-    camera-in-use indicator already accept: privacy to the service's
+    reading the file (the same boundary #89's client tokens and #61 item
+    8's camera-in-use indicator already accept: privacy to the service's
     clients, not to every other program the person's own account could
     run). Nothing is encoded or written unless both the camera is open
     and the menu has asked for it by creating `UserPaths::preview_request`
@@ -36,8 +36,8 @@ a line saying which entry replaced it.
     the local menu app over the user-only socket, never to MCP/agents,
     explicitly started by the user, with an indicator while it runs." A
     file in the already-private per-user directory needs no new socket
-    or token to reach only the menu, the same reasoning #94 used for the
-    status indicator.
+    or token to reach only the menu, the same reasoning #61 item 8's
+    status indicator used.
 -   **Rejected:** Codex's `fix/delivery-audit` design
     (`8ea3d8b`/`ada5311`/`5757ad1`/`97af5ac`), which served live frames
     over a second socket (`PreviewTransport.tla`) with its own token and
@@ -61,6 +61,87 @@ a line saying which entry replaced it.
     [#37](https://github.com/mattyv/facepalm/issues/37),
     [#36](https://github.com/mattyv/facepalm/issues/36),
     [#108](https://github.com/mattyv/facepalm/issues/108).
+
+## 2026-11-21: A QLockFile claim plus a QLocalServer handoff for the Linux tray's single instance
+
+-   **Decision:** `tools/menu/main_linux.cc` claims a `QLockFile` at
+    `~/.local/state/facepalm/menu.lock` (next to the daemon's own socket,
+    `src/user_paths.h`) right after constructing `QApplication` and before
+    building any window or tray icon. A launch that wins the claim becomes
+    the tray and listens on a `QLocalServer` at
+    `~/.local/state/facepalm/menu.sock` for later launches; one that loses
+    the claim asks that server to raise the Settings window only when it
+    was itself run with `--settings`, then exits either way, without ever
+    creating a `QSystemTrayIcon`. The decision of which of those two things
+    to do, and the retry when a handoff's owner quits or crashes first
+    (`ForwardLost`, bounded by `kMaxSingleInstanceAttempts`), is the pure
+    `ClaimSingleInstance` in `src/single_instance.{h,cc}`, tested with a
+    mock `SingleInstanceIo`; the real `QLockFile`/`QLocalServer` calls are
+    `QtSingleInstanceIo`, wiring only, in `main_linux.cc` itself. The
+    lifecycle is specified first in `specs/SingleInstance.tla`, following
+    `specs/UserService.tla`'s shape (Guard constants mutated to prove each
+    invariant bites): `QLockFile::tryLock()` is modeled as one atomic step
+    (`GuardAtomicClaim`) that also reclaims a lock left by a dead owner
+    (`GuardStaleReclaimed`), since Qt documents it doing both.
+-   **Why:** #98: launching `facepalm-menu --settings` while the tray
+    already runs opened a duplicate tray icon and a duplicate Settings
+    window, because `main_linux.cc` had no single-instance guard at all.
+    `QLockFile` was chosen over a bare `QLocalServer`-only scheme (try to
+    connect, and if that fails, listen) because the latter is a
+    check-then-act race: two launches can both fail to connect to a dead
+    or not-yet-started server and then both successfully `listen()`,
+    which TLC's `GuardAtomicClaim = FALSE` mutation reproduces as two
+    simultaneous primaries. `QLockFile`'s `tryLock()` is one OS-level
+    atomic call with its own stale-owner detection (by checking whether
+    the PID that holds it is still running), which is exactly
+    `GuardStaleReclaimed` and answers the issue's worry that a crashed
+    tray would wedge every later launch. The `QLocalServer` is kept only
+    for the one thing `QLockFile` cannot do: carry the `--settings`
+    request across to the instance that already holds the claim.
+-   **Rejected:** a `QLocalServer`-only scheme, for the TOCTOU race above;
+    reusing the daemon's own `service.sock` or `src/user_paths.h`'s
+    `UserPaths` for the menu's lock and forwarding socket, which would
+    tie an unrelated client-process concern to the daemon's own paths
+    (the existing `SocketPath()` in `main_linux.cc` already computes the
+    daemon's socket path locally rather than through `UserPaths`, so the
+    menu's own single-instance paths follow that same local convention);
+    a plain PID file, which does not give a crash-safe claim without
+    re-implementing what `QLockFile` already does, and gives no path for
+    forwarding a Settings request at all. Evidence:
+    [#98](https://github.com/mattyv/facepalm/issues/98).
+
+## 2026-11-21: "Pick the feeling" asks through MCP elicitation where there is no card
+
+-   **Decision:** `ask_feeling` (`mcp/feeling-elicitation.js`) asks the same
+    "How were you feeling just then?" question as `show_feeling_card` (#61
+    item 5), through MCP elicitation instead of an inline widget, for a
+    host that supports elicitation but not MCP Apps, such as the Claude
+    Code terminal. It takes `id`, `feeling` and `feelings` exactly as
+    `wait_for_reaction` returns them, requests one form field (a `string`
+    enum of `feelings`, `enumNames` the same plain words the card's buttons
+    use, and `default` set to Facepalm's own read), and on an accepted
+    pick sends it on itself as `feel <id> <feeling>`, the same request
+    `tell_feeling` sends. A decline, a cancel, or a host that refuses to
+    elicit at all (including a pick outside the requested schema, which
+    the SDK's own validation of an "accept" response catches before this
+    tool sees it) is reported without an error and without sending
+    anything. The `/facepalm:feel` skill calls it when invoked with no
+    arguments, using the most recent beat's interpretation from the
+    conversation, rather than requiring the person to type an
+    interpretation ID.
+-   **Why:** #61 item 6 asks for the same question where a host cannot
+    render an inline card; MCP elicitation is the Claude Code terminal's
+    way of showing a person a form (supported since v2.1.76).
+-   **Rejected:** a tool that only returns the person's pick and leaves the
+    caller to call `tell_feeling` separately: `show_feeling_card`'s own
+    card sends `tell_feeling` itself, through its script, and this keeps
+    the two paths to the same place symmetric. Re-validating the picked
+    feeling against `feelings` after elicitInput returns, which this work
+    found unreachable: an accepted response outside the requested schema
+    throws from elicitInput itself, so a second check never saw a bad
+    value in any test that could reach it.
+-   **Evidence:** [#61](https://github.com/mattyv/facepalm/issues/61) item
+    6, [#36](https://github.com/mattyv/ai-pair/issues/36).
 
 ## 2026-11-21: "Pick the feeling" renders as an MCP Apps card, with a text fallback
 

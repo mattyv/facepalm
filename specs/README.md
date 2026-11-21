@@ -41,6 +41,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
+| `SingleInstance.cfg` | two launches, each free to run with or without `--settings` | holds, with `LaunchSettles` and `RequestServed` | 77 |
 | `UserService.cfg` | the menu, the service manager, one daemon and a session that may log out and in | holds, with `TurnOffStops` and `OnRuns` | 15 |
 | `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
 
@@ -869,6 +870,60 @@ send (`GuardOwner`), and shutdown cannot abandon a dispatched native read
 (`GuardRetire`). Each disabled guard violates its corresponding invariant.
 The socket and integration tests cover busy sessions, unacknowledged deliveries,
 disconnects, and the shared cursor. The model covers safety ordering only.
+
+## `SingleInstance`: the Linux tray's single-instance guard
+
+Models #98's fix, as `tools/menu/main_linux.cc` implements it through
+`src/single_instance.h`: launching facepalm-menu while one already runs must
+not open a second tray icon. A launch claims a lock (a `QLockFile` under the
+user's state directory, `src/user_paths.h`) before it creates a window; one
+that finds it already held asks the running instance, over a
+`QLocalServer`/`QLocalSocket`, to raise its Settings window when it was asked
+for one itself (`--settings`), otherwise it exits without starting a
+redundant tray. `QLockFile::tryLock()` is one atomic call, so no other launch
+can see the lock as free in the moment between seeing that and claiming it,
+and it reclaims a lock left by a process that has since died rather than
+wedging every later launch.
+
+`SingleInstance.cfg` checks two launches, each free to run with or without
+`--settings`, over 77 states, with no bound on retries after a lost handoff.
+
+| Property | What it says | Test |
+|---|---|---|
+| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
+| `AtMostOnePrimary` | At most one launch ever holds the tray's claim at a time. | `NoInstanceClaimsTheLockAndBecomesPrimary` and `ALostHandoffRetriesAndClaimsTheLock` in `test/single_instance_test.cc`; `RunWithWatcher` and `RunSecondLaunch` in `test/linux_tray_integration.cc` (one `StatusNotifierItem` registered) |
+| `LockMatchesPrimary` | The lock names the live primary, and only it. | Covered by the same tests as `AtMostOnePrimary`: a mock that let two callers both win `TryLock` would fail them |
+| `LaunchSettles` | Liveness: every launch settles, either as the tray or handed off to one. | Every `ClaimSingleInstanceTest` in `test/single_instance_test.cc` returns a role; `RunSecondLaunch` (the second process exits) |
+| `RequestServed` | Liveness, and something must happen: a launch that asked for Settings eventually gets it shown. | `AnInstanceWithSettingsForwardsToTheRunningOne`, `ALostHandoffRetriesAndClaimsTheLock`, `ALostHandoffRetriesAndForwardsToTheNextOwner`; `RunSecondLaunch` (the first instance's window is raised) |
+
+The code bounds a lost handoff's retries at `kMaxSingleInstanceAttempts`,
+which the model leaves unbounded (fairness alone proves it settles); when a
+handoff keeps losing its owner past that bound, `ClaimSingleInstance` gives
+up and exits without having shown anything, which `GivesUpAfterRepeatedLost
+Handoffs` covers and the model does not need to, since it is a finite patience
+the code chose, not a correctness requirement.
+
+| Mutation | Broke |
+|---|---|
+| `GuardAtomicClaim = FALSE`: a non-atomic probe splits the lock's check and claim into two steps | `AtMostOnePrimary` and `LockMatchesPrimary`, 7 states: two launches both observe the lock free and both claim it |
+| `GuardStaleReclaimed = FALSE`: a dead owner's lock can never be reclaimed | `LaunchSettles` and `RequestServed`: the launch after a crash is wedged in `"trying"` forever |
+| `GuardForwardOnSettings = FALSE`: a launch that wants Settings never asks the running instance | `RequestServed`: it exits having never had Settings shown |
+| No fairness on the code's own steps | `LaunchSettles` and `RequestServed`: a launch can stay `"trying"` forever even with the lock free |
+
+The same mutations, made to the code, fail the tests that stand for the
+properties they break:
+
+| Mutation to `ClaimSingleInstance` | Fails |
+|---|---|
+| Returns `kPrimary` without calling `TryLock` | `NoInstanceClaimsTheLockAndBecomesPrimary` (mock `.Times` expectations go unmet) |
+| Never calls `RequestSettings` when `wants_settings` is true | `AnInstanceWithSettingsForwardsToTheRunningOne`, `ALostHandoffRetriesAndForwardsToTheNextOwner` |
+| Does not retry after `RequestSettings` returns false | `ALostHandoffRetriesAndClaimsTheLock`, `ALostHandoffRetriesAndForwardsToTheNextOwner` |
+| Retries without bound | `GivesUpAfterRepeatedLostHandoffs` (the mock's `.Times(kMaxSingleInstanceAttempts)` expectation is exceeded) |
+
+The model does not cover `QLockFile`'s or `QLocalServer`'s own behavior, nor
+what happens when the state directory itself cannot be created; only a run
+on a real Linux desktop, through `test/linux_tray_integration.cc`'s
+`RunSecondLaunch`, shows the real tray icon and Settings window.
 
 ## `Calibration`: an optional calibration session
 

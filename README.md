@@ -250,7 +250,10 @@ and expression detection, and advanced tuning. Choose **Settings…** from the
 tray to reopen the form. **Turn On Facepalm…** in the tray, as in the macOS
 menu, gives consent and starts the camera daemon as a systemd user service
 with the saved settings; **Turn Off Facepalm** stops it. The tray also shows
-local camera service readiness and offline replay availability.
+local camera service readiness and offline replay availability. Only one
+tray runs at a time: choosing **Facepalm** again, which runs
+`facepalm-menu --settings`, while one is already running reopens its
+Settings form instead of opening a second tray icon (#98).
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 
@@ -325,6 +328,14 @@ click is refused. A host without MCP Apps gets the tool's text instead, with
 the same `id`, `feeling` and `feelings` to act on directly. See [local macOS
 app staging](docs/local-app.md) for the Claude Desktop configuration that
 renders the card.
+
+Where the host cannot render a widget but supports MCP elicitation, such as
+the Claude Code terminal, `ask_feeling` asks the same question as a form: one
+field, an enum of `feelings` with the same plain-word names, Facepalm's own
+read as the default. An accepted pick is sent on as `tell_feeling` already
+is; a decline, a cancel, or a host that refuses to elicit is reported without
+an error. For Claude Code, `/facepalm:feel` calls it with the most recent
+beat's interpretation when given no arguments.
 
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the
