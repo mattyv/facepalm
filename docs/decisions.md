@@ -5,6 +5,54 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: A QLockFile claim plus a QLocalServer handoff for the Linux tray's single instance
+
+-   **Decision:** `tools/menu/main_linux.cc` claims a `QLockFile` at
+    `~/.local/state/facepalm/menu.lock` (next to the daemon's own socket,
+    `src/user_paths.h`) right after constructing `QApplication` and before
+    building any window or tray icon. A launch that wins the claim becomes
+    the tray and listens on a `QLocalServer` at
+    `~/.local/state/facepalm/menu.sock` for later launches; one that loses
+    the claim asks that server to raise the Settings window only when it
+    was itself run with `--settings`, then exits either way, without ever
+    creating a `QSystemTrayIcon`. The decision of which of those two things
+    to do, and the retry when a handoff's owner quits or crashes first
+    (`ForwardLost`, bounded by `kMaxSingleInstanceAttempts`), is the pure
+    `ClaimSingleInstance` in `src/single_instance.{h,cc}`, tested with a
+    mock `SingleInstanceIo`; the real `QLockFile`/`QLocalServer` calls are
+    `QtSingleInstanceIo`, wiring only, in `main_linux.cc` itself. The
+    lifecycle is specified first in `specs/SingleInstance.tla`, following
+    `specs/UserService.tla`'s shape (Guard constants mutated to prove each
+    invariant bites): `QLockFile::tryLock()` is modeled as one atomic step
+    (`GuardAtomicClaim`) that also reclaims a lock left by a dead owner
+    (`GuardStaleReclaimed`), since Qt documents it doing both.
+-   **Why:** #98: launching `facepalm-menu --settings` while the tray
+    already runs opened a duplicate tray icon and a duplicate Settings
+    window, because `main_linux.cc` had no single-instance guard at all.
+    `QLockFile` was chosen over a bare `QLocalServer`-only scheme (try to
+    connect, and if that fails, listen) because the latter is a
+    check-then-act race: two launches can both fail to connect to a dead
+    or not-yet-started server and then both successfully `listen()`,
+    which TLC's `GuardAtomicClaim = FALSE` mutation reproduces as two
+    simultaneous primaries. `QLockFile`'s `tryLock()` is one OS-level
+    atomic call with its own stale-owner detection (by checking whether
+    the PID that holds it is still running), which is exactly
+    `GuardStaleReclaimed` and answers the issue's worry that a crashed
+    tray would wedge every later launch. The `QLocalServer` is kept only
+    for the one thing `QLockFile` cannot do: carry the `--settings`
+    request across to the instance that already holds the claim.
+-   **Rejected:** a `QLocalServer`-only scheme, for the TOCTOU race above;
+    reusing the daemon's own `service.sock` or `src/user_paths.h`'s
+    `UserPaths` for the menu's lock and forwarding socket, which would
+    tie an unrelated client-process concern to the daemon's own paths
+    (the existing `SocketPath()` in `main_linux.cc` already computes the
+    daemon's socket path locally rather than through `UserPaths`, so the
+    menu's own single-instance paths follow that same local convention);
+    a plain PID file, which does not give a crash-safe claim without
+    re-implementing what `QLockFile` already does, and gives no path for
+    forwarding a Settings request at all. Evidence:
+    [#98](https://github.com/mattyv/facepalm/issues/98).
+
 ## 2026-11-21: "Pick the feeling" asks through MCP elicitation where there is no card
 
 -   **Decision:** `ask_feeling` (`mcp/feeling-elicitation.js`) asks the same

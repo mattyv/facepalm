@@ -11,7 +11,9 @@
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocalServer>
 #include <QLocalSocket>
+#include <QLockFile>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
@@ -28,10 +30,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/settings_document.h"
+#include "src/single_instance.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
 
@@ -68,6 +72,60 @@ bool ServiceReady(const QString& path) {
   return socket.state() == QLocalSocket::ConnectedState ||
          socket.waitForConnected(kConnectTimeoutMs);
 }
+
+// The single-instance guard's own state, next to the daemon's socket
+// (#98): a QLockFile for the exclusive claim, and a QLocalServer name for
+// forwarding a Settings request to whichever launch holds it.
+QString MenuLockPath() {
+  QString override_path = qEnvironmentVariable("FACEPALM_MENU_LOCK");
+  if (!override_path.isEmpty()) {
+    return override_path;
+  }
+  return QDir::homePath() + QStringLiteral("/.local/state/facepalm/menu.lock");
+}
+
+QString MenuSocketPath() {
+  QString override_path = qEnvironmentVariable("FACEPALM_MENU_SOCKET");
+  if (!override_path.isEmpty()) {
+    return override_path;
+  }
+  return QDir::homePath() + QStringLiteral("/.local/state/facepalm/menu.sock");
+}
+
+constexpr auto kSettingsRequest = "settings";
+
+// The real primitives behind src/single_instance.h: QLockFile::tryLock()
+// is the one atomic call TryLockAtomic needs (specs/SingleInstance.tla),
+// and it already reclaims a lock left by a process that has since died
+// (GuardStaleReclaimed), rather than wedging every launch after it.
+// RequestSettings is a short-lived QLocalSocket connection to whichever
+// instance is listening.
+class QtSingleInstanceIo : public facepalm::SingleInstanceIo {
+ public:
+  // `lock_path` and `socket_path` are two different files this instance
+  // owns outright, and the one call site below names its arguments the
+  // same way, so a swap would be visible there.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+  QtSingleInstanceIo(const QString& lock_path, QString socket_path)
+      : lock_(lock_path), socket_path_(std::move(socket_path)) {}
+
+  bool TryLock() override { return lock_.tryLock(0); }
+
+  bool RequestSettings() override {
+    constexpr int kRequestTimeoutMs = 200;
+    QLocalSocket socket;
+    socket.connectToServer(socket_path_);
+    if (!socket.waitForConnected(kRequestTimeoutMs)) {
+      return false;
+    }
+    socket.write(kSettingsRequest);
+    return socket.waitForBytesWritten(kRequestTimeoutMs);
+  }
+
+ private:
+  QLockFile lock_;
+  QString socket_path_;
+};
 
 QString ConfigPath() {
   const QString config = qEnvironmentVariable("XDG_CONFIG_HOME");
@@ -413,6 +471,19 @@ int main(int argc, char* argv[]) {
   parser.addOption(settings);
   parser.process(app);
 
+  // specs/SingleInstance.tla: TryLockAtomic and TryLockHeld (#98). A
+  // second launch while one is already running must not open a second
+  // tray icon: it is handed off to the one running instead, and exits
+  // here without ever building a window or a tray.
+  const QString lock_path = MenuLockPath();
+  QDir().mkpath(QFileInfo(lock_path).absolutePath());
+  const QString instance_socket = MenuSocketPath();
+  QtSingleInstanceIo single_instance(lock_path, instance_socket);
+  if (facepalm::ClaimSingleInstance(parser.isSet(settings), single_instance) ==
+      facepalm::SingleInstanceRole::kForwarded) {
+    return 0;
+  }
+
   const QIcon icon = FacepalmIcon();
   QApplication::setWindowIcon(icon);
   SettingsDialog window;
@@ -469,6 +540,28 @@ int main(int argc, char* argv[]) {
   QTimer refresh_timer;
   QObject::connect(&refresh_timer, &QTimer::timeout, &window, refresh);
   refresh_timer.start(kRefreshIntervalMs);
+
+  // specs/SingleInstance.tla: Forward. This instance holds the lock, so
+  // any socket a stale run left behind has no live owner; listen for a
+  // later launch's Settings request and raise this window for it.
+  QLocalServer::removeServer(instance_socket);
+  QLocalServer tray_server;
+  tray_server.listen(instance_socket);
+  QObject::connect(
+      &tray_server, &QLocalServer::newConnection, &window,
+      [&tray_server, show_window] {
+        while (QLocalSocket* client = tray_server.nextPendingConnection()) {
+          QObject::connect(client, &QLocalSocket::readyRead, client,
+                           [client, show_window] {
+                             if (client->readAll().contains(kSettingsRequest)) {
+                               show_window();
+                             }
+                             client->close();
+                           });
+          QObject::connect(client, &QLocalSocket::disconnected, client,
+                           &QObject::deleteLater);
+        }
+      });
 
   if (!QSystemTrayIcon::isSystemTrayAvailable()) {
     show_window();
