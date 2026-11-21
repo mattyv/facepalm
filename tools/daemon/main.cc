@@ -175,7 +175,7 @@ class Engine : public DaemonController, public DaemonPipeline {
   void Closed() override { controller_.OnClosed(); }
   void DeviceLost() override { controller_.OnDeviceLost(); }
   void DeviceBack() override { controller_.OnDeviceBack(); }
-  CameraController::State State() const override {
+  [[nodiscard]] CameraController::State State() const override {
     return controller_.CurrentState();
   }
   void Open() override { pipeline_.OnCameraOpen(); }
@@ -251,7 +251,8 @@ int main(int argc, char** argv) {
       std::span<const char* const>(argv + 1, argc - 1),
       facepalm::PathsFor(home != nullptr ? home : "", facepalm::kThisPlatform));
   if (!options) {
-    std::fputs(facepalm::kDaemonUsage.data(), stderr);
+    std::fwrite(facepalm::kDaemonUsage.data(), 1, facepalm::kDaemonUsage.size(),
+                stderr);
     return 2;
   }
   if (options->command != facepalm::DaemonOptions::Command::kRun) {
