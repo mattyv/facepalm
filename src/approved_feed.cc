@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "src/feelings.h"
+
 namespace facepalm {
 
 ApprovedFeed::ApprovedFeed(Feed& feed, std::function<void(bool)> changed,
@@ -65,6 +67,13 @@ std::optional<Feed::Delivery> ApprovedFeed::Wait(
     const std::string& client, std::chrono::milliseconds timeout) {
   const std::string session = Session(client);
   return session.empty() ? std::nullopt : feed_.Wait(session, timeout);
+}
+
+std::optional<Feed::Delivery> ApprovedFeed::Beat(
+    const std::string& client, BeatKind kind,
+    std::chrono::milliseconds window) {
+  const std::string session = Session(client);
+  return session.empty() ? std::nullopt : feed_.Beat(session, kind, window);
 }
 
 bool ApprovedFeed::Rate(const std::string& client, std::int64_t id, int score) {

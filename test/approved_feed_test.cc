@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "src/feed.h"
+#include "src/feelings.h"
 
 // Each test stands for the specs/DaemonAdmission.tla property it is named
 // for.
@@ -27,6 +28,9 @@ class MockFeed : public Feed {
   MOCK_METHOD(std::optional<Delivery>, Read, (const std::string&), (override));
   MOCK_METHOD(std::optional<Delivery>, Wait,
               (const std::string&, std::chrono::milliseconds), (override));
+  MOCK_METHOD(std::optional<Delivery>, Beat,
+              (const std::string&, BeatKind, std::chrono::milliseconds),
+              (override));
   MOCK_METHOD(bool, Rate, (const std::string&, std::int64_t, int), (override));
 };
 
@@ -98,6 +102,8 @@ TEST_F(ApprovedFeedTest, EachClientUsesItsOwnSession) {
   EXPECT_FALSE(feed.Read("desktop"));
   EXPECT_FALSE(feed.Wait("desktop", std::chrono::milliseconds(1)));
   EXPECT_FALSE(feed.Rate("desktop", 1, 4));
+  EXPECT_FALSE(
+      feed.Beat("desktop", BeatKind::kQuestion, std::chrono::milliseconds(1)));
   EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
   EXPECT_CALL(inner_, Connect("approved-2")).WillOnce(Return(true));
   ASSERT_TRUE(feed.Connect("desktop"));
@@ -109,6 +115,11 @@ TEST_F(ApprovedFeedTest, EachClientUsesItsOwnSession) {
   EXPECT_TRUE(feed.Wait("desktop", std::chrono::milliseconds(4)));
   EXPECT_CALL(inner_, Rate("approved-2", 3, 5)).WillOnce(Return(true));
   EXPECT_TRUE(feed.Rate("code", 3, 5));
+  EXPECT_CALL(inner_, Beat("approved-1", BeatKind::kProposal,
+                           std::chrono::milliseconds(6)))
+      .WillOnce(Return(Feed::Delivery{}));
+  EXPECT_TRUE(
+      feed.Beat("desktop", BeatKind::kProposal, std::chrono::milliseconds(6)));
 }
 
 TEST_F(ApprovedFeedTest, ARejectedInnerRatingIsReportedToTheClient) {

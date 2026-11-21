@@ -40,6 +40,85 @@ a line saying which entry replaced it.
     valid token is skipped, not repaired.
 -   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37),
     [#63](https://github.com/mattyv/facepalm/issues/63).
+## 2026-11-21: Remove the Linux ELF build of the MediaPipe shim
+
+-   **Decision:** remove the Bazel `libfacepalm_mediapipe.so` target, its
+    ELF export list and the bats test that cross-linked it;
+    `tools/fixtures/build.sh` refuses to run on Linux, naming
+    `docs/linux-camera.md`. This replaces the 2026-11-20 entry "Use an ELF
+    export list for the Linux MediaPipe shim".
+-   **Why:** nothing used it. Since #60, the Linux daemon compiles
+    `src/linux/mediapipe_c_shim.cc` in and links MediaPipe's own
+    `libmediapipe.so` from its 0.10.35 wheel; CMake imports the Bazel shim
+    on macOS only, and no workflow built the `.so`, so its 100 percent rule
+    never ran.
+-   **Rejected:** building and testing the `.so` on CI's Linux, which would
+    add a half-hour Bazel build for a library no Linux build links.
+-   **Evidence:** [#65](https://github.com/mattyv/facepalm/issues/65).
+
+## 2026-11-21: Run the native tests under ThreadSanitizer too
+
+-   **Decision:** a CI job of its own, on Linux, builds the native CTest suite
+    with `-fsanitize=thread` and fails on the first data race it reports.
+    It sets `vm.mmap_rnd_bits=28` first, since ThreadSanitizer does not start
+    under the 32 bits of address space randomization newer kernels use.
+-   **Why:** the service, the feed and the client gate run on threads, and
+    AddressSanitizer and UndefinedBehaviorSanitizer find no data races. With
+    the lock around `connection.done = true` in `Service::Serve` removed,
+    `service_test` failed under ThreadSanitizer with a data race against
+    `AcceptAll`, three runs out of three; with it, the suite is clean.
+-   **Rejected:** adding the flag to the existing sanitizers job, which
+    Clang refuses: ThreadSanitizer cannot be combined with AddressSanitizer.
+-   **Cost:** as with the other sanitizers, only threads the tests start are
+    checked, and only on Linux; the MediaPipe shim is not in the build.
+    Evidence: [#66](https://github.com/mattyv/facepalm/issues/66).
+
+## 2026-11-21: Skip a degenerate pose's frame in the expression reader
+
+-   **Decision:** the expression reader drops a face whose transformation
+    matrix has no rotation to read, as it would a frame with no face: no
+    scores are judged and nothing is learned from it. The looking-away
+    reader already did the same.
+-   **Why:** averaged into `ExpressionTracker`'s resting pose, one such
+    frame left it NaN until the next gap of more than two seconds, and the
+    pose gate never shut: with a degenerate frame before it, a smile held
+    while the head turned 25 degrees away was reported, where without one
+    it was not.
+-   **Rejected:** judging the frame's scores with the pose left out, which
+    would let scores the pose has moved through ungated; and having
+    `ExpressionTracker` ignore a non-finite pose itself, where
+    `ReactionFrom` and the looking-away reader check the matrix as they
+    read the pose from it, and this reader now does the same.
+-   **Narrows:** the 2026-11-21 entry for #44, which left the other readers
+    seeing such a face. Evidence:
+    [#79](https://github.com/mattyv/facepalm/issues/79).
+
+## 2026-11-21: Read a reaction as a feeling when a client marks a beat
+
+A client that has just asked a question or made a proposal sends
+`beat question|proposal <milliseconds>`. The service waits out that window
+(1 to 10000 ms) and replies with the readings since the client last looked
+and one `interpretation`: an ID, the beat's kind, and one of six feelings.
+`src/feelings.h` is the only list of them: agreement, disagreement,
+engagement, annoyance, confused and unknown; the MCP adapter checks only that
+a feeling is a name. The generic rule reads only the readings made during the
+window: nods as agreement, shakes as disagreement, brows down or narrowed
+eyes (which the expression reader reports only once held) as confused. No
+cue, cues of different feelings, or a window with a reading dropped before it
+ended read as unknown; so does a reaction that comes after the window, which
+goes to the next read instead. No generic rule gives engagement or annoyance
+yet: they exist so a correction (#35, item 4 of #61) can name them. The
+window opens when the service gets the line, so a reaction made while the
+person was still reading the question is missed. `specs/FeelingBeat.tla`
+models it. `rate_reaction` and the ratings file stay until item 5 replaces
+them.
+
+Rejected: reading the beat in the MCP adapter, as Codex's draft did
+(`groundedWait`), because feelings and their tuning belong to the service, so
+every client feeds the same corrections (#61); and its
+`tentative_agreement` names, for the six feelings the user chose. Evidence:
+[#70](https://github.com/mattyv/facepalm/issues/70),
+[#61](https://github.com/mattyv/facepalm/issues/61).
 
 ## 2026-11-21: Read looking away from the resting pose, held a second
 
@@ -205,6 +284,8 @@ separate portability milestone. [Facepalm service issue #37](https://github.com/
 -   **Evidence:** [#37](https://github.com/mattyv/facepalm/issues/37).
 
 ## 2026-11-20: Use an ELF export list for the Linux MediaPipe shim
+
+Replaced by "Remove the Linux ELF build of the MediaPipe shim" (2026-11-21).
 
 -   **Decision:** build a `.so` on Linux with the same six-function C ABI as
     the macOS dylib, hiding all other symbols with an ELF version script.

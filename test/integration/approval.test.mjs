@@ -14,7 +14,7 @@ const fixturePath = process.env.MCP_FIXTURE ?? './build/mcp_service_fixture';
 // Two MCP adapters showing the one approved token are two clients, both
 // told of the same nod, and one stranger is refused (#37). The fixture
 // admits clients through the daemon's ClientApprovals and ApprovedFeed.
-test('two approved MCP sessions get the same nod and a stranger none', { timeout: 15000 }, async (t) => {
+test('two approved MCP sessions get the same nod, each its own beat, and a stranger none', { timeout: 15000 }, async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'fp-approval-'));
   const clients = path.join(dir, 'clients');
   const socketPath = path.join(dir, 's');
@@ -82,6 +82,22 @@ test('two approved MCP sessions get the same nod and a stranger none', { timeout
     assert.equal(delivery.readings[0].id, 1);
     assert.deepEqual(delivery.readings[0].detail, { gesture: 'nod' });
   }
+
+  // A beat is one client's own: the client in a beat is told how the nod
+  // was read, and the other gets the same nod with no interpretation.
+  const desktopBeat = desktop.call('tools/call', {
+    name: 'wait_for_reaction', arguments: { beat: 'question', timeout_ms: 3000 },
+  });
+  assert.equal((await lines.next()).value, 'beat');
+  const codeAgain = wait(code, 5000);
+  fixture.stdin.write('react\n');
+  assert.equal((await lines.next()).value, 'reacted 2');
+  const beaten = unpack(await desktopBeat);
+  assert.deepEqual(beaten.readings.map((reading) => reading.id), [2]);
+  assert.deepEqual(beaten.interpretation, { id: 1, feeling: 'agreement', beat: 'question' });
+  const plain = unpack(await codeAgain);
+  assert.deepEqual(plain.readings.map((reading) => reading.id), [2]);
+  assert.equal(plain.interpretation, undefined);
 
   desktop.child.stdin.end();
   await desktop.exited;
