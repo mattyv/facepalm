@@ -30,11 +30,18 @@ endif()
 # Each source file gets a library and a test executable of its own, so that
 # its coverage is measured from its own tests alone. A unit's tests write
 # their profiles to profiles/<unit>-<pid>.profraw for scripts/coverage.sh.
+# A unit in a folder of src, such as linux, names it with DIRECTORY; its test
+# is in the same folder of test.
 function(facepalm_unit name)
-  add_library(${name} src/${name}.cc)
+  cmake_parse_arguments(PARSE_ARGV 1 unit "" "DIRECTORY" "")
+  set(path ${name})
+  if(unit_DIRECTORY)
+    set(path ${unit_DIRECTORY}/${name})
+  endif()
+  add_library(${name} src/${path}.cc)
   target_include_directories(${name} PUBLIC ${PROJECT_SOURCE_DIR})
   if(BUILD_TESTING)
-    add_executable(${name}_test test/${name}_test.cc)
+    add_executable(${name}_test test/${path}_test.cc)
     target_link_libraries(${name}_test PRIVATE ${name} GTest::gmock GTest::gtest_main)
     gtest_discover_tests(${name}_test
       DISCOVERY_MODE PRE_TEST
@@ -257,7 +264,11 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     BUILD_RPATH ${FACEPALM_MEDIAPIPE_DIR})
 endif()
 
-# The Linux daemon uses the pinned native MediaPipe Tasks C library.
+# The Linux daemon uses the pinned native MediaPipe Tasks C library, which
+# scripts/fetch_mediapipe_c.sh fetches with its C headers. Its two Linux
+# sources are units of their own (#83): their tests link fakes of MediaPipe's
+# C API and of libv4l2 in place of the real libraries, so they need the
+# headers but never open a camera or load the model.
 set(FACEPALM_MEDIAPIPE_C_INCLUDE "" CACHE PATH "Root of MediaPipe's native C headers")
 set(FACEPALM_MEDIAPIPE_C_LIBRARY "" CACHE FILEPATH "Linux libmediapipe.so")
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
@@ -269,17 +280,21 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   find_package(Threads REQUIRED)
   find_path(V4L2_INCLUDE_DIRECTORY NAMES libv4l2.h REQUIRED)
   find_library(V4L2_LIBRARY NAMES v4l2 libv4l2.so.0 REQUIRED)
-  add_executable(facepalm_daemon tools/daemon/main.cc
-    src/linux/v4l2_session.cc src/linux/mediapipe_c_shim.cc)
+  facepalm_unit(mediapipe_c_shim DIRECTORY linux)
+  target_include_directories(mediapipe_c_shim SYSTEM PUBLIC ${FACEPALM_MEDIAPIPE_C_INCLUDE})
+  facepalm_unit(v4l2_session DIRECTORY linux)
+  target_include_directories(v4l2_session SYSTEM PUBLIC ${V4L2_INCLUDE_DIRECTORY})
+  target_link_libraries(v4l2_session PUBLIC Threads::Threads)
+  add_executable(facepalm_daemon tools/daemon/main.cc)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}/facepalm")
-  target_include_directories(facepalm_daemon SYSTEM PRIVATE
-    ${FACEPALM_MEDIAPIPE_C_INCLUDE} ${V4L2_INCLUDE_DIRECTORY})
+  # face_model calls the shim, and the shim MediaPipe, so each comes after
+  # the one that calls it.
   target_link_libraries(facepalm_daemon PRIVATE approved_feed client_approvals client_token
     daemon_control daemon_options face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
-    look_away_reader reaction_feed feeling_store service session_camera unix_socket face_model Threads::Threads
-    ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
+    look_away_reader reaction_feed feeling_store service session_camera unix_socket v4l2_session
+    face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/facepalm COMPONENT LinuxCamera)
