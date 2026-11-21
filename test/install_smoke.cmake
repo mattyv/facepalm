@@ -27,7 +27,7 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -S "${SOURCE_DIR}" -B "${build}" -G N
   -DCMAKE_INSTALL_PREFIX=${prefix} RESULT_VARIABLE result)
 check_result("${result}" "production configure without GTest")
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${build}"
-  --target gesture_replay_cli RESULT_VARIABLE result)
+  --target gesture_replay_cli calibrate_cli_tool RESULT_VARIABLE result)
 check_result("${result}" "replay build")
 execute_process(COMMAND "${CMAKE_COMMAND}" --install "${build}"
   RESULT_VARIABLE result)

@@ -10,7 +10,9 @@
 #include <string_view>
 #include <thread>
 
+#include "src/calibration.h"
 #include "src/feed.h"
+#include "src/protocol.h"
 
 namespace facepalm {
 
@@ -54,10 +56,15 @@ class Approvals {
 // facepalm's background service (#37), following specs/Service.tla. Each
 // connection gets its own thread, which speaks src/protocol.h to the feed
 // for the client the connection names. Only a client showing an approved
-// token is let in; several connections may show the same one.
+// token is let in; several connections may show the same one. A
+// "calibrate" request (specs/Calibration.tla, item 12 of #61) goes to
+// `calibration` instead, when the service is given one: a nullptr refuses
+// every calibrate request, which lets every existing caller build a
+// Service unchanged.
 class Service {
  public:
-  Service(std::unique_ptr<Listener> listener, Feed& feed, Approvals& approvals);
+  Service(std::unique_ptr<Listener> listener, Feed& feed, Approvals& approvals,
+          CalibrationController* calibration = nullptr);
   ~Service();
   Service(const Service&) = delete;
   Service& operator=(const Service&) = delete;
@@ -91,10 +98,13 @@ class Service {
   std::optional<Feed::Delivery> Watched(
       const std::string& name, Stream& stream,
       const std::function<std::optional<Feed::Delivery>()>& wait);
+  // The reply to a calibrate request, whether or not calibration_ is set.
+  std::string CalibrateReply(const protocol::CalibrateRequest& request);
 
   std::unique_ptr<Listener> listener_;
   Feed& feed_;
   Approvals& approvals_;
+  CalibrationController* calibration_;
   std::mutex mutex_;
   bool stopping_ = false;
   std::list<Connection> connections_;

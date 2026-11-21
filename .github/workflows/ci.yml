@@ -171,7 +171,7 @@ jobs:
         run: |
           cmake -S . -B build-debian -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DFACEPALM_LINUX_TRAY=ON
-          cmake --build build-debian --target facepalm_menu gesture_replay_cli linux_tray_integration
+          cmake --build build-debian --target facepalm_menu gesture_replay_cli calibrate_cli_tool linux_tray_integration
           ctest --test-dir build-debian -R '^linux_tray_integration$' --output-on-failure --no-tests=error
       - name: Build Debian package
         run: cpack --config build-debian/CPackConfig.cmake -B build-debian/package
