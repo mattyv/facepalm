@@ -24,6 +24,8 @@
 #include <utility>
 
 #include "src/approved_feed.h"
+#include "src/calibration.h"
+#include "src/calibration_store.h"
 #include "src/camera_controller.h"
 #include "src/client_approvals.h"
 #include "src/client_token.h"
@@ -120,10 +122,14 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 // specs/DaemonAdmission.tla, and in the sources it wires together.
 class Engine : public DaemonController, public DaemonPipeline {
  public:
+  // `calibration_profile`, when not null, must outlive this Engine (#61
+  // item 12): main() loads it, if one was saved, before either Engine or
+  // its caller's event loop can return.
   Engine(std::unique_ptr<Listener> listener, Approvals& approvals,
          std::string model, Config config,
-         std::unique_ptr<FeelingStore> feelings, Post control, Post camera,
-         Post inference, [[maybe_unused]] std::string device = {})
+         std::unique_ptr<FeelingStore> feelings,
+         const CalibrationProfile* calibration_profile, Post control,
+         Post camera, Post inference, [[maybe_unused]] std::string device = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
@@ -144,7 +150,8 @@ class Engine : public DaemonController, public DaemonPipeline {
                           .other_screen_degrees =
                               config.screen_context_other_screen_degrees,
                           .away_degrees = config.looking_away_degrees},
-                      config.screen_context_window_titles_enabled))
+                      config.screen_context_window_titles_enabled,
+                      calibration_profile))
                 : std::nullopt),
         feelings_(std::move(feelings)),
         feed_(kFeedCapacity, *feelings_),
@@ -363,6 +370,16 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "cannot open socket\n");
     return 1;
   }
+  // A saved calibration profile (#61 item 12), if any: optional, so a
+  // daemon run before one exists, or with one that cannot be read, simply
+  // reports coarse gaze without it.
+  std::string calibration_error;
+  const std::optional<facepalm::UserPaths> daemon_paths =
+      facepalm::PathsFor(home != nullptr ? home : "", facepalm::kThisPlatform);
+  const std::optional<facepalm::CalibrationProfile> calibration_profile =
+      daemon_paths ? facepalm::LoadCalibrationProfile(daemon_paths->calibration,
+                                                      calibration_error)
+                   : std::nullopt;
 #ifdef __linux__
   // Block before starting worker threads, so the main thread can route stop
   // requests onto the control queue without a signal-handler callback.
@@ -379,8 +396,9 @@ int main(int argc, char** argv) {
   facepalm::SerialQueue inference;
   const char* device = std::getenv("FACEPALM_CAMERA_DEVICE");
   facepalm::Engine engine(std::move(listener), approvals, options->model,
-                          config, std::move(feelings), control.Poster(),
-                          camera.Poster(), inference.Poster(),
+                          config, std::move(feelings),
+                          calibration_profile ? &*calibration_profile : nullptr,
+                          control.Poster(), camera.Poster(), inference.Poster(),
                           device != nullptr ? device : "/dev/video0");
   engine.Start();
   int signal_number = 0;
@@ -399,7 +417,9 @@ int main(int argc, char** argv) {
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);
   auto* engine = new facepalm::Engine(
       std::move(listener), approvals, options->model, config,
-      std::move(feelings), facepalm::OnQueue(control),
+      std::move(feelings),
+      calibration_profile ? &*calibration_profile : nullptr,
+      facepalm::OnQueue(control),
       facepalm::OnQueue(
           dispatch_queue_create("facepalm.camera", DISPATCH_QUEUE_SERIAL)),
       facepalm::OnQueue(

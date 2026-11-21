@@ -53,6 +53,135 @@ a line saying which entry replaced it.
     forwarding a Settings request at all. Evidence:
     [#98](https://github.com/mattyv/facepalm/issues/98).
 
+## 2026-11-21: "Pick the feeling" renders as an MCP Apps card, with a text fallback
+
+-   **Decision:** `show_feeling_card` (`mcp/feeling-widget.js`) shows the
+    person a card asking "How were you feeling just then?", for a beat's
+    interpretation, when the host renders [MCP Apps](https://github.com/modelcontextprotocol/ext-apps)
+    (`@modelcontextprotocol/ext-apps` 1.7.5, pinned to the version a prior
+    draft already proved rendering in Claude Desktop): one button per
+    feeling, in the order the service's own `feelings` list gives them,
+    Facepalm's read pre-highlighted, and one click either way, which the
+    card sends itself as `tell_feeling`; the buttons disable on that click,
+    refusing a second one. The card names no interpretation ID, basis,
+    eligibility or retention, and never says a gesture happened. The tool
+    takes `id`, `feeling` and `feelings` directly, the same shape
+    `wait_for_reaction` already returned to the LLM, rather than an ID
+    alone kept server-side: the adapter keeps no record of interpretations
+    between calls, so there is nothing to look an ID up in. It is a tool of
+    its own, not attached to `wait_for_reaction`'s result, so a plain wait
+    or a client with no beat never carries widget framing, and a host
+    without MCP Apps still gets a usable fallback: the tool's own text,
+    carrying the same `id`, `feeling` and `feelings`.
+-   **Why:** the user chose "pick the feeling" over the "Right/Wrong" card
+    an earlier draft tried, which was "super duper confusing" (several
+    sessions back); MCP Apps is the way a host renders it inline, and
+    `tell_feeling` (#86) already exists to take the pick.
+-   **Rejected:** attaching the card's resource URI to `wait_for_reaction`
+    itself, which would put widget metadata on every wait, beat or not,
+    and on every client, MCP-Apps-capable or not. Looking the ID up against
+    a server-side store of issued interpretations, which the draft's
+    `InterpretationFeedback` class did for the abandoned design: the
+    native service already times an interpretation out after five minutes
+    on its own, and the adapter has no reason to duplicate that state.
+-   **Cost:** `@modelcontextprotocol/ext-apps/app-with-deps`, bundled with
+    esbuild for the widget's `<script>`, is about 370 KB minified, mostly
+    its own copy of zod; this is accepted as the price of the proven,
+    working combination rather than risking an untested newer major version
+    (2.x) or a slimmer but unverified bundling approach.
+-   **Evidence:** [#61](https://github.com/mattyv/facepalm/issues/61) item
+    5, [#36](https://github.com/mattyv/ai-pair/issues/36).
+
+## 2026-11-21: Node's own JavaScript coverage report cannot be trusted as the CI gate
+
+-   **Decision:** `scripts/coverage_js.sh` (#67, closing the gate #74
+    deferred to this work) runs each JavaScript source file in `mcp/` and
+    `integrations/claude-code/` against its own test file alone, under
+    `node --test --experimental-test-coverage --test-coverage-include`, and
+    reads the numbers from the LCOV report (`--test-reporter=lcov`) rather
+    than from Node's own printed summary table or its
+    `--test-coverage-lines/branches/functions` threshold flags: both pass
+    even when the file's test run loaded nothing at all for it (a vacuous
+    pass), and the summary table's own merge across several child
+    processes, which a test for a CLI entry point (`main.js`) or a fixture
+    process (the hook broker's chmod-denied case) spawns more than one of,
+    is unreliable in a way the one LCOV record per file is not. The script
+    also merges every LCOV record a single source file gets, since a test
+    that re-imports a file under a cache-busting query string, to force a
+    second evaluation of its top-level code, produces one record per
+    import, each showing only what that one evaluation reached.
+-   **Why:** building this gate found the summary table's numbers
+    swinging between a vacuous 100 percent and a reproducibly stable,
+    genuinely too-low percentage depending only on how test files were
+    organized, never on the actual code; the LCOV records, read and merged
+    directly, matched manual verification of the code's behavior in every
+    case this surfaced.
+-   **Rejected:** trusting the summary table or its threshold flags, which
+    this work found unreliable for exactly the two kinds of file the rule
+    most needs to hold (a CLI entry point, and anything that spawns a
+    child process to isolate a side effect fixtures elsewhere cannot force,
+    such as a security-sensitive syscall failure). A per-file floor in
+    `coverage_thresholds.json`, as C++ and shell have, for a line Node's
+    own precise coverage reports as uncovered no matter how the
+    surrounding code is restructured: in every case found, folding the
+    guard clause into an already correctly-tracked multi-clause condition,
+    rather than giving it its own separate `if (...) return;` statement,
+    made Node see it too, so no such floor was needed after all.
+-   **Evidence:** [#67](https://github.com/mattyv/facepalm/issues/67),
+    [#61](https://github.com/mattyv/facepalm/issues/61) item 5.
+
+## 2026-11-21: Add an optional calibration session, in plain text
+
+-   **Decision:** a short guided session, started with `calibrate start
+    [screens]` and stepped with `calibrate next` or ended early with
+    `calibrate cancel`, records the resting pose and, for each screen, the
+    head pose at its centre and four corners. It saves to a private file
+    (mode 0600) the daemon owns, at `UserPaths::calibration` (#37's fixed
+    per-user paths, alongside `clients` and `socket`), written to a
+    temporary file beside it and renamed over it, in a hand-rolled
+    `name = value` text format rather than JSON, since nothing else here
+    needs to parse that format back. `src/calibration.h`'s
+    `CalibrationController` is the session; `src/calibration_store.h`
+    saves and loads the file; `src/calibration_reader.h` feeds it each
+    frame's pose, as `LookAwayReader` does its detector.
+    `specs/Calibration.tla` models the lifecycle, including the camera
+    going away mid-session, which cancels it. Like every client (#89), the
+    CLI built for testing here, `calibrate_cli`, needs its own token,
+    approved with `facepalm-daemon approve calibrate`.
+-   **Why:** #36 and #35 want calibration kept optional, against the
+    low-calibration goal on #35: without it, gaze stays coarse (#36, item
+    11). The session's own protocol line, not a new top-level verb pair,
+    keeps every client (`calibrate_cli`, the eventual menu entry of item 8,
+    and MCP, which can already send any line through
+    `SocketSession.request`) talking to one place.
+-   **Rejected:** JSON for the saved profile, which would need a JSON
+    parser this codebase does not otherwise have, just to read back a file
+    only this code writes; and wiring the session into
+    `tools/daemon/main.cc` and the camera's lifecycle callbacks in the same
+    change, which belongs with item 7's daemon work landing alongside it
+    (`CalibrationController::OnCameraLost` and `OnCameraUp` are ready for
+    that wiring, covered by `NoRunningWithoutCameraTest`, but nothing calls
+    them yet).
+-   **Cost:** until item 7 wires `OnCameraLost` and `OnCameraUp` into the
+    daemon's camera lifecycle, a session only ever sees the camera as up;
+    the daemon's own `calibrate` support is likewise unwired until then,
+    so `calibrate_cli` and the protocol line have nothing to talk to on a
+    running daemon until that follow-up lands. Item 11's coarse gaze (#92,
+    landed after this entry was first written) still reads `CoarseGazeFrom`
+    exactly as it did: `src/screen_context.cc`'s rule and the `gaze` field
+    it writes are untouched. `main.cc` loads a saved profile, if any, at
+    `UserPaths::calibration`, and `ScreenContextReporter` now takes it as
+    an optional fourth constructor argument; when given one with at least
+    one screen, and a pose to judge, `Json()` adds an additive
+    `calibrated_screen` field alongside `gaze` (never replacing it) from
+    `NearestCalibratedScreen`. Whether `calibrated_screen` should instead
+    replace or refine `gaze` itself (for instance, mapping a calibrated
+    screen other than the nearest-to-resting one onto `other_screen`) is
+    #92's design to make, not this item's.
+-   **Evidence:** [#61 item 12](https://github.com/mattyv/facepalm/issues/61),
+    [#36](https://github.com/mattyv/facepalm/issues/36),
+    [#35](https://github.com/mattyv/facepalm/issues/35).
+
 ## 2026-11-21: Run clang-tidy for the Linux-only sources in CI's linux job
 
 -   **Decision:** the `linux` job gets its own `clang-tidy` step, configuring

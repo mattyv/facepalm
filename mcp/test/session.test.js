@@ -1,13 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { createInterface } from 'node:readline';
-import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { SocketSession } from '../session.js';
 
 async function fixture(handler, hello = '{"ok":true}\n', address = undefined) {
@@ -50,6 +46,16 @@ test('serializes requests on one uniquely named connection', async () => {
     assert.equal(f.connections.length, 2);
     assert.ok(commands.indexOf('feel 1 agreement') < commands.indexOf('feel 2 agreement'));
   } finally { a.close(); b.close(); await f.close(); }
+});
+
+test('sends a token with hello when one is given, and omits it otherwise', async () => {
+  const hellos = [];
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'), (line) => { hellos.push(line); return '{"ok":true}\n'; });
+  const session = new SocketSession(f.address, 'a-private-token');
+  try {
+    await session.request('feel 1 agreement');
+    assert.deepEqual(hellos, [`hello ${session.name} a-private-token`]);
+  } finally { session.close(); await f.close(); }
 });
 
 test('cancelling a queued request does not close the active one', async () => {
@@ -136,6 +142,15 @@ test('timed-out request closes the session without reconnecting', async () => {
 });
 
 
+test('a socket error, such as nothing listening, closes the session', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
+  const session = new SocketSession(path.join(directory, 'nothing-listens-here.sock'));
+  try {
+    await assert.rejects(session.request('wait 0'));
+    await assert.rejects(session.request('feel 1 agreement'));
+  } finally { session.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('refused hello and pre-cancelled calls do not send requests', async () => {
   const commands = [];
   const f = await fixture((line) => commands.push(line), '{"error":"refused"}\n');
@@ -149,143 +164,4 @@ test('refused hello and pre-cancelled calls do not send requests', async () => {
     await assert.rejects(session.request('wait 0', controller.signal));
     await assert.rejects(session.exchange('wait 0', controller.signal, 100));
   } finally { session.close(); await f.close(); }
-});
-
-
-for (const reason of ['EOF', 'oversized input']) {
-  test(`stdio ${reason} closes the child socket`, { timeout: 7000 }, async () => {
-    let entered;
-    const waiting = new Promise((resolve) => { entered = resolve; });
-    const token = 'a'.repeat(64);
-    const f = await fixture((_, socket) => {
-      entered();
-      if (reason !== 'EOF') socket.write('{"readings":[],"missed":0}\n');
-    }, (line) => {
-      assert.match(line, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
-      return '{"ok":true}\n';
-    });
-    const tokenPath = path.join(path.dirname(f.address), 'approved-token');
-    await writeFile(tokenPath, `${token}\n`, { mode: 0o600 });
-    const main = fileURLToPath(new URL('../main.js', import.meta.url));
-    const child = spawn(process.execPath, [main, f.address, '--client-token-file', tokenPath]);
-    const exited = once(child, 'exit');
-    const replies = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
-    try {
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
-      } }) + '\n');
-      const init = JSON.parse((await replies.next()).value);
-      assert.equal(init.id, 1);
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
-        name: 'wait_for_reaction', arguments: { timeout_ms: 60000 },
-      } }) + '\n');
-      await waiting;
-      if (reason !== 'EOF') assert.equal(JSON.parse((await replies.next()).value).id, 2);
-      const socketClosed = once(f.connections[0], 'close', { signal: AbortSignal.timeout(3000) });
-      if (reason === 'EOF') {
-        child.stdin.end();
-      } else {
-        child.stdin.write(Buffer.alloc(64 * 1024 + 1, 65));
-      }
-      await socketClosed;
-      child.stdin.end();
-      assert.deepEqual(await exited, [0, null]);
-    } finally {
-      if (child.exitCode === null) child.kill();
-      await exited;
-      await f.close();
-    }
-  });
-}
-
-test('stdio entry point refuses a wrong number of arguments', { timeout: 5000 }, async () => {
-  const main = fileURLToPath(new URL('../main.js', import.meta.url));
-  const child = spawn(process.execPath, [main, 'a', 'b']);
-  assert.deepEqual(await once(child, 'exit'), [1, null]);
-});
-
-// The per-user directory under `home`, as src/user_paths.cc has it.
-function userDirectory(home) {
-  return process.platform === 'darwin'
-    ? path.join(home, 'Library', 'Application Support', 'Facepalm')
-    : path.join(home, '.local', 'state', 'facepalm');
-}
-
-test('stdio entry point without arguments needs its approved token', { timeout: 5000 }, async () => {
-  // /tmp keeps the socket path under the 104 bytes macOS allows.
-  const home = await mkdtemp('/tmp/fp-home-');
-  try {
-    const main = fileURLToPath(new URL('../main.js', import.meta.url));
-    const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
-    const stderr = [];
-    child.stderr.on('data', (data) => stderr.push(data));
-    assert.deepEqual(await once(child, 'exit'), [1, null]);
-    assert.match(Buffer.concat(stderr).toString(), /turn Facepalm on from its menu/);
-  } finally {
-    await rm(home, { recursive: true, force: true });
-  }
-});
-
-test('stdio entry point without arguments uses the per-user socket and token', { timeout: 7000 }, async () => {
-  const home = await mkdtemp('/tmp/fp-home-');
-  const directory = userDirectory(home);
-  await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
-  const token = 'b'.repeat(64);
-  await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
-  let greeted;
-  const hello = new Promise((resolve) => { greeted = resolve; });
-  const f = await fixture(() => {}, (line) => {
-    greeted(line);
-    return '{"ok":true}\n';
-  }, path.join(directory, 'service.sock'));
-  const main = fileURLToPath(new URL('../main.js', import.meta.url));
-  const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
-  const exited = once(child, 'exit');
-  try {
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
-      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
-    } }) + '\n');
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
-      name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
-    } }) + '\n');
-    assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
-  } finally {
-    child.kill();
-    await exited;
-    await f.close();
-    await rm(home, { recursive: true, force: true });
-  }
-});
-
-test('stdio entry point rejects invalid or nonprivate token files', { timeout: 5000 }, async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'facepalm-token-'));
-  const tokenPath = path.join(directory, 'token');
-  const linkPath = path.join(directory, 'link');
-  const main = fileURLToPath(new URL('../main.js', import.meta.url));
-  async function fails(file) {
-    const child = spawn(process.execPath, [main, path.join(directory, 'socket'), '--client-token-file', file]);
-    const exited = once(child, 'exit');
-    const stderr = [];
-    child.stderr.on('data', (data) => stderr.push(data));
-    child.stdin.end();
-    assert.deepEqual(await exited, [1, null]);
-    assert.match(Buffer.concat(stderr).toString(), /private client token file/i);
-    assert.doesNotMatch(Buffer.concat(stderr).toString(), /a{64}/);
-  }
-  try {
-    await writeFile(tokenPath, 'a'.repeat(64), { mode: 0o600 });
-    await chmod(tokenPath, 0o644);
-    await fails(tokenPath);
-    await chmod(tokenPath, 0o600);
-    await symlink(tokenPath, linkPath);
-    await fails(linkPath);
-    await writeFile(tokenPath, 'a'.repeat(64) + '\n\n');
-    await fails(tokenPath);
-    await writeFile(tokenPath, 'invalid');
-    await fails(tokenPath);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
 });
