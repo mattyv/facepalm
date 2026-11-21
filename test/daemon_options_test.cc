@@ -71,6 +71,12 @@ TEST(DaemonOptionsTest, AGivenSocketOverridesTheDefault) {
       Eq("s"));
 }
 
+TEST(DaemonOptionsTest, AGivenStatusPathOverridesTheDefault) {
+  EXPECT_THAT(
+      Parsed({"--consent", "--model", "m", "--status", "u"}, Home()).status,
+      Eq("u"));
+}
+
 TEST(DaemonOptionsTest, RunningWithNoHomeHasNoStatusFileByDefault) {
   EXPECT_THAT(
       Parsed({"--consent", "--model", "m", "--socket", "s", "--clients", "c"},
