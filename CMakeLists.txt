@@ -55,6 +55,7 @@ facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
 facepalm_unit(frame)
 facepalm_unit(frame_pipeline)
+facepalm_unit(frame_recorder)
 facepalm_unit(frame_times)
 # ToRgba is pure computation, so the pipeline's tests run it for real.
 target_link_libraries(frame_pipeline PUBLIC frame)
@@ -179,8 +180,8 @@ if(APPLE)
     "-framework Foundation")
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
-    config frame_pipeline face_analyzer expression_reader gesture_reader
-    head_pose_reader
+    config frame_pipeline frame_recorder face_analyzer expression_reader
+    gesture_reader head_pose_reader
     "-framework CoreGraphics"
     "-framework ImageIO")
 endif()

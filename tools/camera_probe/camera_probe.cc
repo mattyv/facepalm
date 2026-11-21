@@ -22,7 +22,10 @@
 // Given a directory as well, it saves every frame there as a numbered PNG,
 // frame_000001.png and on, with timestamps.txt listing each frame's capture
 // time in milliseconds: a recording for tools/fixtures to replay (#21). The
-// frames are images of the user, so keep them out of the repository.
+// frames are images of the user, so keep them out of the repository. At most
+// kRecordBacklogFrames copies wait to be written; a frame past that is
+// dropped, and the probe then exits with failure, as it does when a frame
+// could not be written, once every frame accepted has been (#41).
 //
 // Its settings come from ~/.config/facepalm/facepalm.conf (src/config.h); a
 // frame rate given here wins over the file's.
@@ -67,6 +70,7 @@
 #include "src/face_reader.h"
 #include "src/frame.h"
 #include "src/frame_pipeline.h"
+#include "src/frame_recorder.h"
 #include "src/gesture_reader.h"
 #include "src/head_gesture_model.h"
 #include "src/head_pose_reader.h"
@@ -83,39 +87,38 @@ constexpr double kPercent = 100;
 
 constexpr double kPercentile95 = 0.95;
 
-// Saves frames as PNGs on a queue of its own, so the capture queue only
-// copies them.
-class Recorder {
- public:
-  explicit Recorder(std::string directory)
-      : directory_(std::move(directory)),
-        queue_(
-            dispatch_queue_create("facepalm.record", DISPATCH_QUEUE_SERIAL)) {}
+// How many frame copies may wait to be written: two seconds at 15 frames a
+// second, about 35 MiB at 640x480. Past that, a frame is dropped (#41).
+constexpr std::size_t kRecordBacklogFrames = 30;
 
-  // Copies `frame` and queues it to be written. Capture queue only.
-  void Record(const Frame& frame) {
-    const auto pixels = std::make_shared<std::vector<std::uint8_t>>(
-        frame.bgra, frame.bgra + (frame.bytes_per_row *
-                                  static_cast<std::size_t>(frame.height)));
-    const int index = ++count_;
-    const Frame copy{.width = frame.width,
-                     .height = frame.height,
-                     .bytes_per_row = frame.bytes_per_row,
-                     .bgra = nullptr,
-                     .timestamp_ms = frame.timestamp_ms};
-    dispatch_async(queue_, ^{
-      Write(index, copy, *pixels);
-    });
+// Saves a frame as a numbered PNG in a directory, and appends its capture
+// time to timestamps.txt there, only once the image is written (#41).
+class PngSink : public FrameSink {
+ public:
+  explicit PngSink(std::string directory) : directory_(std::move(directory)) {}
+
+  bool Save(int index, const Frame& frame) override {
+    if (!SaveImage(index, frame)) {
+      return false;
+    }
+    FILE* times = std::fopen((directory_ + "/timestamps.txt").c_str(), "a");
+    if (times == nullptr) {
+      return false;
+    }
+    const bool written =
+        std::fprintf(times, "%d %lld\n", index,
+                     static_cast<long long>(frame.timestamp_ms)) > 0;
+    return std::fclose(times) == 0 && written;
   }
 
  private:
-  // Writes one frame's PNG and appends its capture time.
-  void Write(int index, const Frame& frame,
-             const std::vector<std::uint8_t>& bgra) {
+  // Writes frame `index` as directory_/frame_NNNNNN.png. Returns whether
+  // ImageIO finished writing it.
+  [[nodiscard]] bool SaveImage(int index, const Frame& frame) const {
     constexpr std::size_t kBitsPerChannel = 8;
     CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
     CGContextRef context = CGBitmapContextCreate(
-        const_cast<std::uint8_t*>(bgra.data()),
+        const_cast<std::uint8_t*>(frame.bgra),
         static_cast<std::size_t>(frame.width),
         static_cast<std::size_t>(frame.height), kBitsPerChannel,
         frame.bytes_per_row, space,
@@ -123,10 +126,13 @@ class Recorder {
             static_cast<std::uint32_t>(kCGBitmapByteOrder32Little));
     CGColorSpaceRelease(space);
     if (context == nullptr) {
-      return;
+      return false;
     }
     CGImageRef image = CGBitmapContextCreateImage(context);
     CGContextRelease(context);
+    if (image == nullptr) {
+      return false;
+    }
     std::array<char, kNameLength> name{};
     std::snprintf(name.data(), name.size(), "%s/frame_%06d.png",
                   directory_.c_str(), index);
@@ -138,35 +144,29 @@ class Recorder {
         url == nullptr ? nullptr
                        : CGImageDestinationCreateWithURL(
                              url, CFSTR("public.png"), 1, nullptr);
+    bool saved = false;
     if (destination != nullptr) {
       CGImageDestinationAddImage(destination, image, nullptr);
-      CGImageDestinationFinalize(destination);
+      saved = CGImageDestinationFinalize(destination);
       CFRelease(destination);
     }
     if (url != nullptr) {
       CFRelease(url);
     }
     CGImageRelease(image);
-    FILE* times = std::fopen((directory_ + "/timestamps.txt").c_str(), "a");
-    if (times != nullptr) {
-      std::fprintf(times, "%d %lld\n", index,
-                   static_cast<long long>(frame.timestamp_ms));
-      std::fclose(times);
-    }
+    return saved;
   }
 
   static constexpr std::size_t kNameLength = 4096;
   std::string directory_;
-  dispatch_queue_t queue_;
-  int count_ = 0;  // Capture queue only.
 };
 
 struct ProbeOptions {
   int seconds = kDefaultSeconds;
   int frames_per_second = Config::kDefaultFramesPerSecond;
   Config config;
-  std::unique_ptr<FaceModel> model;    // Runs on every frame when set.
-  std::unique_ptr<Recorder> recorder;  // Saves every frame when set.
+  std::unique_ptr<FaceModel> model;      // Runs on every frame when set.
+  std::optional<std::string> directory;  // Saves every frame there when set.
 };
 
 // The process's thread count now.
@@ -324,7 +324,14 @@ class Probe : public CameraReports {
  public:
   Probe(ProbeOptions options, dispatch_queue_t control)
       : seconds_(options.seconds),
-        recorder_(std::move(options.recorder)),
+        sink_(options.directory.value_or("")),
+        recorder_(options.directory
+                      ? std::make_unique<FrameRecorder>(
+                            sink_,
+                            OnQueue(dispatch_queue_create(
+                                "facepalm.record", DISPATCH_QUEUE_SERIAL)),
+                            kRecordBacklogFrames)
+                      : nullptr),
         has_model_(options.model != nullptr),
         model_(std::move(options.model)),
         config_(options.config),
@@ -384,7 +391,7 @@ class Probe : public CameraReports {
     controller_.OnClosed();
     pipeline_.OnCameraClosed([this] {
       model_.reset();
-      std::exit(0);
+      FinishRecording(EXIT_SUCCESS);
     });
     const double cpu = cpu_at_close_ - cpu_at_open_;
     std::printf(
@@ -402,7 +409,7 @@ class Probe : public CameraReports {
     controller_.OnDeviceLost();
     pipeline_.OnCameraClosed([this] {
       model_.reset();
-      std::exit(1);
+      FinishRecording(EXIT_FAILURE);
     });
     std::fprintf(stderr, "camera_probe: the camera was lost\n");
   }
@@ -410,6 +417,30 @@ class Probe : public CameraReports {
   void OnDeviceBack() override { controller_.OnDeviceBack(); }
 
  private:
+  // specs/ProbeShutdown.tla: Finish, once the model is retired, then Exit:
+  // exits with `code` once every recorded frame is written or has failed,
+  // and with failure when any frame is missing from the recording (#41).
+  void FinishRecording(int code) {
+    if (recorder_ == nullptr) {
+      std::exit(code);
+    }
+    recorder_->Finish(
+        OnQueue(control_), [code](const FrameRecorder::Summary& summary) {
+          std::printf(
+              "recorded_frames %d\nrecording_failed %d\n"
+              "recording_dropped %d\n",
+              summary.saved, summary.failed, summary.dropped);
+          if (summary.failed > 0 || summary.dropped > 0) {
+            std::fprintf(stderr,
+                         "camera_probe: the recording is incomplete: %d "
+                         "frames not written, %d dropped\n",
+                         summary.failed, summary.dropped);
+            std::exit(EXIT_FAILURE);
+          }
+          std::exit(code);
+        });
+  }
+
   // Runs on the capture queue. Checks that capture times increase, then
   // hands the frame to the pipeline, which copies it out as RGBA.
   void OnFrame(const Frame& frame) {
@@ -484,7 +515,8 @@ class Probe : public CameraReports {
   }
 
   int seconds_;
-  std::unique_ptr<Recorder> recorder_;
+  PngSink sink_;  // Used only when recorder_ is set.
+  std::unique_ptr<FrameRecorder> recorder_;
   bool has_model_;
   std::unique_ptr<FaceModel> model_;  // Until the pipeline takes it.
   Config config_;
@@ -602,8 +634,8 @@ int main(int argc, char** argv) {
       .frames_per_second = frames_per_second,
       .config = config,
       .model = LoadModel(argc > 3 ? argv[3] : nullptr),
-      .recorder =
-          argc > 4 ? std::make_unique<facepalm::Recorder>(argv[4]) : nullptr,
+      .directory =
+          argc > 4 ? std::optional<std::string>(argv[4]) : std::nullopt,
   };
   dispatch_queue_t control =
       dispatch_queue_create("facepalm.control", DISPATCH_QUEUE_SERIAL);

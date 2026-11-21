@@ -41,6 +41,13 @@
       "functions": 100
     }
   },
+  "src/frame_recorder.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/reaction.cc": {
     "unit": {
       "lines": 100,

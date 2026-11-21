@@ -33,7 +33,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `McpSocket.cfg` | one session, up to two requests | holds | 4 |
-| `ProbeShutdown.cfg` | one probe and its camera | holds | 4 |
+| `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `RatingPersistence.cfg` | one rating, a sync that may fail | holds | 6 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
 | `Service.cfg` | three connections, two client names | holds | 396 |
@@ -239,17 +239,53 @@ tests that stand for the properties they break:
 
 The probe exits after the inference queue finishes destroying the face model.
 MediaPipe uses process-wide state during destruction, so running process exit
-handlers at the same time can abort after the capture summary has been printed.
+handlers at the same time can abort after the capture summary has been printed
+(#71).
 
-`ProbeShutdown.cfg` checks one terminal camera close. Weak fairness assumes
-the queued teardown starts, the model closes, and the control queue processes
-completion. The model checks ordering after camera closure and assumes model
-destruction returns.
+Given a directory, the probe also records every frame (#41). The capture
+queue copies each frame onto the recorder's serial write queue, which saves
+its PNG and then its capture time. At most `Capacity` copies wait there; a
+frame past that is dropped. Once the model is retired, control queues the
+recorder's finish task behind every write, and exits when it has run: with 0
+only when every frame the camera captured was saved. No frame arrives once
+the camera has closed, since `AvFoundationSession::Stop` waits for its
+capture queue, so `Capture` needs the camera still capturing. The probe's
+timer always closes the camera, and everything queued runs; a write may save
+or fail, so its two outcomes share one fairness condition. The model assumes
+each write returns: a disk that never answers leaves the probe waiting.
 
-| Property | Result |
+| Property | What it says | Test |
+|---|---|---|
+| `ExitAfterRetirement` | The process exits only once the model is retired. | `ModelGoneAfterCloseTest.CompletionFollowsPendingAnalysisAndDestruction` in `test/frame_pipeline_test.cc`; the probe's own order is held by reading |
+| `BacklogBounded` | The backlog of copies never passes its bound. | `BacklogBoundedTest` in `test/frame_recorder_test.cc` |
+| `ExitAfterDrain` | The process exits only once every accepted frame has been written or has failed. | `ExitAfterDrainTest` |
+| `SuccessMeansComplete` | An exit code of 0 means the recording holds every frame the camera captured. | `SuccessMeansCompleteTest`; the probe's exit code is held by reading |
+| `EventuallyExits` | Something must happen: the probe exits. | Nothing yet: no test runs the probe, which needs a camera |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
 |---|---|
-| `ExitAfterRetirement` and `EventuallyExits` | Hold across four distinct states |
-| `WaitForRetirement = FALSE` | Violates `ExitAfterRetirement` in two steps while destruction is still queued |
+| `WaitForRetirement = FALSE`: exit while destruction is still queued | `ExitAfterRetirement`, 5 states |
+| `GuardBound = FALSE`: every frame is queued | `BacklogBounded`, 4 states |
+| `GuardDrain = FALSE`: the finish task runs ahead of the writes | `ExitAfterDrain`, 8 states |
+| `GuardReportLoss = FALSE`: exit with 0 whatever was lost | `SuccessMeansComplete`, 9 states |
+| `Exit` never enabled | `EventuallyExits` |
+| No fairness on any one of `StopCapture`, the writes, `BeginRetirement`, `FinishRetirement`, `Finish`, `FinishRuns` or `Exit` | `EventuallyExits` |
+| `Exit` writes a code outside the type | `TypeOK`, 9 states |
+
+`src/frame_recorder.cc` implements `Capture`, the writes and `FinishRuns`,
+and `tools/camera_probe/camera_probe.cc` implements `Finish` and `Exit`; each
+names its action. The same mutations, made to `FrameRecorder`, fail the
+tests that stand for the properties they break:
+
+| Mutation to `FrameRecorder` | Fails |
+|---|---|
+| No bound: every frame is queued | `BacklogBoundedTest.DropsAFrameWhileTheBacklogIsFull` |
+| A dropped frame is not counted | `BacklogBoundedTest.DropsAFrameWhileTheBacklogIsFull` |
+| A written frame does not leave the backlog | `BacklogBoundedTest.TakesFramesAgainOnceOneIsSaved`, `TakesFramesAgainOnceOneHasFailed` |
+| The summary is taken at once, not behind the writes | `ExitAfterDrainTest.FinishReportsOnlyAfterEveryRecordedFrame`, and five others |
+| A failed save counts as saved | `SuccessMeansCompleteTest.CountsAFrameWhoseSaveFailed`, `BacklogBoundedTest.TakesFramesAgainOnceOneHasFailed` |
 
 ## `ReactionFeed`: how readings reach each client
 
