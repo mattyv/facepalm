@@ -159,5 +159,27 @@ TEST_F(ExpressionReaderTest, DerivesThePoseFromTheFaceAndGatesOnIt) {
   EXPECT_THAT(reactions_, ElementsAre(R"({"expression":"smile"})"));
 }
 
+// A face whose transformation matrix has no rotation to read (#44, #79) is
+// skipped, as a frame with no face: averaged into the resting pose, its NaN
+// would never leave it, and the gate would never shut again, so a turn away
+// would read its scores as expressions.
+TEST_F(ExpressionReaderTest, ADegeneratePoseIsSkipped) {
+  Rest();
+  now_ms_ += kFrameMs;
+  reader_.OnFace(Face{}, /*width=*/640, /*height=*/480, now_ms_, reactions_);
+
+  Face turned{};
+  Yaw(turned, 25);
+  for (const int index : {kMouthSmileLeft, kMouthSmileRight}) {
+    turned.blendshapes[index] += kSmall;
+  }
+  for (int frame = 0; frame < 3 * kFramesPerSecond; ++frame) {
+    now_ms_ += kFrameMs;
+    reader_.OnFace(turned, /*width=*/640, /*height=*/480, now_ms_, reactions_);
+  }
+
+  EXPECT_THAT(reactions_, IsEmpty());
+}
+
 }  // namespace
 }  // namespace facepalm

@@ -1,7 +1,9 @@
 #include "src/expression_reader.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -27,11 +29,20 @@ Reaction ReactionFor(Expression expression) {
 
 // `face`'s head pose, read the same way ReactionFrom (src/reaction.cc) reads
 // it: the facial transformation matrix MediaPipe hands back, undone into a
-// rotation and then into yaw, pitch and roll.
-HeadRotation PoseOf(const Face& face) {
+// rotation and then into yaw, pitch and roll. Nothing when the matrix has no
+// rotation to read (#44, #79): a non-finite pose would never leave the
+// resting pose it was averaged into, and the pose gate would never shut.
+std::optional<HeadRotation> PoseOf(const Face& face) {
   PoseMatrix pose{};
   std::ranges::copy(face.pose_column_major, pose.begin());
-  return HeadRotationFrom(RotationFrom(pose));
+  const Rotation rotation = RotationFrom(pose);
+  for (const auto& row : rotation.rows) {
+    if (!std::ranges::all_of(
+            row, [](double value) { return std::isfinite(value); })) {
+      return std::nullopt;
+    }
+  }
+  return HeadRotationFrom(rotation);
 }
 
 }  // namespace
@@ -42,10 +53,14 @@ ExpressionReader::ExpressionReader(ExpressionTracker::Settings settings)
 void ExpressionReader::OnFace(const Face& face, int /*width*/, int /*height*/,
                               std::int64_t timestamp_ms,
                               std::vector<Reaction>& reactions) {
+  const std::optional<HeadRotation> pose = PoseOf(face);
+  if (!pose) {
+    return;  // As a frame with no face: nothing to learn or judge.
+  }
   Scores scores{};
   std::ranges::copy(face.blendshapes, scores.begin());
   for (const Expression started :
-       tracker_.Update(scores, PoseOf(face), timestamp_ms)) {
+       tracker_.Update(scores, *pose, timestamp_ms)) {
     reactions.push_back(ReactionFor(started));
   }
 }
