@@ -5,6 +5,21 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Measure the shell scripts' line coverage with kcov on Linux
+
+`scripts/coverage_shell.sh` runs every bats test under kcov, in a Debian
+trixie container on CI, and holds each shell script to a `shell` lines floor
+in `coverage_thresholds.json`, as ai-pair measures its scripts. The tests run
+copies of the scripts in temporary folders, so a script's lines are counted
+over every copy. Floors below 100 sit at the measured number where every line
+left is a continuation of a multi-line command, which kcov counts and bash
+never traces; the lines tests could reach got bats cases. Rejected: kcov on
+macOS, where its bash tracing rides on stderr and bats captures it, so every
+script reads 0 (ai-pair's finding; here, Homebrew's kcov 43 running one bats
+file had not finished after two minutes); bashcov, a Ruby gem neither
+repository uses; and Ubuntu's runner, which does not package kcov. Evidence:
+[#2](https://github.com/mattyv/facepalm/issues/2).
+
 ## 2026-11-21: Remove only facepalm's own socket at the socket path
 
 At startup, facepalm still replaces a socket that nothing answers on, so it
