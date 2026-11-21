@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -89,6 +90,12 @@ class ExpressionTracker {
   // the levels it froze still stand.
   std::vector<Expression> Update(const Scores& scores, const HeadRotation& pose,
                                  std::int64_t timestamp_ms);
+
+  // The resting pose as of the last Update, which LookAwayDetector judges
+  // looking away against (#35): nothing before the first frame, nor while
+  // the resting face and pose are still being learned, in the first three
+  // seconds and again after a gap or a change of posture.
+  [[nodiscard]] std::optional<HeadRotation> RestingPose() const;
 
  private:
   static constexpr int kExpressions = 5;

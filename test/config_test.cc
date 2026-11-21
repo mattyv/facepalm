@@ -29,6 +29,9 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_THAT(config.expressions_pose_degrees, FloatEq(10.0F));
   EXPECT_THAT(config.expressions_pose_range, FloatEq(3.0F));
   EXPECT_THAT(config.expressions_settle_ms, Eq(600));
+  EXPECT_TRUE(config.looking_away_enabled);
+  EXPECT_THAT(config.looking_away_degrees, FloatEq(15.0F));
+  EXPECT_THAT(config.looking_away_hold_ms, Eq(1000));
 }
 
 TEST(ParseConfigTest, ReadsEverySetting) {
@@ -44,7 +47,10 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "expressions.hold_ms = 150\n"
       "expressions.pose_degrees = 12\n"
       "expressions.pose_range = 5\n"
-      "expressions.settle_ms = 500\n",
+      "expressions.settle_ms = 500\n"
+      "looking_away.enabled = false\n"
+      "looking_away.degrees = 20\n"
+      "looking_away.hold_ms = 1500\n",
       error);
   ASSERT_TRUE(parsed.has_value()) << error;
   const Config config = parsed.value_or(Config{});
@@ -60,6 +66,9 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_THAT(config.expressions_pose_degrees, FloatEq(12.0F));
   EXPECT_THAT(config.expressions_pose_range, FloatEq(5.0F));
   EXPECT_THAT(config.expressions_settle_ms, Eq(500));
+  EXPECT_FALSE(config.looking_away_enabled);
+  EXPECT_THAT(config.looking_away_degrees, FloatEq(20.0F));
+  EXPECT_THAT(config.looking_away_hold_ms, Eq(1500));
 }
 
 TEST(ParseConfigTest, SkipsCommentsAndBlankLines) {
@@ -205,6 +214,32 @@ TEST(ParseConfigTest, RefusesASettleTimeOutsideZeroTo5000Ms) {
               Eq("line 1: expected a whole number from 0 to 5000"));
   EXPECT_THAT(ErrorFor("expressions.settle_ms = slow"),
               Eq("line 1: expected a whole number from 0 to 5000"));
+}
+
+TEST(ParseConfigTest, RefusesALookAwaySwitchThatIsNotTrueOrFalse) {
+  EXPECT_THAT(ErrorFor("looking_away.enabled = 1"),
+              Eq("line 1: expected true or false"));
+}
+
+TEST(ParseConfigTest, RefusesLookAwayDegreesOutsideZeroToOneEighty) {
+  EXPECT_THAT(ErrorFor("looking_away.degrees = -0.1"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("looking_away.degrees = 180.1"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("looking_away.degrees = far"),
+              Eq("line 1: expected a number from 0 to 180"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 180 check.
+  EXPECT_THAT(ErrorFor("looking_away.degrees = nan"),
+              Eq("line 1: expected a number from 0 to 180"));
+}
+
+TEST(ParseConfigTest, RefusesALookAwayHoldOutsideZeroTo10000Ms) {
+  EXPECT_THAT(ErrorFor("looking_away.hold_ms = -1"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+  EXPECT_THAT(ErrorFor("looking_away.hold_ms = 10001"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+  EXPECT_THAT(ErrorFor("looking_away.hold_ms = 1.5"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
 }
 
 }  // namespace

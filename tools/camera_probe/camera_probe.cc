@@ -9,14 +9,16 @@
 // the config: head pose (#18, #21), head gestures, with Idiap's CCDbHG
 // model printing nod, shake, tilt, turn and up_down reactions (#34), and
 // facial expressions, printing brows_up, smile, lips_pressed, brows_down
-// and eyes_narrowed reactions once each starts (#46). That needs a build
-// with FACEPALM_MEDIAPIPE_DYLIB.
+// and eyes_narrowed reactions once each starts (#46), and looking away
+// (#35). That needs a build with FACEPALM_MEDIAPIPE_DYLIB.
 //
 // Every frame with a face also prints its blendshapes, and, so a recording
 // can be replayed through head_gesture later (#34), its raw gesture
 // channels (`gesture_raw`, head_gesture::RawFrame's 18 values); once a
 // frame's window is ready, its classified probabilities follow
-// (`gesture_probs`, the 6 values head_gesture::Predict gives). These print
+// (`gesture_probs`, the 6 values head_gesture::Predict gives), and, so it
+// can be replayed through the look-away detector (#35), its head pose in
+// degrees (`head_pose <timestamp> <yaw> <pitch> <roll>`). These print
 // whether or not gestures.enabled is set, so a recording always has them.
 //
 // Given a directory as well, it saves every frame there as a numbered PNG,
@@ -44,6 +46,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -73,7 +76,10 @@
 #include "src/frame_recorder.h"
 #include "src/gesture_reader.h"
 #include "src/head_gesture_model.h"
+#include "src/head_pose.h"
 #include "src/head_pose_reader.h"
+#include "src/look_away.h"
+#include "src/look_away_reader.h"
 #include "src/macos/avfoundation_session.h"
 #include "src/session_camera.h"
 
@@ -294,6 +300,19 @@ class GestureProbeReader : public FaceReader {
       std::printf(" %.6f", static_cast<double>(value));
     }
     std::printf("\n");
+    // The head pose in degrees, as LookAwayReader reads it, so a recording
+    // can be replayed with gesture_replay --looking-away (#35). A frame with
+    // no rotation to read (#44) gets none, as LookAwayReader skips it.
+    PoseMatrix pose{};
+    std::ranges::copy(face.pose_column_major, pose.begin());
+    const HeadRotation rotation = HeadRotationFrom(RotationFrom(pose));
+    if (std::isfinite(rotation.yaw_degrees) &&
+        std::isfinite(rotation.pitch_degrees) &&
+        std::isfinite(rotation.roll_degrees)) {
+      std::printf("head_pose %lld %.2f %.2f %.2f\n",
+                  static_cast<long long>(timestamp_ms), rotation.yaw_degrees,
+                  rotation.pitch_degrees, rotation.roll_degrees);
+    }
 
     const std::optional<
         std::array<head_gesture::RawFrame, head_gesture::kWindowFrames>>
@@ -482,6 +501,18 @@ class Probe : public CameraReports {
               .settle_ms = config_.expressions_settle_ms,
               .spreads = config_.expressions_spreads,
               .hold_ms = config_.expressions_hold_ms}));
+    }
+    if (config_.looking_away_enabled) {
+      readers.push_back(std::make_unique<LookAwayReader>(
+          ExpressionTracker::Settings{
+              .rise = config_.expressions_smallest_rise,
+              .pose_degrees = config_.expressions_pose_degrees,
+              .pose_range = config_.expressions_pose_range,
+              .settle_ms = config_.expressions_settle_ms,
+              .spreads = config_.expressions_spreads,
+              .hold_ms = config_.expressions_hold_ms},
+          LookAwayDetector::Settings{.degrees = config_.looking_away_degrees,
+                                     .hold_ms = config_.looking_away_hold_ms}));
     }
     readers.push_back(std::make_unique<GestureProbeReader>());
     analyzers.push_back(std::make_unique<FaceAnalyzer>(

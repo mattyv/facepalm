@@ -18,6 +18,8 @@ constexpr int kMostExpressionsHoldMs = 5000;
 constexpr float kMostExpressionsPoseDegrees = 180;
 constexpr float kMostExpressionsPoseRange = 180;
 constexpr int kMostExpressionsSettleMs = 5000;
+constexpr float kMostLookingAwayDegrees = 180;
+constexpr int kMostLookingAwayHoldMs = 10000;
 
 // `text` without spaces or tabs at either end.
 std::string_view Trim(std::string_view text) {
@@ -70,7 +72,8 @@ std::optional<std::string> SetFramesPerSecond(std::string_view value,
 
 // Sets the on/off setting `setting.name` names from `setting.value`, or
 // returns why it cannot. `setting.name` is one of head_pose.enabled,
-// gestures.enabled or expressions.enabled, as `Set` has already checked.
+// gestures.enabled, expressions.enabled or looking_away.enabled, as `Set`
+// has already checked.
 std::optional<std::string> SetSwitch(const Setting& setting, Config& config) {
   const std::optional<bool> enabled = Boolean(setting.value);
   if (!enabled) {
@@ -80,6 +83,8 @@ std::optional<std::string> SetSwitch(const Setting& setting, Config& config) {
     config.head_pose_enabled = *enabled;
   } else if (setting.name == "gestures.enabled") {
     config.gestures_enabled = *enabled;
+  } else if (setting.name == "looking_away.enabled") {
+    config.looking_away_enabled = *enabled;
   } else {
     config.expressions_enabled = *enabled;
   }
@@ -173,6 +178,30 @@ std::optional<std::string> SetExpressionsSettleMs(std::string_view value,
   return std::nullopt;
 }
 
+// Sets looking_away.degrees from `value`, or returns why it cannot.
+std::optional<std::string> SetLookingAwayDegrees(std::string_view value,
+                                                 Config& config) {
+  const std::optional<float> degrees = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!degrees || std::isnan(*degrees) || *degrees < 0 ||
+      *degrees > kMostLookingAwayDegrees) {
+    return "expected a number from 0 to 180";
+  }
+  config.looking_away_degrees = *degrees;
+  return std::nullopt;
+}
+
+// Sets looking_away.hold_ms from `value`, or returns why it cannot.
+std::optional<std::string> SetLookingAwayHoldMs(std::string_view value,
+                                                Config& config) {
+  const std::optional<int> hold_ms = Number<int>(value);
+  if (!hold_ms || *hold_ms < 0 || *hold_ms > kMostLookingAwayHoldMs) {
+    return "expected a whole number from 0 to 10000";
+  }
+  config.looking_away_hold_ms = *hold_ms;
+  return std::nullopt;
+}
+
 // Sets the setting in `config`, or returns why it cannot.
 std::optional<std::string> Set(const Setting& setting, Config& config) {
   const std::string_view name = setting.name;
@@ -181,7 +210,7 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
     return SetFramesPerSecond(value, config);
   }
   if (name == "head_pose.enabled" || name == "gestures.enabled" ||
-      name == "expressions.enabled") {
+      name == "expressions.enabled" || name == "looking_away.enabled") {
     return SetSwitch(setting, config);
   }
   if (name == "gestures.confidence_threshold") {
@@ -204,6 +233,12 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   }
   if (name == "expressions.settle_ms") {
     return SetExpressionsSettleMs(value, config);
+  }
+  if (name == "looking_away.degrees") {
+    return SetLookingAwayDegrees(value, config);
+  }
+  if (name == "looking_away.hold_ms") {
+    return SetLookingAwayHoldMs(value, config);
   }
   return "unknown setting " + std::string(name);
 }

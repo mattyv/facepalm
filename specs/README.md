@@ -32,6 +32,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
+| `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
 | `McpSocket.cfg` | one session, up to two requests | holds | 4 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `RatingPersistence.cfg` | one rating, a sync that may fail | holds | 6 |
@@ -90,6 +91,69 @@ as one action. TLC checks six distinct states with no fairness assumption.
 false violates the corresponding invariant. Tests in `gesture_reader_test`
 cover elapsed time, interruption, tracking loss, angle wrap and the general
 gesture gate. The model does not prove pose accuracy or model classification.
+
+## `LookAway`: looking away is reported once a look
+
+Models #35's looking-away rule, `LookAwayDetector` in `src/look_away.cc`.
+The head's pose is abstracted against the resting pose `ExpressionTracker`
+learns: `rest` within half the threshold, `between` up to it, `away` past
+it. `held` says the head has stayed away for `hold_ms`. The resting pose
+learns throughout (`Absorb`): quickly in the first three seconds of a track
+(`Learn`), and over about twenty seconds after, so while it is learned only
+a look already reported is absorbed before `hold_ms`. A gap of more than two
+seconds starts learning again (`Gap`). `MaxMoves` and `MaxGaps` bound how
+often the head moves and tracking restarts, the model's form of "the head
+eventually holds a pose"; weak fairness on `Hold`, `Absorb`, `Report` and
+`Rearm` says time passes and the rule acts. `Learn` has no fairness: no
+property needs it. `LookAway.cfg` checks `MaxMoves = 3`, `MaxGaps = 1`: 134
+distinct states, every property holds.
+
+| Property | What it says | Test |
+|---|---|---|
+| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
+| `NoReportWhileLearning` | Nothing is reported while the resting pose is being learned. | `NoReportWhileLearningTest` in `test/look_away_test.cc`; `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`; `ExpressionsTest.HasNoRestingPoseWhileItIsLearned` and `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain` |
+| `NoReportBeforeHold` | A nod or a shake, away for less than `hold_ms`, is not reported. | `NoReportBeforeHoldTest`; `LookAwayReaderTest.NodsAreNotALookAway`; `LookAwayReplayTest.RecordedNodsAreNotReported` |
+| `OncePerLook` | One report per look away. | `OncePerLookTest`; `LookAwayReplayTest.EachRecordedLookDownIsReportedOnce`, `EachRecordedTurnAwayIsReportedOnce` |
+| `RearmOnlyAtRest` | The next look is reported only after the head comes back within half the threshold. | `RearmOnlyAtRestTest` |
+| `LookReported` | Something must happen: a learned head held away is reported. | `LookReportedTest`; `LookAwayReaderTest.ReportsATurnAwayHeldForTheHoldTimeOnce`, `ReadsPitchFromTheFaceToo` |
+| `LookRearms` | The suppression after a report is bounded: wherever the head settles, the next look can be reported. | `LookRearmsTest`; `ExpressionsTest.TheRestingPoseFollowsAPoseHeldForAMinute` |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardLearned = FALSE`: a hold runs while the resting pose is learned | `NoReportWhileLearning`, 4 states |
+| `GuardHold = FALSE`: no hold time | `NoReportWhileLearning`, 3 states; with it left out, `NoReportBeforeHold`, 3 states |
+| `GuardOnce = FALSE`: a look is reported on every step away | `OncePerLook`, 6 states |
+| `GuardHysteresis = FALSE`: rearmed anywhere inside the threshold | `RearmOnlyAtRest`, 7 states |
+| `GuardAbsorb = FALSE`: the resting pose never follows a held pose | `LookRearms`: a head that stays away stays reported forever |
+| `Report` never enabled | `LookReported` |
+| `Rearm` never enabled | `LookRearms` |
+| No fairness on `Hold`, `Absorb`, `Report` or `Rearm` | `LookReported` or `LookRearms` |
+| `Rearm` writes a `rearmedAt` outside the type | `TypeOK`, 7 states |
+
+`src/look_away.cc` implements the spec, and its comments name the actions.
+`Absorb` is `ExpressionTracker`'s resting pose, in `src/expressions.cc`, and
+`Learn` and `Gap` are its learning, which `RestingPose()` reports as no
+resting pose. The same mutations, made to that code, fail the tests that
+stand for the properties they break:
+
+| Mutation | Fails |
+|---|---|
+| Away is measured from straight ahead while learning | `NoReportWhileLearningTest.NothingIsReportedWithoutARestingPose`, `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`, `LookAwayReplayTest.EachRecordedTurnAwayIsReportedOnce` |
+| `RestingPose()` is given while learning | `ExpressionsTest.HasNoRestingPoseWhileItIsLearned`, `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain`, `LookAwayReplayTest.EachRecordedTurnAwayIsReportedOnce` |
+| No hold time | `NoReportBeforeHoldTest` (both), `LookAwayReaderTest.NodsAreNotALookAway`, and eleven others |
+| Reported on every frame away | `OncePerLookTest`, `LookAwayReplayTest.EachRecordedLookDownIsReportedOnce`, and six others |
+| Rearmed at the threshold, not half of it | `RearmOnlyAtRestTest` |
+| The resting pose stops following once learned | `ExpressionsTest.TheRestingPoseFollowsAPoseHeldForAMinute`, and two others |
+| Never reported | `LookReportedTest` (the three that report), and twelve others |
+| Never rearmed | `LookRearmsTest` (both), and the two recorded-look tests |
+| Pitch is not read | `LookReportedTest.LookingDownCountsAsAway`, `LookAwayReaderTest.ReadsPitchFromTheFaceToo`, and three others |
+| Yaw does not wrap at 180 degrees | `LookReportedTest.YawIsComparedAcrossTheWrapAt180Degrees` |
+| The reader judges against straight ahead, not the learned resting pose | `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose` |
+
+The model does not prove pose accuracy, nor that 15 degrees and a second
+suit anyone but the one person whose recordings tuned them.
 
 ## `CameraLifecycle`: when the camera may be on
 
