@@ -2,6 +2,7 @@
 # Cross-link a real ELF shared object to exercise the Linux export boundary.
 
 setup() {
+  ROOT="${BATS_TEST_DIRNAME}/../../.."
   WORK="$(mktemp -d)"
   cat >"${WORK}/symbols.c" <<'C'
 void fp_face_detector_create(void) {}
@@ -26,12 +27,14 @@ teardown() {
     ELF_NM="${ELF_NM:-nm}"
     target=()
   else
-    [[ -n "${ELF_LD:-}" && -n "${ELF_NM:-}" ]] || skip "ELF linker not configured"
+    if [[ -z "${ELF_LD:-}" || -z "${ELF_NM:-}" ]]; then
+      skip "ELF linker not configured"
+    fi
   fi
   "${ELF_CLANG:-clang}" "${target[@]}" -fPIC -c \
     "${WORK}/symbols.c" -o "${WORK}/symbols.o"
   "${ELF_LD}" -shared \
-    --version-script="${BATS_TEST_DIRNAME}/../../../src/mediapipe_shim/exports_linux.map" \
+    --version-script="${ROOT}/src/mediapipe_shim/exports_linux.map" \
     -o "${WORK}/shim.so" "${WORK}/symbols.o"
   "${ELF_NM}" --dynamic --defined-only -j \
     "${WORK}/shim.so" >"${WORK}/symbols"

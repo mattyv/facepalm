@@ -27,10 +27,17 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
-| `CameraLifecycle.cfg` | two clients, one helper restart | holds | 1,644 |
+| `CameraLifecycle.cfg` | two clients, one helper restart | holds | 1,588 |
+| `DaemonAdmission.cfg` | one client: consent, approval, retirement | holds | 26 |
+| `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
+| `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
+| `McpSocket.cfg` | one session, up to two requests | holds | 4 |
+| `ProbeShutdown.cfg` | one probe and its camera | holds | 4 |
+| `RatingPersistence.cfg` | one rating, a sync that may fail | holds | 6 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 2,654,148 |
 | `Service.cfg` | three connections, two client names | holds | 396 |
+| `TurnExcursion.cfg` | yaw near or away, settling time | holds | 6 |
 
 ## `McpSocket`: an MCP session owns one socket
 

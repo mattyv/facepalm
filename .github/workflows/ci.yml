@@ -34,8 +34,10 @@ jobs:
         run: |
           shellcheck scripts/*.sh scripts/test/*.bats \
             specs/*.sh specs/test/*.bats \
-            tools/fixtures/*.sh tools/fixtures/test/*.bats
-          shfmt -d scripts/*.sh specs/*.sh tools/fixtures/*.sh
+            tools/fixtures/*.sh tools/fixtures/test/*.bats \
+            integrations/claude-code/*.sh integrations/claude-code/test/*.bats
+          shfmt -d scripts/*.sh specs/*.sh tools/fixtures/*.sh \
+            integrations/claude-code/*.sh
           bash scripts/check_bats.sh
           bats scripts/test specs/test tools/fixtures/test
       - name: Markdown

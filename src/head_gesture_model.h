@@ -23,7 +23,9 @@ namespace facepalm::head_gesture {
 
 inline constexpr int kWindowFrames = 31;  // config.yaml's max_len.
 inline constexpr int kRawChannels = 18;   // 15 landmarks + 3 head pose.
-inline constexpr int kLag = 5;            // config.yaml's transform_relative.
+// Where yaw sits in a RawFrame: first of the head pose, after the landmarks.
+inline constexpr int kYawChannel = 15;
+inline constexpr int kLag = 5;      // config.yaml's transform_relative.
 inline constexpr int kClasses = 6;  // none, nod, shake, tilt, turn, up/down.
 // time_interpolation's time_of_window, for 31 frames at its ~30 fps training
 // rate (33.333ms a frame): 33.333 * (31 - 1).

@@ -149,7 +149,8 @@ void GestureReader::OnFace(const Face& face, int width, int height,
                                                  confidence_threshold_);
   const Gesture to_report = gate_.Update(
       gesture, timestamp_ms,
-      {.yaw = raw.at(15), .window_start_yaw = window->front().at(15)});
+      {.yaw = raw.at(head_gesture::kYawChannel),
+       .window_start_yaw = window->front().at(head_gesture::kYawChannel)});
   if (to_report != Gesture::kNone) {
     reactions.emplace_back(ReactionFor(to_report));
   }
