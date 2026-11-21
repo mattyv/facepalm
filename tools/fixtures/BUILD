@@ -5,6 +5,7 @@ cc_binary(
     name = "face_landmarker_fixtures",
     srcs = ["face_landmarker_fixtures.cc"],
     deps = [
+        "//src:frame_times",
         "//mediapipe/tasks/cc/vision/core:running_mode",
         "//mediapipe/tasks/cc/vision/face_landmarker",
         "//mediapipe/tasks/cc/vision/utils:image_utils",

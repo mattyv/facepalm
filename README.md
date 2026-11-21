@@ -289,6 +289,12 @@ thread count and peak memory. Given a directory as a fourth argument, it
 saves every frame there as a PNG, with each frame's capture time in
 `timestamps.txt`, for `face_landmarker_fixtures` to replay. Those frames
 are images of whoever sat at the camera: keep them out of the repository.
+Replay them with `face_landmarker_fixtures --recording
+<directory>/timestamps.txt <model> <directory>/frame_*.png`, which runs each
+frame at its own capture time, so a 15 fps recording plays at its own speed
+and a dropped frame keeps its gap (#42); it refuses a frame with no line in
+`timestamps.txt`, and times that do not increase. `--video` instead runs
+images 33 ms apart.
 Every frame with a face also prints its gesture channels as
 `gesture_raw <timestamp_ms> <18 values>` (head_gesture::RawFrame, the model's
 own input), and once that frame's window is ready, its class probabilities
@@ -299,7 +305,9 @@ has what a replay needs.
 as that many frames, for a face held still in front of the camera.
 `face_model_check --gesture <model> <frame.png>...` runs the head-gesture
 model over those images as frames of one video, 33 ms apart, and prints the
-last window's gesture and probabilities.
+last window's gesture and probabilities; with `--recording <timestamps.txt>`
+before the model, it runs a recording's frames at their capture times
+instead.
 
 For energy, run `powermetrics` alongside it in another terminal, and read
 `camera_probe`'s line:
@@ -315,7 +323,10 @@ v0.10.35, and a small tool that writes its landmarks, blendshapes and
 transformation matrix for each image as JSON. These are the reference that
 facepalm's own face pipeline is tested against. Building it needs Bazel
 (`brew install bazelisk`) and takes ten minutes or more the first time;
-everything it fetches and builds goes in `build-mediapipe/`.
+everything it fetches and builds goes in `build-mediapipe/`. The tool reads a
+recording's `timestamps.txt` with `src/frame_times.cc`, which facepalm's own
+build unit-tests; `build.sh` links `src` into MediaPipe's workspace as the
+package `//src` for it.
 
 ```shell
 bash tools/fixtures/build.sh

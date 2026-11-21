@@ -61,6 +61,7 @@ teardown() {
   [[ "${log}" != *DEVELOPER_DIR* ]] || false
   [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_fixtures" ]] || false
   [[ -L "${WORK}/repo/build-mediapipe/mediapipe/facepalm_shim" ]] || false
+  [[ -L "${WORK}/repo/build-mediapipe/mediapipe/src" ]] || false
 }
 
 @test "leaves an existing checkout as it is" {
