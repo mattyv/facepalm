@@ -20,14 +20,27 @@ export function parseHookInput(input) {
   };
 }
 
+// One reading's validity, named so formatHookContext's guard below can
+// fold it in with .some() rather than its own early return (see that
+// guard's comment).
+function invalidReading(reading) {
+  return !Number.isSafeInteger(reading?.id) || reading.id <= 0 || typeof reading.summary !== 'string';
+}
+
 export function formatHookContext(event, delivery, currentTool) {
+  // The reading check is folded into this same guard, rather than its own
+  // "if (...) return null;": on its own, in any position, V8's precise
+  // coverage never gave that exact shape a branch entry at all, taken or
+  // not, so the gate in scripts/coverage_js.sh could not see it either
+  // way; as one more clause of this guard, which it already tracks, it
+  // does not have that problem.
   if (!postEvents.has(event) || !Array.isArray(delivery?.readings) ||
       !Number.isSafeInteger(delivery.missed) || delivery.missed < 0 ||
-      (delivery.omitted !== undefined && (!Number.isSafeInteger(delivery.omitted) || delivery.omitted < 0))) return null;
+      (delivery.omitted !== undefined && (!Number.isSafeInteger(delivery.omitted) || delivery.omitted < 0)) ||
+      delivery.readings.slice(0, 10).some(invalidReading)) return null;
   const parts = [];
-  for (const reading of delivery.readings.slice(0, 10)) {
-    if (!Number.isSafeInteger(reading?.id) || reading.id <= 0 ||
-        typeof reading.summary !== 'string') return null;
+  const readings = delivery.readings.slice(0, 10);
+  for (const reading of readings) {
     const clean = reading.summary.replace(/[\x00-\x1f\x7f]+/g, ' ');
     const summary = clean.length > 160 ? `${clean.slice(0, 159)}…` : clean;
     let timing = '';
@@ -45,6 +58,7 @@ export function formatHookContext(event, delivery, currentTool) {
   const omitted = Math.max(0, delivery.readings.length - 10) + (delivery.omitted ?? 0);
   if (omitted > 0) parts.push(`${omitted} more reading${omitted === 1 ? '' : 's'} omitted`);
   if (delivery.missed) parts.push(`${delivery.missed} readings missed`);
-  if (!parts.length) return null;
-  return { hookSpecificOutput: { hookEventName: event, additionalContext: `Facepalm: ${parts.join(' · ')}` } };
+  return parts.length
+    ? { hookSpecificOutput: { hookEventName: event, additionalContext: `Facepalm: ${parts.join(' · ')}` } }
+    : null;
 }

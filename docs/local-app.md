@@ -59,6 +59,33 @@ Contents/Resources/node/bin/node
 Contents/Resources/mcp/main.js RUNTIME/service.sock --client-token-file RUNTIME/client-token
 ```
 
+For Claude Desktop, add a `facepalm` entry to `claude_desktop_config.json`
+(macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`),
+filling in `APP` and `RUNTIME` as above:
+
+```json
+{
+  "mcpServers": {
+    "facepalm": {
+      "command": "APP/Contents/Resources/node/bin/node",
+      "args": [
+        "APP/Contents/Resources/mcp/main.js",
+        "RUNTIME/service.sock",
+        "--client-token-file",
+        "RUNTIME/client-token"
+      ]
+    }
+  }
+}
+```
+
+Restart Claude Desktop afterward. `wait_for_reaction` with a `beat` can then
+show its "pick the feeling" card inline, when Claude Desktop renders it
+(MCP Apps): ask Claude to call `show_feeling_card` with the `id`, `feeling`
+and `feelings` a beat returned, and watch for the card asking "How were you
+feeling just then?" with Facepalm's read already highlighted. A host without
+MCP Apps gets `show_feeling_card`'s text instead, with the same information.
+
 Choose **Settings** from the 🤦 menu to set the frame rate, enable detectors,
 or adjust gesture confidence and expression tuning. To apply saved settings
 on the next daemon start, add `--config "${XDG_CONFIG_HOME:-$HOME/.config}/facepalm/facepalm.conf"`

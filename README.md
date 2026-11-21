@@ -258,6 +258,18 @@ felt, `tell_feeling` takes the interpretation's ID and their pick, sends
 `feel <id> <feeling>`, and Facepalm tunes later reads from it. A client resets
 the person's picks with `reset feelings`.
 
+Where the host renders interactive widgets ([MCP
+Apps](https://github.com/modelcontextprotocol/ext-apps)), `show_feeling_card`
+shows the person a "How were you feeling just then?" card for a beat's
+interpretation: one button per feeling, in the order `feelings` lists them,
+Facepalm's own read already highlighted, and one click either way, which
+sends `tell_feeling` itself. The card never names the gesture, the
+interpretation's ID, or any basis, eligibility or retention detail; a second
+click is refused. A host without MCP Apps gets the tool's text instead, with
+the same `id`, `feeling` and `feelings` to act on directly. See [local macOS
+app staging](docs/local-app.md) for the Claude Desktop configuration that
+renders the card.
+
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the
 installed adapter against the existing test-only service, first install the

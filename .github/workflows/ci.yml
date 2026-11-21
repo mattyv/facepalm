@@ -69,6 +69,10 @@ jobs:
           bats integrations/claude-code/test
           cmake --build build-coverage --target mcp_service_fixture
           MCP_FIXTURE="$PWD/build-coverage/mcp_service_fixture" node --test test/integration/*.test.mjs
+      # Each JS file in mcp/ and integrations/claude-code/ at 100 percent of
+      # lines, branches and functions, by its own test file alone (#67).
+      - name: JavaScript coverage
+        run: bash scripts/coverage_js.sh
       - name: Portable install smoke
         run: |
           cmake -DSOURCE_DIR="$PWD" \
