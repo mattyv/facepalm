@@ -5,6 +5,25 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-21: Hold the shell scripts to 100 percent of lines with kcov on Linux
+
+`scripts/coverage_shell.sh` runs every bats test under kcov, in a Debian
+trixie container on CI, and holds each shell script to 100 percent of its
+lines (its `shell` floor in `coverage_thresholds.json`), as the C++ and
+JavaScript are held. The tests run copies of the scripts in temporary
+folders, so a script's lines are counted over every copy. kcov counts lines
+that bash never traces: each line of a multi-line quoted string or array, a
+`$(...)` continued over lines, and `done <file`. The scripts are written so
+none occurs: awk programs come from here-documents, which kcov skips; long
+lists are built with `+=`; each `$(...)` sits on one line; and loops read
+here-strings. Rejected: floors at the measured number for the lines kcov
+miscounts (this PR's first version), since the user holds every file to 100;
+kcov on macOS, where its bash tracing rides on stderr and bats captures it,
+so every script reads 0 (ai-pair's finding; here, Homebrew's kcov 43 running
+one bats file had not finished after two minutes); bashcov, a Ruby gem
+neither repository uses; and Ubuntu's runner, which does not package kcov.
+Evidence: [#2](https://github.com/mattyv/facepalm/issues/2).
+
 ## 2026-11-21: A turn's suppression ends once the head settles anywhere
 
 -   **Decision:** after a turn, later turns stay suppressed until the model

@@ -12,9 +12,10 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 readonly ROOT
 readonly SHIM="${ROOT}/build-mediapipe/mediapipe/bazel-bin/facepalm_shim"
 readonly DYLIB="${SHIM}/libfacepalm_mediapipe.dylib"
-readonly INTERFACE=(_fp_face_model_create _fp_face_model_destroy
-  _fp_face_model_detect _fp_face_detector_create _fp_face_detector_destroy
-  _fp_face_detector_detect)
+INTERFACE=(_fp_face_model_create _fp_face_model_destroy _fp_face_model_detect)
+INTERFACE+=(_fp_face_detector_create _fp_face_detector_destroy)
+INTERFACE+=(_fp_face_detector_detect)
+readonly INTERFACE
 
 main() {
   local size exports links failed=0 symbol name library

@@ -118,11 +118,25 @@ CXX=clang++ cmake -S . -B build-sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
 cmake --build build-sanitizers && ctest --test-dir build-sanitizers --output-on-failure --no-tests=error
 bats scripts/test specs/test tools/fixtures/test  # Tests for the scripts.
 bash scripts/check_bats.sh        # Every bats assertion ends in || false.
+# On Linux with kcov: every shell script's lines, at 100 percent.
+bash scripts/coverage_shell.sh
 cmake --build build --target format-check
 cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
   && cmake --build build-tidy     # clang-tidy on every source.
 bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
+
+`coverage_shell.sh` runs every bats test under kcov and holds each shell
+script in git to 100 percent of its lines, its `shell` floor in
+`coverage_thresholds.json`; it names the lines a script's tests miss. It runs
+on Linux only, in CI's `shell-coverage` job: on macOS, kcov's bash tracing
+rides on stderr, which bats captures, so every script would read 0. kcov
+counts some lines bash never traces, so the scripts avoid them: an awk
+program is read from a here-document, a long list is built up with `+=` one
+line at a time, a `$(...)` stays on one line (its arguments in an array when
+they are long), and a `while read` loop reads a here-string, not
+`done <file`. A command continued with a trailing backslash is fine: kcov
+counts only its first line.
 
 See [local macOS app staging](docs/local-app.md) for the development installer.
 
