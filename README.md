@@ -28,6 +28,10 @@ made since, each with its reason, are in the
     frame at a time, across the capture, controller and inference queues,
     following `specs/FramePipeline.tla`. Each frame's pixels are wiped once
     it is done with.
+-   `src/frame_recorder`: saves `camera_probe`'s frames on a write queue of
+    their own, with a bounded backlog, and reports how many were saved,
+    failed and dropped once every one is written, following
+    `specs/ProbeShutdown.tla` (#41).
 -   `src/frame_analyzer`, `src/face_analyzer`, `src/face_reader`: what the
     pipeline runs on each frame. `FaceAnalyzer` runs the face model once a
     frame and gives the face it found, or that there was none, to every
@@ -301,7 +305,11 @@ answer flickers between two related classes or to `none` and back (#34).
 It reports how long each detect took, how many frames had a face, the
 thread count and peak memory. Given a directory as a fourth argument, it
 saves every frame there as a PNG, with each frame's capture time in
-`timestamps.txt`, for `face_landmarker_fixtures` to replay. Those frames
+`timestamps.txt`, for `face_landmarker_fixtures` to replay. At most 30
+frames wait to be written; a frame past that is dropped. The probe waits
+for every frame to be written before it exits, prints `recorded_frames`,
+`recording_failed` and `recording_dropped`, and exits with 1 when any
+frame is missing from the recording (#41). Those frames
 are images of whoever sat at the camera: keep them out of the repository.
 Replay them with `face_landmarker_fixtures --recording
 <directory>/timestamps.txt <model> <directory>/frame_*.png`, which runs each
