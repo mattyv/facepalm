@@ -472,6 +472,10 @@ class FeelingStoreFileTest : public ::testing::Test {
   std::string path_;
 };
 
+// Checks the file's permissions, its folder's, and that a pick survives a
+// reopen and a forget clears it. Linux's libstdc++ scores this higher than
+// macOS's libc++ does for the same source.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(FeelingStoreFileTest, KeepsPicksInAPrivateFileAcrossRuns) {
   std::string error;
   {

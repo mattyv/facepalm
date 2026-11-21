@@ -62,6 +62,8 @@ int CopyFace(const FaceLandmarkerResult& result, FpFace& out, char* error,
 
 extern "C" int fp_face_model_create(const char* model_path, FpFaceModel** out,
                                     char* error, size_t error_size) {
+  // RunningMode has no zero-valued enumerator, but running_mode is set below.
+  // NOLINTNEXTLINE(bugprone-invalid-enum-default-initialization)
   FaceLandmarkerOptions options{};
   options.base_options.model_asset_path = model_path;
   options.base_options.host_system = HOST_SYSTEM_LINUX;
@@ -77,10 +79,12 @@ extern "C" int fp_face_model_create(const char* model_path, FpFaceModel** out,
   return 0;
 }
 
-extern "C" int fp_face_model_detect(FpFaceModel* model, const uint8_t* rgba,
-                                    int width, int height, int64_t timestamp_ms,
-                                    FpFace* out, char* error,
-                                    size_t error_size) {
+// facepalm_mediapipe.h's own signature, shared with the macOS shim.
+extern "C" int fp_face_model_detect(
+    FpFaceModel* model, const uint8_t* rgba,
+    // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+    int width, int height, int64_t timestamp_ms, FpFace* out, char* error,
+    size_t error_size) {
   if (width <= 0 || height <= 0 ||
       width > std::numeric_limits<int>::max() / 4 / height) {
     return Fail("invalid MediaPipe dimensions", error, error_size);
@@ -107,6 +111,9 @@ extern "C" int fp_face_model_detect(FpFaceModel* model, const uint8_t* rgba,
   return copied;
 }
 
+// facepalm_mediapipe.h's own signature, shared with the macOS shim; the
+// pointer is deleted, not just read.
+// NOLINTNEXTLINE(misc-const-correctness)
 extern "C" void fp_face_model_destroy(FpFaceModel* model) {
   if (model == nullptr) {
     return;
