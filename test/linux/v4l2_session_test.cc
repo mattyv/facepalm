@@ -574,8 +574,7 @@ ssize_t v4l2_read(int fd, void* buffer, size_t n) {
   return count;
 }
 
-// glibc declares poll noexcept in C++.
-int poll(pollfd* fds, nfds_t nfds, int timeout) noexcept {
+int poll(pollfd* fds, nfds_t nfds, int timeout) {
   const int ready = facepalm::v4l2->Poll(fds, nfds, timeout);
   errno = facepalm::failure;
   return ready;

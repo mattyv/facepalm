@@ -65,7 +65,9 @@ struct FakeResult {
   FakeResult() {
     for (std::size_t i = 0; i < landmarks.size(); ++i) {
       const auto value = static_cast<float>(i);
-      landmarks[i] = {.x = value, .y = value + 0.25F, .z = value + 0.5F};
+      landmarks[i].x = value;
+      landmarks[i].y = value + 0.25F;
+      landmarks[i].z = value + 0.5F;
     }
     for (std::size_t i = 0; i < categories.size(); ++i) {
       categories[i].score = static_cast<float>(i) / 100;
