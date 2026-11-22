@@ -141,6 +141,10 @@ facepalm_unit(calibration_store)
 target_link_libraries(calibration_store PUBLIC calibration)
 facepalm_unit(calibration_reader)
 target_link_libraries(calibration_reader PUBLIC calibration head_pose)
+# The one place that decides calibration is unavailable, rather than a
+# nullptr check repeated in tools/daemon/main.cc (#116, #64).
+facepalm_unit(daemon_calibration)
+target_link_libraries(daemon_calibration PUBLIC calibration)
 facepalm_unit(calibrate_cli)
 facepalm_unit(session_camera)
 # The daemon's readers are pure computation, so their factory's tests make
@@ -149,7 +153,7 @@ facepalm_unit(session_camera)
 # ScreenContextReaderForwarder (face_readers.cc) always wraps one given.
 facepalm_unit(face_readers)
 target_link_libraries(face_readers PUBLIC gesture_reader expression_reader
-  look_away_reader screen_context_reader config)
+  look_away_reader screen_context_reader calibration_reader config)
 
 facepalm_unit(gesture_replay)
 target_link_libraries(gesture_replay PUBLIC gesture_reader)
@@ -317,6 +321,7 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   set_target_properties(facepalm_daemon PROPERTIES OUTPUT_NAME facepalm-daemon
     INSTALL_RPATH "@executable_path/../Frameworks")
   target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
+    calibration_reader daemon_calibration
     client_approvals client_token
     daemon_control daemon_options daemon_status face_readers feed_clients user_paths
     avfoundation_session camera_controller config frame_pipeline face_analyzer
@@ -396,6 +401,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   # face_model calls the shim, and the shim MediaPipe, so each comes after
   # the one that calls it.
   target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
+    calibration_reader daemon_calibration
     client_approvals client_token
     daemon_control daemon_options daemon_status face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader

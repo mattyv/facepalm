@@ -1113,11 +1113,19 @@ the capture in place so `Next` can be retried, which the model does not
 represent. `OnCameraLost` and `OnCameraUp` are not called by
 `src/calibration_reader.cc` (which only ever sees a pose while the camera is
 already up): they are for whoever owns the camera's lifecycle in the
-daemon's composition root to call, which is outside this change (item 7's
-`tools/daemon/main.cc`); until it does, a session only ever sees the camera
-up. `src/service.cc` dispatches a `calibrate` request to the controller it
-is given, or refuses it when it is given none, which is also outside the
-model (a session is always available in it). The model does not prove the
+daemon's composition root to call, which is `tools/daemon/main.cc`'s
+`Engine`, through `src/daemon_calibration.h`'s `DaemonCalibration` (#116):
+`Engine::Open` calls `OnCameraUp` exactly when the frame pipeline's own
+model is created, and `Engine::Close` calls `OnCameraLost` before it is
+destroyed, with one more call at `Engine::Start` for the camera being
+closed at startup, before either has ever run once (`DaemonCalibrationTest`
+covers the forwarding itself, mocking `CalibrationController`, since
+`Engine` has no test file of its own, #64). `src/service.cc` dispatches a
+`calibrate` request to the controller it is given, or refuses it when it
+is given none: `Engine` gives it `DaemonCalibration::Controller()`, which is
+only ever null when `tools/daemon/main.cc`'s `CalibrationStorePath` found
+no `--home` to save a profile under, the same as the preview paths beside
+it. The model does not prove the
 saved profile maps a pose to the right screen; that is
 `NearestCalibratedScreen`'s job, covered directly by
 `NearestCalibratedScreenTest` and the acceptance test in
