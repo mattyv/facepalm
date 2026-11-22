@@ -5,6 +5,89 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: Coarse gaze and calibration read eyes with head pose, over every screen, and apply at once, closing #135 and most of #137
+
+-   **Decision (composition):** `src/eye_gaze.h`'s `ComposeGaze` reads
+    `gaze = head + gain * (eye - eye_resting)` per axis, relative to the
+    eyes' own resting level, the way `ExpressionTracker` already reads a
+    blendshape relative to its resting level; beyond
+    `eye_gaze.head_only_yaw_degrees` of head yaw, or with no eye signal
+    yet, gaze is head pose alone. `src/screen_context.h`'s `CoarseGazeFrom`
+    now takes this composed gaze, not head pose, and `NearestCalibratedScreen`
+    compares a calibration profile's own saved points against it the same
+    way.
+-   **Decision (eye signal):** `EyeSignalFrom` reads `src/eyes_probe.h`'s own
+    blendshape indices (#139): horizontal is the mean of
+    `(eyeLookOutLeft - eyeLookInLeft)` and `(eyeLookInRight - eyeLookOutRight)`;
+    vertical is the mean "down" score minus the mean "up" score; a blink
+    (`eyeBlink` past `eye_gaze.blink_threshold`) is skipped outright, never
+    folded into the signal or its resting level. `EyeGazeTracker`, owned
+    by `ScreenContextReader` alongside its existing `ExpressionTracker`,
+    folds kept samples into a median over the last `eye_gaze.median_ms`
+    (damping frame noise, which doubles as a dwell on whatever class is
+    read off the result) and learns the resting level the first
+    `eye_gaze.resting_ms` of samples (and again after a gap of
+    `eye_gaze.gap_ms`), the same relative-to-resting approach
+    `ExpressionTracker` already takes, reused rather than reinvented.
+-   **Decision (the gains step and weak-step refusal, closing most of
+    #137 and all of #136):** a new step between the resting pose and the
+    first screen's points, "fixate a dot, turn the head slowly, keeping
+    your eyes on it": `src/eye_gaze.h`'s `EstimateGains` reads the
+    least-squares slope of head over eye per axis (negated, since
+    `gaze = head + gain * eye` must stay level as head varies while
+    fixating), refusing the whole step when neither axis's own head range
+    reaches `calibration.min_head_travel_degrees`, and leaving an axis
+    under `calibration.min_axis_degrees` of its own range at the
+    configured default gain rather than dividing by a range that barely
+    moved. A screen's corner is refused the same way when its own
+    composed gaze reads under `calibration.min_spread_degrees` from that
+    screen's already-captured centre. Either refusal resets the step's own
+    capture for a retry, with a plain reason, rather than #136's silent
+    accept of a profile whose corners could not be told apart.
+-   **Decision (every screen, #135):** both menus' "Calibrate…" window now
+    passes `[NSScreen screens].count` /
+    `QGuiApplication::screens().size()` to `CalibrationFlow::Start`,
+    rather than #136's hardcoded one screen, moves itself onto the screen
+    a step names (`moveToScreenForStep:`/`MoveToScreenForStep`, primary
+    screen first then the rest, the same order
+    `MacosScreenSource::Screens()` already enumerates in on a Mac), and
+    names that screen -- its position relative to the main one, and its
+    display name -- in the step's own prompt. The wizard ends with
+    "Calibrated N screens.", read from the daemon's own `done` reply,
+    which now carries `"screens":n` (`CalibrationController::Status::screens`,
+    `CalibrationStatusJson`).
+-   **Decision (apply at once, the rest of #136):** `CalibrationSession`
+    takes an `on_finished` callback, called with the freshly saved profile
+    from inside the same `Next` call that saves it; the daemon's
+    composition root (`tools/daemon/main.cc`'s `Engine`) uses it to call
+    `ScreenContextReporter::SetProfile`, guarded by a mutex of its own
+    (`ScreenContextReporter` is otherwise a stateless, lock-free snapshot
+    on every other call), so the very next reading already uses the new
+    profile rather than only the daemon's next run.
+-   **Decision (old profiles, format version 2):** `CalibrationProfile`
+    gains `resting_eye` (`EyeSignal`) and `gains` (`EyeGains`) fields,
+    `CalibrationFileStore`'s own format version bumping from 1 to 2 to
+    match; a profile a version-1 daemon saved has neither, so loading it
+    now fails as "unsupported calibration file version" -- already treated
+    as no profile at all by every caller -- rather than needing a
+    migration path for two fields no v1 profile ever measured.
+-   **Rejected:** a second, independent hysteresis layer on top of
+    `CoarseGazeFrom`'s own class (this_screen/other_screen/away/unknown)
+    to give it a dwell of its own -- the eye signal's median filter
+    already provides that inertia for the angle a class is read off, and
+    `CoarseGazeFrom` is deliberately stateless and spec-free (`specs/
+    README.md`'s own note on it), so a second stateful layer on top would
+    duplicate rather than compose with the first; storing a calibration
+    profile's per-point eye and head values separately rather than their
+    already-composed gaze angle (the profile's own consumers,
+    `NearestCalibratedScreen` and the spread check, only ever need the
+    composed angle, and the gains used to compose it are already saved
+    alongside).
+-   **Evidence:** [#137](https://github.com/mattyv/facepalm/issues/137),
+    [#135](https://github.com/mattyv/facepalm/issues/135); #137 stays open
+    until its constants are checked against #139's recordings, named in a
+    tuning note in `docs/local-app.md`.
+
 ## 2026-11-22: The camera preview now shows the readings and the latest beat's feeling, closing #134
 
 -   **Decision:** beside the frame, in the same private folder, under the same

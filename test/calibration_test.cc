@@ -96,7 +96,7 @@ TEST_F(StartTest, StartsAtTheRestingStep) {
 TEST_F(StartTest, MovesToTheGainsStepAfterResting) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
 
   std::string error;
   const std::optional<CalibrationController::Status> status =
@@ -149,7 +149,7 @@ TEST_F(NoAdvanceWithoutCaptureTest, RefusesNextBeforeAnyPose) {
 TEST_F(NoAdvanceWithoutCaptureTest, EachStepNeedsItsOwnCapture) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string first_next_error;
   ASSERT_TRUE(session_.Next(first_next_error).has_value());
 
@@ -170,7 +170,7 @@ using NoSaveWithWeakStepTest = CalibrationSessionTest;
 TEST_F(NoSaveWithWeakStepTest, RefusesAGainsStepWithTooLittleHeadTravel) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string resting_error;
   ASSERT_TRUE(session_.Next(resting_error).has_value());
 
@@ -187,7 +187,7 @@ TEST_F(NoSaveWithWeakStepTest, RefusesAGainsStepWithTooLittleHeadTravel) {
 TEST_F(NoSaveWithWeakStepTest, ARefusedGainsStepCanBeRetried) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string resting_error;
   ASSERT_TRUE(session_.Next(resting_error).has_value());
   session_.Update(Pose(0, 0), Eye(0, 0));
@@ -206,18 +206,18 @@ TEST_F(NoSaveWithWeakStepTest, ARefusedGainsStepCanBeRetried) {
 TEST_F(NoSaveWithWeakStepTest, RefusesACornerTooCloseToItsOwnCentre) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string resting_error;
   ASSERT_TRUE(session_.Next(resting_error).has_value());
   std::string gains_error;
   ASSERT_TRUE(PassGainsStep(gains_error).has_value()) << gains_error;
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string centre_error;
   ASSERT_TRUE(session_.Next(centre_error).has_value()) << centre_error;
 
   // The corner's gaze barely differs from the centre just stored: under
   // the default min_spread_degrees.
-  session_.Update(Pose(0.5, 0));
+  session_.Update(Pose(0.5, 0), EyeSignal{});
 
   std::string error;
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
@@ -227,19 +227,19 @@ TEST_F(NoSaveWithWeakStepTest, RefusesACornerTooCloseToItsOwnCentre) {
 TEST_F(NoSaveWithWeakStepTest, ARefusedCornerCanBeRetried) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string resting_error;
   ASSERT_TRUE(session_.Next(resting_error).has_value());
   std::string gains_error;
   ASSERT_TRUE(PassGainsStep(gains_error).has_value()) << gains_error;
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string centre_error;
   ASSERT_TRUE(session_.Next(centre_error).has_value()) << centre_error;
-  session_.Update(Pose(0.5, 0));
+  session_.Update(Pose(0.5, 0), EyeSignal{});
   std::string weak_error;
   ASSERT_THAT(session_.Next(weak_error), Eq(std::nullopt));
 
-  session_.Update(Pose(20, 20));
+  session_.Update(Pose(20, 20), EyeSignal{});
   std::string error;
   const std::optional<CalibrationController::Status> status =
       session_.Next(error);
@@ -255,7 +255,7 @@ TEST_F(CalibrationWalksEveryTargetTest, WalksEachScreensFivePointsInOrder) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
 
-  session_.Update(Pose(1, -1));
+  session_.Update(Pose(1, -1), EyeSignal{});
   std::string resting_error;
   ASSERT_TRUE(session_.Next(resting_error).has_value());
   std::string gains_error;
@@ -271,7 +271,7 @@ TEST_F(CalibrationWalksEveryTargetTest, WalksEachScreensFivePointsInOrder) {
   for (const CalibrationPoint point :
        {CalibrationPoint::kTopLeft, CalibrationPoint::kTopRight,
         CalibrationPoint::kBottomLeft, CalibrationPoint::kBottomRight}) {
-    session_.Update(Pose(yaw, yaw));
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
     yaw += 10;
     std::string error;
     const auto status = session_.Next(error);
@@ -295,13 +295,13 @@ TEST_F(CalibrationWalksEveryTargetTest, SavesTheAveragePoseOfEachTarget) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
 
-  session_.Update(Pose(2, -2));
-  session_.Update(Pose(4, -4));  // Resting: averages to (3, -3).
+  session_.Update(Pose(2, -2), EyeSignal{});
+  session_.Update(Pose(4, -4), EyeSignal{});  // Resting: averages to (3, -3).
   std::string error;
   ASSERT_TRUE(session_.Next(error).has_value()) << error;
   ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
   for (const double yaw : {10, 20, 30, 40, 50}) {
-    session_.Update(Pose(yaw, yaw));
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
     ASSERT_TRUE(session_.Next(error).has_value()) << error;
   }
 
@@ -318,6 +318,7 @@ TEST_F(CalibrationWalksEveryTargetTest, SavesTheAveragePoseOfEachTarget) {
       Eq(50));
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(CalibrationWalksEveryTargetTest, SavesTheEstimatedGainsAndRestingEye) {
   CalibrationProfile captured;
   EXPECT_CALL(store_, Save)
@@ -332,7 +333,7 @@ TEST_F(CalibrationWalksEveryTargetTest, SavesTheEstimatedGainsAndRestingEye) {
   ASSERT_TRUE(session_.Next(error).has_value()) << error;
   ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
   for (const double yaw : {10, 20, 30, 40, 50}) {
-    session_.Update(Pose(yaw, yaw));
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
     ASSERT_TRUE(session_.Next(error).has_value()) << error;
   }
 
@@ -346,16 +347,16 @@ TEST_F(CalibrationWalksEveryTargetTest, TheLastStepFinishesTheSession) {
   ON_CALL(store_, Save).WillByDefault(Return(true));
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string error;
   ASSERT_TRUE(session_.Next(error).has_value()) << error;
   ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
   for (const double yaw : {10, 20, 30, 40}) {
-    session_.Update(Pose(yaw, yaw));
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
     ASSERT_TRUE(session_.Next(error).has_value()) << error;
   }
 
-  session_.Update(Pose(50, 50));
+  session_.Update(Pose(50, 50), EyeSignal{});
   const auto status = session_.Next(error);
 
   ASSERT_TRUE(status.has_value()) << error;
@@ -364,6 +365,7 @@ TEST_F(CalibrationWalksEveryTargetTest, TheLastStepFinishesTheSession) {
   EXPECT_THAT(status->screens, Eq(1));
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(CalibrationWalksEveryTargetTest, OnFinishedIsToldTheSavedProfile) {
   ON_CALL(store_, Save).WillByDefault(Return(true));
   CalibrationProfile told;
@@ -375,7 +377,7 @@ TEST_F(CalibrationWalksEveryTargetTest, OnFinishedIsToldTheSavedProfile) {
                              });
   std::string start_error;
   ASSERT_TRUE(session.Start(1, start_error).has_value());
-  session.Update(Pose(0, 0));
+  session.Update(Pose(0, 0), EyeSignal{});
   std::string error;
   ASSERT_TRUE(session.Next(error).has_value()) << error;
   for (int step = -10; step <= 10; step += 2) {
@@ -383,7 +385,7 @@ TEST_F(CalibrationWalksEveryTargetTest, OnFinishedIsToldTheSavedProfile) {
   }
   ASSERT_TRUE(session.Next(error).has_value()) << error;
   for (const double yaw : {10, 20, 30, 40, 50}) {
-    session.Update(Pose(yaw, yaw));
+    session.Update(Pose(yaw, yaw), EyeSignal{});
     ASSERT_TRUE(session.Next(error).has_value()) << error;
   }
 
@@ -404,15 +406,15 @@ TEST_F(CalibrationWalksEveryTargetTest, AFailedSaveLeavesTheStepRunning) {
   ON_CALL(store_, Save).WillByDefault(Return(true));
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string error;
   ASSERT_TRUE(session_.Next(error).has_value()) << error;
   ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
   for (const double yaw : {10, 20, 30, 40}) {
-    session_.Update(Pose(yaw, yaw));
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
     ASSERT_TRUE(session_.Next(error).has_value()) << error;
   }
-  session_.Update(Pose(50, 50));
+  session_.Update(Pose(50, 50), EyeSignal{});
 
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("disk full"));
@@ -430,7 +432,7 @@ TEST_F(NoSaveOnCancelTest, CancellingNeverSaves) {
   EXPECT_CALL(store_, Save).Times(0);
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(5, 5));
+  session_.Update(Pose(5, 5), EyeSignal{});
 
   std::string error;
   EXPECT_TRUE(session_.Cancel(error));
@@ -467,7 +469,7 @@ TEST_F(NoRunningWithoutCameraTest, LosingTheCameraCancelsARunningSession) {
   EXPECT_CALL(store_, Save).Times(0);
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(5, 5));
+  session_.Update(Pose(5, 5), EyeSignal{});
 
   session_.OnCameraLost();
 
@@ -496,7 +498,7 @@ TEST_F(NoRunningWithoutCameraTest, TheCameraComingBackAllowsStarting) {
 using UpdateIgnoredWithoutASessionTest = CalibrationSessionTest;
 
 TEST_F(UpdateIgnoredWithoutASessionTest, APoseWithNoSessionChangesNothing) {
-  session_.Update(Pose(5, 5));
+  session_.Update(Pose(5, 5), EyeSignal{});
 
   std::string error;
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));

@@ -35,7 +35,8 @@ class ScreenContextReporter {
                         bool titles_enabled,
                         const CalibrationProfile* profile = nullptr,
                         EyeGains default_gains = {},
-                        double head_only_yaw_degrees = 35);
+                        double head_only_yaw_degrees =
+                            CalibrationSettings::kDefaultHeadOnlyYawDegrees);
 
   // {"active_app":"...","window_title":"...","mouse":{"x":..,"y":..},
   // "gaze":"...","calibrated_screen":n}, with active_app, window_title and
@@ -52,11 +53,19 @@ class ScreenContextReporter {
   // nearest to (NearestCalibratedScreen), is left out without `pose`, or
   // without a profile with at least one screen; it never changes what
   // `gaze` itself reads.
+  //
+  // `pose`/`resting` and `eye`/`eye_resting` are never swappable in
+  // practice: every call site passes all four from distinct, named
+  // sources (ScreenContextReader's own Pose/RestingPose/EyeReading/
+  // EyeResting, in the daemon, or named test locals), never a bare
+  // literal in any position.
+  // NOLINTBEGIN(bugprone-easily-swappable-parameters)
   [[nodiscard]] std::string Json(
       const std::optional<HeadRotation>& pose,
       const std::optional<HeadRotation>& resting,
       const std::optional<EyeSignal>& eye = std::nullopt,
       const std::optional<EyeSignal>& eye_resting = std::nullopt) const;
+  // NOLINTEND(bugprone-easily-swappable-parameters)
 
   // Swaps the calibration profile Json reads from now on (#136, #137):
   // nullptr for none. `profile`, when not null, must outlive every Json

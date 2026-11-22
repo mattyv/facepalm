@@ -45,11 +45,15 @@ void ScreenContextReporter::SetProfile(const CalibrationProfile* profile) {
   profile_ = profile;
 }
 
+// See the declaration (src/screen_context_reporter.h) for why these four
+// are never swappable in practice.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 std::string ScreenContextReporter::Json(
     const std::optional<HeadRotation>& pose,
     const std::optional<HeadRotation>& resting,
     const std::optional<EyeSignal>& eye,
     const std::optional<EyeSignal>& eye_resting) const {
+  // NOLINTEND(bugprone-easily-swappable-parameters)
   const std::optional<ActiveApp> app = source_.CurrentApp(titles_enabled_);
   const std::optional<MousePosition> mouse = source_.Mouse();
   const ScreenSide side = SideOf(source_.Screens());

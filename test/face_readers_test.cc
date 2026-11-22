@@ -29,7 +29,6 @@
 namespace facepalm {
 namespace {
 
-using ::testing::_;
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
 

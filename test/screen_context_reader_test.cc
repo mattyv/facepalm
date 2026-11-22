@@ -92,14 +92,14 @@ TEST_F(ScreenContextReaderTest, NothingBeforeTheFirstFace) {
 
 TEST_F(ScreenContextReaderTest, EyeReadingFollowsTheLatestFace) {
   Hold(1, {.eye_look_out_left = 0.3F});
-  ASSERT_TRUE(reader_.EyeReading().has_value());
-  EXPECT_NEAR(reader_.EyeReading()->horizontal, 0.15, 0.01);
+  const EyeSignal eye = reader_.EyeReading().value_or(EyeSignal{});
+  EXPECT_NEAR(eye.horizontal, 0.15, 0.01);
 }
 
 TEST_F(ScreenContextReaderTest, EyeRestingIsLearnedAfterThreeSeconds) {
   Hold(4, {.eye_look_out_left = 0.2F});
-  ASSERT_TRUE(reader_.EyeResting().has_value());
-  EXPECT_NEAR(reader_.EyeResting()->horizontal, 0.1, 0.01);
+  const EyeSignal resting = reader_.EyeResting().value_or(EyeSignal{});
+  EXPECT_NEAR(resting.horizontal, 0.1, 0.01);
 }
 
 TEST_F(ScreenContextReaderTest, OnNoFaceClearsTheEyeReadingToo) {

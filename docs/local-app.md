@@ -142,24 +142,40 @@ the same rules, read only by the menu and only while the preview streams.
 
 ## Calibration (optional)
 
-A short guided session improves on the coarse, uncalibrated gaze of item 11
-(#36, #35): it records the resting pose and, for each screen, the head pose
-at its centre and four corners, then saves them to a private file the daemon
-owns. Choosing **Calibrate…** from the 🤦 menu or the tray (#118) opens a
-small window with a plain explanation that it is optional, then steps
-through the resting pose and each screen's centre and four corners with
-Next and Cancel; closing the window at any point, whether by Cancel or its
-own close control, asks the daemon to cancel cleanly, so the old profile is
-always what is left in place unless every step finished. `calibrate_cli`
-drives the same session from a terminal, for testing and as the model
-`src/calibration_flow.h`'s `CalibrationFlow` follows for the menu's own
-socket client. Approve it once by hand, as any other client, only if
-driving it this way rather than through the menu:
+Item 11's coarse gaze (#36, #35) reads head pose composed with eye-in-head
+signal (`src/eye_gaze.h`'s `ComposeGaze`, #137), not head pose alone: eye
+movement that keeps the head still still shows up as a look elsewhere,
+and a person who turns their head one way while looking the other with
+their eyes reads correctly rather than backwards. A short guided session
+improves further on this, still coarse but now calibrated, reading: it
+records the resting head pose and eye level, a gains step (fixate a dot
+and slowly turn the head left then right, keeping your eyes on it --
+`eye_gaze.*` settings' defaults, unproven on a real recording, see the
+tuning note below), and, for each screen, the composed gaze at its centre
+and four corners, then saves them to a private file the daemon owns. A
+step whose data is too weak to use -- the gains step with too little head
+travel, or a corner too close to its own screen's centre -- is refused
+with a plain reason and retried, rather than accepted and silently
+useless (#136). Choosing **Calibrate…** from the 🤦 menu or the tray
+(#118) opens a small window with a plain explanation that it is optional,
+then steps through the resting pose, the gains step, and each screen's
+centre and four corners with Next and Cancel, moving itself onto the
+screen a step names and naming that screen (its position and display
+name) in the prompt, for every screen the computer has (#135); closing
+the window at any point, whether by Cancel or its own close control, asks
+the daemon to cancel cleanly, so the old profile is always what is left
+in place unless every step finished, and the wizard ends with a plain
+result, "Calibrated N screens." `calibrate_cli` drives the same session
+from a terminal, for testing and as the model `src/calibration_flow.h`'s
+`CalibrationFlow` follows for the menu's own socket client. Approve it
+once by hand, as any other client, only if driving it this way rather
+than through the menu:
 
 ```shell
 facepalm-daemon approve calibrate
 calibrate_cli start 1
-calibrate_cli next   # Once per prompted target.
+calibrate_cli next   # Once per prompted target (the resting pose, the
+                      # gains step, then each screen's five points).
 calibrate_cli cancel # Instead of next, to give up.
 ```
 
@@ -169,11 +185,28 @@ is wired to a real session and the camera's lifecycle (#116): a session can
 only start, or keep running, while the camera is actually open, and is
 cancelled the moment the camera closes or is lost, the same guarantee
 `specs/Calibration.tla` makes. The profile a finished session saves feeds
-the coarse gaze item 11's `context` reports (#92): a daemon run that starts
-after a profile exists locates the nearest screen from its calibrated
-points instead of guessing from the screen's edges alone. That profile is
-loaded once, at startup, so finishing a session only changes coarse gaze
-from the daemon's next run, not the one the session ran against. The menu
-approves its own "calibrate" client the first time **Calibrate…** is
+the coarse gaze item 11's `context` reports (#92): a daemon run with a
+profile locates the nearest screen from its calibrated points instead of
+guessing from the screen's edges alone, and its own gains take over from
+`eye_gaze.horizontal_gain`/`eye_gaze.vertical_gain`'s configured default
+for every reading. Finishing a session applies its profile to that
+reading at once (`ScreenContextReporter::SetProfile`, called from
+`CalibrationSession`'s own `on_finished` callback): no restart needed
+(#136). A profile a version before #137 saved has no gains or resting eye
+level, so it fails to load (`calibration_store.cc`'s own version check)
+and the daemon reads coarse gaze as uncalibrated until it is redone. The
+menu approves its own "calibrate" client the first time **Calibrate…** is
 chosen, the same way **Turn On Facepalm…** approves its own client, rather
 than when the menu itself starts.
+
+**Tuning note (#137):** every `eye_gaze.*` and `calibration.min_*` default
+in `src/config.h` was given from memory, the way #139's eyes line's own
+field order was, not measured on a real recording: `eye_gaze.horizontal_gain`
+and `eye_gaze.vertical_gain` (how many degrees of gaze one unit of eye-look
+score is worth), `eye_gaze.blink_threshold`, `eye_gaze.median_ms`,
+`eye_gaze.resting_ms`, `eye_gaze.gap_ms`, `eye_gaze.head_only_yaw_degrees`,
+and `calibration.min_head_travel_degrees`, `calibration.min_axis_degrees`
+and `calibration.min_spread_degrees`. Once #139's fixtures exist, replay
+them through `src/eye_gaze.h`'s `EyeSignalFrom` and `EstimateGains` to see
+whether these hold up, the way #34's and #46's own defaults were tuned on
+a real recording.

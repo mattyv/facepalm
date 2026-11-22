@@ -236,6 +236,30 @@ std::string PreviewReadingsPath(
   return daemon_paths ? daemon_paths->preview_readings : std::string{};
 }
 
+// CalibrationSession's own tunable thresholds and gains, from Config
+// (#137): pulled out of Engine's constructor so its own cognitive
+// complexity (#64) stays under the project's threshold.
+facepalm::CalibrationSettings CalibrationSettingsFor(const facepalm::Config& config) {
+  return facepalm::CalibrationSettings{
+      .default_gains = {.horizontal = config.eye_gaze_horizontal_gain,
+                        .vertical = config.eye_gaze_vertical_gain},
+      .min_head_travel_degrees = config.calibration_min_head_travel_degrees,
+      .min_axis_degrees = config.calibration_min_axis_degrees,
+      .min_spread_degrees = config.calibration_min_spread_degrees,
+      .head_only_yaw_degrees = config.eye_gaze_head_only_yaw_degrees};
+}
+
+// `*profile`, or nullopt with no profile given (#61 item 12): Engine's own
+// copy, so a session finishing later can replace it (#136, #137) rather
+// than only borrowing main()'s local for the Engine's whole lifetime.
+std::optional<facepalm::CalibrationProfile> CopyProfile(
+    const facepalm::CalibrationProfile* profile) {
+  if (profile == nullptr) {
+    return std::nullopt;
+  }
+  return *profile;
+}
+
 // Where a finished calibration session saves its profile (#116): empty,
 // the same as a daemon run with no resolvable --home, leaves calibration
 // unavailable, the way DaemonCalibration (src/daemon_calibration.h)
@@ -336,10 +360,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                               .vertical = config.eye_gaze_vertical_gain},
                       config.eye_gaze_head_only_yaw_degrees)
                 : std::nullopt),
-        calibration_profile_(calibration_profile
-                                 ? std::optional<CalibrationProfile>(
-                                       *calibration_profile)
-                                 : std::nullopt),
+        calibration_profile_(CopyProfile(calibration_profile)),
         feelings_(std::move(feelings)),
         status_path_(std::move(status_path)),
         feed_(kFeedCapacity, *feelings_),
@@ -403,23 +424,9 @@ class Engine : public DaemonController, public DaemonPipeline {
         calibration_session_(
             calibration_store_ != nullptr
                 ? std::make_unique<CalibrationSession>(
-                      *calibration_store_,
-                      CalibrationSettings{
-                          .default_gains =
-                              {.horizontal = config.eye_gaze_horizontal_gain,
-                               .vertical = config.eye_gaze_vertical_gain},
-                          .min_head_travel_degrees =
-                              config.calibration_min_head_travel_degrees,
-                          .min_axis_degrees = config.calibration_min_axis_degrees,
-                          .min_spread_degrees =
-                              config.calibration_min_spread_degrees,
-                          .head_only_yaw_degrees =
-                              config.eye_gaze_head_only_yaw_degrees},
+                      *calibration_store_, CalibrationSettingsFor(config),
                       [this](const CalibrationProfile& profile) {
-                        calibration_profile_ = profile;
-                        if (reporter_) {
-                          reporter_->SetProfile(&*calibration_profile_);
-                        }
+                        OnCalibrationFinished(profile);
                       })
                 : nullptr),
         calibration_(calibration_session_.get()),
@@ -536,6 +543,16 @@ class Engine : public DaemonController, public DaemonPipeline {
   }
 
  private:
+  // CalibrationSession's own on_finished callback (#136, #137): swaps the
+  // freshly saved profile into reporter_ at once
+  // (ScreenContextReporter::SetProfile), rather than only on the next run.
+  void OnCalibrationFinished(const CalibrationProfile& profile) {
+    calibration_profile_ = profile;
+    if (reporter_) {
+      reporter_->SetProfile(&*calibration_profile_);
+    }
+  }
+
   FramePipeline::Analyzers MakeAnalyzers(std::string& error) {
     auto model = MediaPipeFaceModel::Create(model_, error);
     if (!model) {

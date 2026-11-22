@@ -62,10 +62,10 @@ HeadRotation ComposeGaze(const HeadRotation& head,
   return HeadRotation{
       .yaw_degrees =
           head.yaw_degrees +
-          gains.horizontal * (eye->horizontal - eye_resting->horizontal),
+          (gains.horizontal * (eye->horizontal - eye_resting->horizontal)),
       .pitch_degrees =
           head.pitch_degrees +
-          gains.vertical * (eye->vertical - eye_resting->vertical),
+          (gains.vertical * (eye->vertical - eye_resting->vertical)),
       .roll_degrees = head.roll_degrees};
 }
 
@@ -198,9 +198,14 @@ std::optional<double> EstimateOneAxis(std::span<const double> head,
 
 }  // namespace
 
+// `min_travel_degrees` and `min_axis_degrees` are never swappable in
+// practice: every call site passes both from CalibrationSettings' own
+// named fields, never a bare literal in either position.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 std::optional<EstimatedGains> EstimateGains(std::span<const GainsSample> samples,
                                             double min_travel_degrees,
                                             double min_axis_degrees) {
+  // NOLINTEND(bugprone-easily-swappable-parameters)
   std::vector<double> head_yaw;
   std::vector<double> head_pitch;
   std::vector<double> eye_horizontal;

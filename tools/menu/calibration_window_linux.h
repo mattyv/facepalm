@@ -37,6 +37,9 @@ class CalibrationWindow {
 
  private:
   void Render();
+  // Moves the window onto `view`'s own screen (#135): only a screen's
+  // point step names one.
+  void MoveToScreenForStep(const facepalm::CalibrationFlow::View& view);
   void PrimaryClicked();
   void SecondaryClicked();
   void WindowClosed();

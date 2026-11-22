@@ -141,9 +141,15 @@ struct EstimatedGains {
 // nullopt instead when that axis's own eye variance is too small to
 // divide by); an axis under `min_axis_degrees` of its own range is left
 // nullopt too, rather than dividing by a range that barely moved.
+//
+// `min_travel_degrees` and `min_axis_degrees` are never swappable in
+// practice: every call site passes both from CalibrationSettings' own
+// named fields, never a bare literal in either position.
+// NOLINTBEGIN(bugprone-easily-swappable-parameters)
 std::optional<EstimatedGains> EstimateGains(std::span<const GainsSample> samples,
                                             double min_travel_degrees,
                                             double min_axis_degrees);
+// NOLINTEND(bugprone-easily-swappable-parameters)
 
 }  // namespace facepalm
 

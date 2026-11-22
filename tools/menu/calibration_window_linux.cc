@@ -1,10 +1,16 @@
 #include "tools/menu/calibration_window_linux.h"
 
 #include <QByteArray>
+#include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QList>
 #include <QLocalSocket>
+#include <QPoint>
+#include <QRect>
+#include <QScreen>
 #include <QString>
 #include <QVBoxLayout>
+#include <cmath>
 #include <memory>
 #include <optional>
 #include <string>
@@ -26,9 +32,83 @@ constexpr int kWindowSide = 420;
 // (bugprone-throwing-static-initialization).
 QString IntroText() {
   return QStringLiteral(
-      "Calibration is optional. It teaches Facepalm where you look on this "
-      "screen, which makes the feelings and reactions it reports more "
-      "accurate; everything else keeps working without it.");
+      "Calibration is optional. It teaches Facepalm where you look on each "
+      "of your screens, which makes the feelings and reactions it reports "
+      "more accurate; everything else keeps working without it.");
+}
+
+// #137's fixate-and-turn step.
+QString GainsStepText() {
+  return QStringLiteral(
+      "Look at the dot the way you normally would and slowly turn your "
+      "head left, then right, keeping your eyes on it the whole time. "
+      "Then click Next.");
+}
+
+// Every screen Qt reports, primary first then the rest in
+// QGuiApplication::screens()'s own order -- the daemon's own screen
+// index (CalibrationFlow::View::screen) is counted against this same
+// order on this machine.
+QList<QScreen*> OrderedScreens() {
+  const QList<QScreen*> screens = QGuiApplication::screens();
+  QScreen* primary = QGuiApplication::primaryScreen();
+  QList<QScreen*> ordered;
+  if (primary != nullptr) {
+    ordered.append(primary);
+  }
+  for (QScreen* screen : screens) {
+    if (screen != primary) {
+      ordered.append(screen);
+    }
+  }
+  return ordered;
+}
+
+// `screen`, or nullptr once `index` is past the last one Qt reports (the
+// window simply stays where it was).
+QScreen* ScreenAt(int index) {
+  const QList<QScreen*> screens = OrderedScreens();
+  if (index < 0 || index >= screens.size()) {
+    return nullptr;
+  }
+  return screens.at(index);
+}
+
+// Where `screen` sits relative to the primary one (#135: "the screen the
+// prompt names").
+QString ScreenPosition(QScreen* screen) {
+  QScreen* primary = QGuiApplication::primaryScreen();
+  if (screen == primary || primary == nullptr) {
+    return QStringLiteral("the main screen");
+  }
+  const int dx = screen->geometry().x() - primary->geometry().x();
+  const int dy = screen->geometry().y() - primary->geometry().y();
+  if (std::abs(dx) >= std::abs(dy)) {
+    return dx < 0 ? QStringLiteral("the screen to the left")
+                  : QStringLiteral("the screen to the right");
+  }
+  return dy < 0 ? QStringLiteral("the screen above")
+                : QStringLiteral("the screen below");
+}
+
+// "the screen to the left (HDMI-1)", naming both the screen's position
+// and Qt's own name for it (#135, #137) -- the closest a Linux display
+// has to AppKit's localizedName -- or just the position for a screen
+// with none.
+QString ScreenDescription(QScreen* screen) {
+  const QString position = ScreenPosition(screen);
+  if (screen->name().isEmpty()) {
+    return position;
+  }
+  return QStringLiteral("%1 (%2)").arg(position, screen->name());
+}
+
+// "Calibrated 1 screen." or "Calibrated 3 screens." (#135, #137): the
+// wizard's own result line, rather than ending silently (#136's finding).
+QString ResultText(int screens) {
+  return QStringLiteral("Calibrated %1 screen%2.")
+      .arg(screens)
+      .arg(screens == 1 ? QStringLiteral("") : QStringLiteral("s"));
 }
 
 // A QLocalSocket behind src/calibrate_cli.h's CalibrateClientIo (#118),
@@ -71,12 +151,16 @@ class QtCalibrateClientIo : public facepalm::CalibrateClientIo {
 };
 
 // The step `view` prompts, following specs/Calibration.tla's own targets
-// (the resting pose, then each screen's centre and four corners).
+// (the resting pose, #137's gains step, then each screen's centre and
+// four corners), naming the screen a point's own prompt is for (#135).
 QString StepPrompt(const facepalm::CalibrationFlow::View& view) {
   if (view.resting_step) {
     return QStringLiteral(
-        "Sit the way you normally would and look at the centre of this "
-        "screen, then click Next.");
+        "Sit the way you normally would and look at the centre of the "
+        "screen in front of you, then click Next.");
+  }
+  if (view.gains_step) {
+    return GainsStepText();
   }
   QString where;
   switch (view.point) {
@@ -96,8 +180,13 @@ QString StepPrompt(const facepalm::CalibrationFlow::View& view) {
       where = QStringLiteral("the bottom-right corner");
       break;
   }
-  return QStringLiteral("Look at %1 of this screen, then click Next.")
-      .arg(where);
+  QScreen* screen = ScreenAt(view.screen);
+  const QString screenName = screen != nullptr
+                                 ? ScreenDescription(screen)
+                                 : QStringLiteral("screen %1").arg(view.screen + 1);
+  return QStringLiteral("Look at %1 of %2, the way you normally would, then "
+                       "click Next.")
+      .arg(where, screenName);
 }
 
 }  // namespace
@@ -145,6 +234,22 @@ void CalibrationWindow::Open(std::string token) {
   window_.raise();
 }
 
+void CalibrationWindow::MoveToScreenForStep(
+    const facepalm::CalibrationFlow::View& view) {
+  if (view.resting_step || view.gains_step) {
+    return;
+  }
+  QScreen* screen = ScreenAt(view.screen);
+  if (screen == nullptr) {
+    return;
+  }
+  const QRect visible = screen->availableGeometry();
+  const QPoint origin(
+      visible.x() + (visible.width() - window_.width()) / 2,
+      visible.y() + (visible.height() - window_.height()) / 2);
+  window_.move(origin);
+}
+
 void CalibrationWindow::Render() {
   if (!started_) {
     label_->setText(IntroText());
@@ -156,14 +261,15 @@ void CalibrationWindow::Render() {
   const facepalm::CalibrationFlow::View& view = flow_->CurrentView();
   switch (view.state) {
     case facepalm::CalibrationFlow::State::kPrompting:
+      MoveToScreenForStep(view);
       label_->setText(StepPrompt(view));
       primary_->setText(QStringLiteral("Next"));
       primary_->setVisible(true);
       secondary_->setText(QStringLiteral("Cancel"));
       break;
     case facepalm::CalibrationFlow::State::kDone:
-      label_->setText(
-          QStringLiteral("Calibration finished. The new profile is saved."));
+      label_->setText(QStringLiteral("%1 The new profile is saved.")
+                          .arg(ResultText(view.screens)));
       primary_->setVisible(false);
       secondary_->setText(QStringLiteral("Close"));
       break;
@@ -183,7 +289,8 @@ void CalibrationWindow::Render() {
 void CalibrationWindow::PrimaryClicked() {
   if (!started_) {
     started_ = true;
-    flow_->Start(1);
+    // The real screen count (#135), not a hardcoded one screen.
+    flow_->Start(QGuiApplication::screens().size());
   } else if (flow_->CurrentView().state ==
              facepalm::CalibrationFlow::State::kPrompting) {
     flow_->Next();

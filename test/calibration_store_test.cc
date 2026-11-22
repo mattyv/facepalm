@@ -17,6 +17,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/calibration.h"
+#include "src/eye_gaze.h"
 
 // GoogleTest assertions check each optional before access.
 // NOLINTBEGIN(bugprone-unchecked-optional-access)
@@ -603,7 +604,8 @@ TEST_F(CalibrationStoreFileTest,
 
   std::string error;
   ASSERT_TRUE(session.Start(2, error).has_value()) << error;
-  session.Update({.yaw_degrees = 0});  // The resting pose, straight ahead.
+  // The resting pose, straight ahead.
+  session.Update({.yaw_degrees = 0}, EyeSignal{});
   ASSERT_TRUE(session.Next(error).has_value()) << error;
   // The gains step (#137): a real fixate-and-turn, well past every
   // default threshold.
@@ -618,7 +620,7 @@ TEST_F(CalibrationStoreFileTest,
     // (#137's spread check), without changing which centre
     // NearestCalibratedScreen is tested against below.
     for (const double offset : {0.0, 20.0, -20.0, 25.0, -25.0}) {
-      session.Update({.yaw_degrees = centre + offset});
+      session.Update({.yaw_degrees = centre + offset}, EyeSignal{});
       const auto status = session.Next(error);
       ASSERT_TRUE(status.has_value()) << error;
     }

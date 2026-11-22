@@ -76,20 +76,42 @@ made since, each with its reason, are in the
     recordings. Eyes never decide a feeling by rule; gaze is context and a
     feature the personal read learns from. `scripts/record_eye_fixtures.sh`
     guides the user through recording those fixtures.
+-   `src/eye_gaze`: coarse gaze reads head pose composed with eye-in-head
+    signal, not head pose alone (#137). `EyeSignalFrom` reads the eye-look
+    blendshapes `src/eyes_probe` already formats, into a horizontal and
+    vertical signal; `ComposeGaze` adds it, gained and relative to its own
+    resting level, onto head pose (head pose alone beyond
+    `eye_gaze.head_only_yaw_degrees` of yaw, or with no eye signal yet).
+    `EyeGazeTracker`, owned by `ScreenContextReader` alongside its
+    `ExpressionTracker`, skips blinks, medians the rest over
+    `eye_gaze.median_ms` and learns the resting level the way
+    `ExpressionTracker` learns a resting face. `EstimateGains` is the
+    calibration session's own gains step (below): the slope of head over
+    eye while the person fixates and turns, refusing the step outright on
+    too little head travel. A stateless computation throughout, like
+    `src/screen_context`, so it is tested directly rather than modeled.
 -   `src/calibration`, `src/calibration_store`, `src/calibration_reader`: an
-    optional calibration session (#36, #35, item 12 of #61), started,
+    optional calibration session (#36, #35, item 12 of #61, #137), started,
     stepped and cancelled over the protocol's `calibrate` line: it records
-    the resting pose and, for each screen, the head pose at its centre and
-    four corners, then saves them to a private file the daemon owns.
+    the resting head pose and eye level, a gains step (`src/eye_gaze`'s
+    `EstimateGains`), and, for each screen, the composed gaze at its centre
+    and four corners, then saves them to a private file the daemon owns. A
+    step too weak to use -- the gains step with too little head travel, or
+    a corner too close to its own screen's centre -- is refused and
+    retried rather than silently accepted (#136).
     `CalibrationController`, in `src/calibration`, is the session;
-    `src/calibration_store` saves and loads the file; `src/calibration_reader`
-    is the `FaceReader` that feeds it each frame's pose, as
-    `LookAwayReader` does its detector. `calibrate_cli` drives one for
-    testing. `specs/Calibration.tla` models the lifecycle. Once saved, the
-    daemon loads the profile and gives it to `ScreenContextReporter`
-    (below), which adds a `calibrated_screen` field from
-    `NearestCalibratedScreen` alongside the uncalibrated `gaze` it already
-    reads.
+    `src/calibration_store` saves and loads the file, at format version 2
+    for the profile's new `resting_eye` and `gains` fields (an older
+    profile fails to load, read as no profile at all);
+    `src/calibration_reader` is the `FaceReader` that feeds it each
+    frame's pose and eye signal, as `LookAwayReader` does its detector.
+    `calibrate_cli` drives one for testing. `specs/Calibration.tla` models
+    the lifecycle. A finished session's `on_finished` callback gives the
+    daemon's composition root the profile at once, which calls
+    `ScreenContextReporter::SetProfile` (below) so the very next reading
+    already uses it, rather than only the daemon's next run (#136); the
+    profile adds a `calibrated_screen` field from
+    `NearestCalibratedScreen` alongside the gaze it already reads.
 -   `src/preview_lease`, `src/preview_publisher`, `src/preview_request`,
     `src/macos/preview_jpeg`, `src/linux/preview_jpeg`: the camera
     preview (#36, #37, #61 item 8, #108, #114), gated so a frame is ever
@@ -116,13 +138,15 @@ made since, each with its reason, are in the
     `src/screen_context_reader`, `src/screen_source`: the screen context a
     reading's `context` carries (#36 item 11 of #61): the frontmost app,
     the mouse, and a coarse gaze (`this_screen`, `other_screen`, `away` or
-    `unknown`) read, without calibration, from the same head pose and
-    resting pose `src/look_away_reader` reads. `CoarseGazeFrom` and
-    `SideOf`, in `src/screen_context`, are the rule, tested directly; it
-    has no lifecycle, so no spec. `ScreenContextReader` is a `FaceReader`
-    that keeps the pose behind a mutex, read from a different thread than
-    it is written on. `ScreenContextReporter` builds the `context` JSON
-    from `ScreenSource`, the mockable seam its tests take in place of
+    `unknown`) read from `src/eye_gaze`'s composed gaze (#137), with or
+    without calibration. `CoarseGazeFrom` and `SideOf`, in
+    `src/screen_context`, are the rule, tested directly; it has no
+    lifecycle, so no spec. `ScreenContextReader` is a `FaceReader` that
+    keeps the pose and eye signal (its own `EyeGazeTracker`) behind a
+    mutex, read from a different thread than they are written on.
+    `ScreenContextReporter` composes gaze with `src/eye_gaze`'s
+    `ComposeGaze` and builds the `context` JSON from `ScreenSource`, the
+    mockable seam its tests take in place of
     `src/macos/screen_context_macos` (AppKit) and
     `src/linux/screen_context_linux` (X11, through XWayland where a
     Wayland session runs one). Window titles need macOS's Screen Recording

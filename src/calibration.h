@@ -111,9 +111,10 @@ class CalibrationController {
   // False, with `error`, when no session is running.
   virtual bool Cancel(std::string& error) = 0;
   // The gaze pose and eye signal read this frame; ignored unless a
-  // session is running. `eye` defaults to a centred, non-blinking signal,
-  // for a caller (such as a test) that only cares about head pose.
-  virtual void Update(const HeadRotation& pose, const EyeSignal& eye = {}) = 0;
+  // session is running. A caller (such as a test) that only cares about
+  // head pose passes a default-constructed EyeSignal{}: Google style
+  // forbids a default argument here (it is a virtual method).
+  virtual void Update(const HeadRotation& pose, const EyeSignal& eye) = 0;
   // The camera the session's samples come from has gone down: cancels a
   // running session, since there is nothing left to capture, and refuses
   // Start until OnCameraUp. Whoever owns the camera's lifecycle (the
@@ -130,21 +131,31 @@ class CalibrationController {
 // evaluated for a defaulted constructor parameter of the enclosing,
 // still-incomplete class.
 struct CalibrationSettings {
-  EyeGains default_gains{.horizontal = 30, .vertical = 30};
+  // Matches Config's own kDefaultEyeGazeHorizontalGain/VerticalGain
+  // (src/config.h); named here too since this struct's own defaults
+  // stand alone, for a caller (such as a test) that builds one without
+  // going through Config at all.
+  static constexpr double kDefaultGain = 30;
+  static constexpr double kDefaultMinHeadTravelDegrees = 10;
+  static constexpr double kDefaultMinAxisDegrees = 4;
+  static constexpr double kDefaultMinSpreadDegrees = 3;
+  static constexpr double kDefaultHeadOnlyYawDegrees = 35;
+
+  EyeGains default_gains{.horizontal = kDefaultGain, .vertical = kDefaultGain};
   // #137's "refuse too little head travel": the gains step's own
   // combined (the larger of yaw's and pitch's own range) head travel
   // must reach this to be accepted at all.
-  double min_head_travel_degrees = 10;
+  double min_head_travel_degrees = kDefaultMinHeadTravelDegrees;
   // Within an accepted gains step, an axis under this much of its own
   // head range keeps the default gain instead of an estimated one
   // (src/eye_gaze.h's EstimateGains).
-  double min_axis_degrees = 4;
+  double min_axis_degrees = kDefaultMinAxisDegrees;
   // #137's spread check: a screen's corner must read at least this many
   // degrees of gaze from that screen's own centre to be accepted.
-  double min_spread_degrees = 3;
+  double min_spread_degrees = kDefaultMinSpreadDegrees;
   // src/eye_gaze.h's ComposeGaze: beyond this much head yaw, gaze is head
   // pose alone.
-  double head_only_yaw_degrees = 35;
+  double head_only_yaw_degrees = kDefaultHeadOnlyYawDegrees;
 };
 
 // A short guided calibration session (#36, #35, item 12 of #61, #137),
@@ -175,7 +186,7 @@ class CalibrationSession : public CalibrationController {
   std::optional<Status> Start(int screens, std::string& error) override;
   std::optional<Status> Next(std::string& error) override;
   bool Cancel(std::string& error) override;
-  void Update(const HeadRotation& pose, const EyeSignal& eye = {}) override;
+  void Update(const HeadRotation& pose, const EyeSignal& eye) override;
   void OnCameraLost() override;
   void OnCameraUp() override;
 
