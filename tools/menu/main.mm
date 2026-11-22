@@ -69,6 +69,16 @@ std::optional<facepalm::UserPaths> PreviewPaths() {
   return facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
 }
 
+// `preview_readings`'s own text (#134): the readings as they happen and
+// the latest beat's feeling, beside `preview_frame` under the same
+// rules. Empty, same as a missing file, when there is nothing to show.
+NSString* ReadPreviewReadings(const std::string& path) {
+  NSString* text = [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:path.c_str()]
+                                             encoding:NSUTF8StringEncoding
+                                                error:nil];
+  return text != nil ? text : @"";
+}
+
 NSString* ErrorMessage(const std::string& error) {
   NSString* message = [NSString stringWithUTF8String:error.c_str()];
   return message == nil ? @"The settings file is invalid." : message;
@@ -208,6 +218,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 // created and dropped on each open rather than kept around closed.
 @property(nonatomic, strong) CalibrationWindowController* calibrationController;
 @property(nonatomic, strong) NSImageView* previewImageView;
+// The readings as they happen, each held briefly, and the latest beat's
+// feeling, beside the frame (#134): preview_readings.txt's own text.
+@property(nonatomic, strong) NSTextField* previewStatus;
 @property(nonatomic, strong) NSTimer* previewTimer;
 @property(nonatomic, strong) NSWindow* settingsWindow;
 @property(nonatomic, strong) NSTextField* frameRate;
@@ -386,6 +399,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   [self removePreviewRequest];
   [self.previewWindow orderOut:nil];
   self.preview.title = @"Show Camera Preview";
+  self.previewStatus.stringValue = @"";
 }
 
 // Opens the calibration wizard (#118, item 12 of #61): approves the
@@ -441,18 +455,34 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 
 - (void)createPreviewWindow {
   constexpr CGFloat kPreviewSide = 480;
-  self.previewWindow =
-      [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, kPreviewSide, kPreviewSide)
-                                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
-                                    backing:NSBackingStoreBuffered
-                                      defer:NO];
+  constexpr CGFloat kStatusHeight = 48;
+  self.previewWindow = [[NSWindow alloc]
+      initWithContentRect:NSMakeRect(0, 0, kPreviewSide, kPreviewSide + kStatusHeight)
+                styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                  backing:NSBackingStoreBuffered
+                    defer:NO];
   self.previewWindow.title = @"Camera Preview";
   self.previewWindow.releasedWhenClosed = NO;
   self.previewWindow.delegate = self;
-  self.previewImageView = [[NSImageView alloc] initWithFrame:self.previewWindow.contentView.bounds];
+  self.previewImageView =
+      [[NSImageView alloc] initWithFrame:NSMakeRect(0, kStatusHeight, kPreviewSide, kPreviewSide)];
   self.previewImageView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   self.previewImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
   [self.previewWindow.contentView addSubview:self.previewImageView];
+  // The readings as they happen, and the latest beat's feeling (#134):
+  // a diagnostic only, so it is plain, non-editable text, not styled as
+  // a control.
+  self.previewStatus =
+      [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, kPreviewSide, kStatusHeight)];
+  self.previewStatus.autoresizingMask = NSViewWidthSizable;
+  self.previewStatus.editable = NO;
+  self.previewStatus.selectable = NO;
+  self.previewStatus.bezeled = NO;
+  self.previewStatus.drawsBackground = NO;
+  self.previewStatus.font = [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
+  self.previewStatus.lineBreakMode = NSLineBreakByWordWrapping;
+  self.previewStatus.maximumNumberOfLines = 2;
+  [self.previewWindow.contentView addSubview:self.previewStatus];
 }
 
 // PreviewLease!Poll, on the preview window's own timer (#37 item 8,
@@ -478,6 +508,11 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   NSImage* image = [[NSImage alloc]
       initWithContentsOfFile:[NSString stringWithUTF8String:paths->preview_frame.c_str()]];
   if (image != nil) self.previewImageView.image = image;
+  // The readings as they happen, and the latest beat's feeling (#134):
+  // read and shown the same way, so it is blank once the file is gone
+  // (not streaming, or nothing has happened yet) rather than left
+  // showing whatever it said last.
+  self.previewStatus.stringValue = ReadPreviewReadings(paths->preview_readings);
 }
 
 // Closing the preview window by its own close button stops the preview

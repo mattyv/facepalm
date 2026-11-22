@@ -23,7 +23,8 @@ std::optional<UserPaths> PathsFor(std::string_view home, Platform platform) {
                    .status = directory + "/status",
                    .calibration = directory + "/calibration",
                    .preview_request = directory + "/preview_request",
-                   .preview_frame = directory + "/preview_frame.jpg"};
+                   .preview_frame = directory + "/preview_frame.jpg",
+                   .preview_readings = directory + "/preview_readings.txt"};
 }
 
 std::string ClientTokenPath(const UserPaths& paths, std::string_view name) {
