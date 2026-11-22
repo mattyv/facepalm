@@ -32,6 +32,12 @@ TEST(UserPathsTest, MacOsKeepsThemInApplicationSupport) {
   EXPECT_THAT(
       paths.calibration,
       Eq("/Users/person/Library/Application Support/Facepalm/calibration"));
+  EXPECT_THAT(paths.preview_request,
+              Eq("/Users/person/Library/Application Support/Facepalm/"
+                 "preview_request"));
+  EXPECT_THAT(paths.preview_frame,
+              Eq("/Users/person/Library/Application Support/Facepalm/"
+                 "preview_frame.jpg"));
 }
 
 TEST(UserPathsTest, LinuxKeepsThemInTheStateDirectory) {
@@ -44,6 +50,10 @@ TEST(UserPathsTest, LinuxKeepsThemInTheStateDirectory) {
   EXPECT_THAT(paths.status, Eq("/home/person/.local/state/facepalm/status"));
   EXPECT_THAT(paths.calibration,
               Eq("/home/person/.local/state/facepalm/calibration"));
+  EXPECT_THAT(paths.preview_request,
+              Eq("/home/person/.local/state/facepalm/preview_request"));
+  EXPECT_THAT(paths.preview_frame,
+              Eq("/home/person/.local/state/facepalm/preview_frame.jpg"));
 }
 
 TEST(UserPathsTest, TheRootCanBeAHome) {

@@ -1,4 +1,18 @@
 {
+  "src/preview_lease.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/preview_publisher.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/daemon_status.cc": {
     "unit": {
       "lines": 100,

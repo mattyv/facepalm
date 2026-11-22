@@ -21,7 +21,9 @@ std::optional<UserPaths> PathsFor(std::string_view home, Platform platform) {
                    .socket = directory + "/service.sock",
                    .clients = directory + "/clients",
                    .status = directory + "/status",
-                   .calibration = directory + "/calibration"};
+                   .calibration = directory + "/calibration",
+                   .preview_request = directory + "/preview_request",
+                   .preview_frame = directory + "/preview_frame.jpg"};
 }
 
 std::string ClientTokenPath(const UserPaths& paths, std::string_view name) {

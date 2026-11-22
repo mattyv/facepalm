@@ -29,6 +29,13 @@ struct UserPaths {
   // The saved calibration profile (#36, #35, item 12 of #61), in
   // `directory`, if a session has ever finished one.
   std::string calibration;
+  // The camera preview (#37 item 8, #36): the menu creates
+  // `preview_request` to ask for it and removes it to stop, and the
+  // daemon writes the latest frame to `preview_frame` only while it is
+  // there and the camera is open. Both in `directory`; never reachable
+  // from the approved-token service every other client uses.
+  std::string preview_request;
+  std::string preview_frame;
 };
 
 // The paths under `home`, or nullopt when `home` is not an absolute path.

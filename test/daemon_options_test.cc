@@ -19,7 +19,9 @@ std::optional<UserPaths> Home() {
                    .socket = "/h/fp/service.sock",
                    .clients = "/h/fp/c",
                    .status = "/h/fp/status",
-                   .calibration = "/h/fp/calibration"};
+                   .calibration = "/h/fp/calibration",
+                   .preview_request = "/h/fp/preview_request",
+                   .preview_frame = "/h/fp/preview_frame.jpg"};
 }
 
 std::optional<DaemonOptions> Parse(const std::vector<const char*>& arguments,

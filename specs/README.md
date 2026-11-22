@@ -38,6 +38,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
 | `McpSocket.cfg` | one session, up to two requests | holds | 4 |
+| `PreviewLease.cfg` | three camera sessions | holds, with `EventuallyOpens` | 19 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
@@ -277,6 +278,52 @@ acceptance check outside the model: a real thread publishes after a short
 delay, and a real clock bounds how long a poller may take to see it,
 standing for the menu's own one-second timer settling inside the two
 seconds the indicator is asked to.
+
+## `PreviewLease`: the camera preview's lease
+
+Models #61 item 8's camera preview, as `src/preview_lease.cc` implements it.
+`DaemonAdmission.tla`'s own camera open and close are taken as given
+(`CameraOpens`, `CameraCloses`); this checks only the lease that gates
+whether a frame is ever encoded or published at all, which a camera
+session counter (`camera_session`) and the session a grant names
+(`started_session`) enforce: they must match for streaming to be on, so
+a camera that closed and reopened needs a fresh `StartPreview` from the
+menu. No image reaches a client but the menu through this: the gate
+decides only whether to publish to the menu's own local channel, never
+whether the approved-token service every other client reaches carries
+one (it never does, either way).
+
+| Property | What it says | Test |
+|---|---|---|
+| `EventuallyOpens` | Something must happen: the camera can always eventually open. | `StartTest.NeedsTheCameraOpen` and the suite overall, through `PreviewLease::CameraOpened` |
+| `NeverStreamsWithoutCamera` | The lease never grants streaming while the camera is closed. | `StartTest.NeedsTheCameraOpen` |
+| `NeverStreamsWithoutAFreshStart` | Streaming is on only for the session it was last granted in. | `NeverStreamsWithoutAFreshStartTest.AReopenedCameraNeedsANewStart` |
+| `StreamingMatchesFormula` | `streaming` always equals `camera = open /\ started_session = camera_session`, checked at every state rather than only eventually (see the mutation table: a liveness version of this let an adversarial schedule hide a real bug). | Every `PreviewLeaseTest` in `test/preview_lease_test.cc` |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardStartNeedsCamera = FALSE`: `StartPreview` is let through with the camera closed | `NeverStreamsWithoutCamera` |
+| `GuardStreamingTracksLease = FALSE`: `streaming` is never recomputed | `StreamingMatchesFormula` |
+| `CameraOpens` never enabled (`camera_session < 0`, never true) | `EventuallyOpens` |
+
+An earlier draft of `StreamingMatchesFormula` was a `<>(streaming = TRUE)`
+liveness property instead. TLC found a real gap in that version, not in
+the design: an environment that always closes the camera again right
+after opening it, forever, can keep `StartPreview` from ever winning the
+race against `CameraCloses`, so the property failed even with every
+guard correct. The state invariant above says the same thing without
+needing to win that race, and is what the mutations in the table above
+were run against instead.
+
+`src/preview_publisher.cc` implements `PreviewLease`'s caller, following
+no spec of its own (it has no lifecycle beyond the lease's): it polls the
+menu's request file, drives `CameraOpened`/`Start`/`Stop`, and encodes
+and publishes a frame exactly while `IsStreaming()`, tested directly in
+`test/preview_publisher_test.cc` with `PreviewLease` run for real (as
+`tuning_test.cc` runs the feelings rule for real), since it is already
+proved above and has no I/O of its own to mock.
 
 ## `FeedWaitRetirement`: canceled wait ownership
 
