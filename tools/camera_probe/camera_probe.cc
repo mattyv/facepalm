@@ -18,8 +18,13 @@
 // frame's window is ready, its classified probabilities follow
 // (`gesture_probs`, the 6 values head_gesture::Predict gives), and, so it
 // can be replayed through the look-away detector (#35), its head pose in
-// degrees (`head_pose <timestamp> <yaw> <pitch> <roll>`). These print
-// whether or not gestures.enabled is set, so a recording always has them.
+// degrees (`head_pose <timestamp> <yaw> <pitch> <roll>`), and, so it can be
+// replayed through a later eye reader (#139 through #145), its eyes
+// (`eyes <timestamp>`, FormatEyesLine's 32 values: the eye-look, blink,
+// squint and wide blendshapes, then the iris and eye-corner landmarks).
+// head_pose and eyes print together, both skipped on the same degenerate
+// pose. These print whether or not gestures.enabled is set, so a recording
+// always has them.
 //
 // Given a directory as well, it saves every frame there as a numbered PNG,
 // frame_000001.png and on, with timestamps.txt listing each frame's capture
@@ -68,6 +73,7 @@
 #include "src/config.h"
 #include "src/expression_reader.h"
 #include "src/expressions.h"
+#include "src/eyes_probe.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
 #include "src/face_reader.h"
@@ -311,6 +317,11 @@ class GestureProbeReader : public FaceReader {
       std::printf("head_pose %lld %.2f %.2f %.2f\n",
                   static_cast<long long>(timestamp_ms), angles.yaw_degrees,
                   angles.pitch_degrees, angles.roll_degrees);
+      // The eye-look, blink, squint and wide blendshapes, and the iris and
+      // eye-corner landmarks, for a later issue's eye reader (#139) to
+      // replay through src/eyes_replay.h. Under the same skip as head_pose:
+      // a degenerate pose means no face worth reading eyes from either.
+      std::printf("%s\n", FormatEyesLine(face, timestamp_ms).c_str());
     }
 
     const std::optional<

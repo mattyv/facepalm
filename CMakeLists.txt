@@ -193,6 +193,13 @@ target_link_libraries(screen_context_reader PUBLIC expressions head_pose)
 facepalm_unit(head_pose)
 facepalm_unit(head_pose_reader)
 facepalm_unit(head_gesture_model)
+# Formats camera_probe's `eyes` line (#139): pure computation over FpFace's
+# blendshapes and landmarks, so camera_probe.cc stays thin glue around it.
+facepalm_unit(eyes_probe)
+# Parses that line back, so a later issue's eye reader (#140 through #145)
+# can test against test/fixtures/eyes's recordings, the way gesture_replay
+# and look_away_replay do for their own lines.
+facepalm_unit(eyes_replay)
 # head_pose is pure computation, so the gesture model's tests run it for
 # real (it needs RotationFrom, and reuses Rotation for its own test
 # fixtures).
@@ -446,7 +453,7 @@ if(APPLE)
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
     facepalm_config frame_pipeline frame_recorder face_analyzer expression_reader
-    gesture_reader head_pose_reader look_away_reader
+    gesture_reader head_pose_reader look_away_reader eyes_probe
     "-framework CoreGraphics"
     "-framework ImageIO")
 
