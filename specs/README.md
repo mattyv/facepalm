@@ -37,7 +37,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
-| `McpSocket.cfg` | one session, up to two requests | holds | 4 |
+| `McpSocket.cfg` | one session, up to two requests, backoff bounded to two ticks | holds, with `LinkRecovers` | 7 |
 | `PreviewLease.cfg` | three camera sessions | holds, with `EventuallyOpens` | 19 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
@@ -48,13 +48,41 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 
 ## `McpSocket`: an MCP session owns one socket
 
-The model has one session and up to two abstract requests. TLC checks four
-reachable states with no fairness assumption. `NoSendAfterClose` and
-`OneRequest` hold; setting `GuardClosed` or `GuardSingle` false violates the
-respective invariant. Cancellation closes the local socket while the native
-wait may still be running. Socket session tests cover serialization, active
-and queued cancellation, terminal failure and bounded requests. The model does
-not prove the remote service has retired or that a host displayed a delivery.
+Models one MCP session's socket to the daemon (#117, mcp/session.js). Two
+things can end a request before it reaches the wire, and they are not the
+same: `state` is this session's own, terminal "closed" (`close()`, or an
+exchange's own cancellation; `Cancel`), and `link` is whether the live
+connection is up right now (`LinkDown`), which comes and goes on its own and
+is retried, unlike `state`. A lost link's retry waits out `backoff`, bounded
+by `MaxBackoff` and counted down a tick at a time by `BackoffTick`, before
+`ReconnectSucceeds` or `ReconnectFails` may run. `McpSocket.cfg` checks
+`MaxBackoff = 2`: 7 distinct states, every property holds.
+
+| Property | What it says | Test (`mcp/test/session.test.js`) |
+|---|---|---|
+| `NoSendAfterClose` | A request never reaches the wire once this session is closed, or while its link is down. | `'active cancellation is terminal and never reconnects'`, `'refused hello and pre-cancelled calls do not send requests'` |
+| `OneRequest` | At most one request is on the wire at a time. | `'bounds pending requests and recovers after they settle'` |
+| `BackoffBounded` | The wait before a retry never grows past `MaxBackoff`. | `'offline never bounds beyond its own cap'` |
+| `LinkRecovers` | Something must happen: a lost link, on a session never itself closed, always comes back up (or the session closes first, giving up the right to retry at all). | `'reconnects once its backoff has run out, without the caller doing anything (#117)'`, `'backoff grows on each failure in a row, and resets once a connection succeeds (#117)'` |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardClosed = FALSE`: a request can reach the wire once closed, or while the link is down | `NoSendAfterClose`, 2 states |
+| `GuardSingle = FALSE`: a second request can reach the wire while one is already there | `OneRequest`, 10 states |
+| `GuardBackoffBounded = FALSE`: a failed reconnect can set a backoff past `MaxBackoff` | `BackoffBounded`, 9 states |
+| No fairness on `BackoffTick` and `ReconnectSucceeds` | `LinkRecovers`: a link down forever, stuttering once its own backoff is set |
+
+`src/daemon_calibration.h`'s own `OnCameraLost`/`OnCameraUp`
+(specs/Calibration.tla's `CameraLost`/`CameraBack`) are a close cousin: a
+different link, modeled separately since the camera's and the MCP
+session's are not the same one going down. The model does not prove the
+remote service has retired, that a host displayed a delivery, or anything
+about the token a reconnect sends (`mcp/session.js`'s `currentToken`, read
+fresh on every attempt so an approval that lands after this session
+started reaches it with no restart, is outside the model, a single opaque
+`hello`).
 
 ## `DaemonAdmission`: the daemon's clients, camera and stop
 

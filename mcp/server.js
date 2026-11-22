@@ -2,13 +2,36 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { registerFeelingCard } from './feeling-widget.js';
 import { registerFeelingElicitation } from './feeling-elicitation.js';
+import { OfflineError } from './session.js';
+
+// What a tool says when session.request() rejects because this session is
+// not connected right now (#117): the session itself keeps retrying with
+// a bounded backoff, so this no longer tells anyone to restart the MCP
+// server, unlike the message this replaced.
+const offlineText = 'Facepalm is off; turn it on from its menu.';
 
 // A feeling's name. The names come from the service's one list
 // (src/feelings.h), sent with each interpretation; the adapter checks only
 // that a feeling is a name, and the service refuses one it does not know.
 const feelingName = z.string().regex(/^[a-z]{1,32}$/);
+// A reading's screen context (#36, #92): active_app and window_title only
+// when the daemon has one to report (window_title only when the person
+// opted in, which the daemon alone decides), mouse only off a headless
+// session, gaze always, and calibrated_screen only once a profile exists
+// (#116). src/screen_context_reporter.cc's Json is the oracle for this
+// shape.
+const context = z.object({
+  active_app: z.string().optional(),
+  window_title: z.string().optional(),
+  mouse: z.object({ x: z.number(), y: z.number() }).optional(),
+  gaze: z.string(),
+  calibrated_screen: z.number().int().nonnegative().safe().optional(),
+});
 const delivery = z.object({
-  readings: z.array(z.object({ id: z.number().int().positive().safe(), summary: z.string(), published_at_ms: z.number().int().safe().optional(), detail: z.record(z.string(), z.unknown()) })),
+  readings: z.array(z.object({
+    id: z.number().int().positive().safe(), summary: z.string(), published_at_ms: z.number().int().safe().optional(),
+    detail: z.record(z.string(), z.unknown()), context: context.optional(),
+  })),
   missed: z.number().int().nonnegative().safe(),
   interpretation: z.object({
     id: z.number().int().positive().safe(), feeling: feelingName, beat: z.enum(['question', 'proposal']),
@@ -54,7 +77,10 @@ export function createServer(session, options = {}) {
       if (!parsed.success || (beat !== undefined) !== (parsed.data.interpretation !== undefined)) { session.close?.(); throw new Error('invalid delivery'); }
       const result = parsed.data;
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
-    } catch { return { isError: true, content: [{ type: 'text', text: 'Reaction service unavailable. Restart the MCP server if the session was interrupted.' }] }; }
+    } catch (error) {
+      const text = error instanceof OfflineError ? offlineText : 'Reaction service unavailable.';
+      return { isError: true, content: [{ type: 'text', text }] };
+    }
   });
   server.registerTool('tell_feeling', {
     description: 'Tell Facepalm how the person says they really felt at a beat, so it reads them better next time. '
@@ -66,7 +92,12 @@ export function createServer(session, options = {}) {
       const result = await session.request(`feel ${id} ${feeling}`, signal, 5000);
       if (result?.ok !== true) throw new Error('feeling refused');
       return { content: [{ type: 'text', text: 'Feeling taken.' }] };
-    } catch { return { isError: true, content: [{ type: 'text', text: 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes; restart the MCP server if the session was interrupted.' }] }; }
+    } catch (error) {
+      const text = error instanceof OfflineError
+        ? offlineText
+        : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
+      return { isError: true, content: [{ type: 'text', text }] };
+    }
   });
   return server;
 }

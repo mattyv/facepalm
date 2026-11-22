@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../server.js';
+import { OfflineError } from '../session.js';
 
 async function connected(session, options) {
   const server = createServer(session, options);
@@ -54,6 +55,19 @@ test('native failure is sanitized', async () => {
   } finally { await client.close(); await server.close(); }
 });
 
+test('a session that is not connected right now says Facepalm is off, for both tools (#117)', async () => {
+  const session = { request: async () => { throw new OfflineError('offline'); } };
+  const { server, client } = await connected(session);
+  try {
+    const waited = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
+    assert.equal(waited.isError, true);
+    assert.match(waited.content[0].text, /Facepalm is off/);
+    const told = await client.callTool({ name: 'tell_feeling', arguments: { id: 1, feeling: 'confused' } });
+    assert.equal(told.isError, true);
+    assert.match(told.content[0].text, /Facepalm is off/);
+  } finally { await client.close(); await server.close(); }
+});
+
 test('invalid delivery shape closes the session', async () => {
   let closed = false;
   const { server, client } = await connected({
@@ -77,6 +91,51 @@ test('a refused or failed feeling is an error', async () => {
       assert.doesNotMatch(JSON.stringify(result), /private/);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+test('screen context round-trips through the delivery, window title and calibrated screen included', async () => {
+  const context = { active_app: 'Finder', window_title: 'Desktop', mouse: { x: 12, y: 34 }, gaze: 'this_screen', calibrated_screen: 1 };
+  const { server, client } = await connected({
+    request: async () => ({ readings: [{ id: 1, summary: 'x', detail: {}, context }], missed: 0 }),
+  });
+  try {
+    const result = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
+    assert.deepEqual(JSON.parse(result.content[0].text).readings[0].context, context);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('screen context with no window title or calibrated screen round-trips too', async () => {
+  const context = { mouse: { x: -5, y: 0 }, gaze: 'away' };
+  const { server, client } = await connected({
+    request: async () => ({ readings: [{ id: 1, summary: 'x', detail: {}, context }], missed: 0 }),
+  });
+  try {
+    const result = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
+    assert.deepEqual(JSON.parse(result.content[0].text).readings[0].context, context);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('a reading with no context omits it, same as today', async () => {
+  const { server, client } = await connected({
+    request: async () => ({ readings: [{ id: 1, summary: 'x', detail: {} }], missed: 0 }),
+  });
+  try {
+    const result = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
+    assert.equal('context' in JSON.parse(result.content[0].text).readings[0], false);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('a reading with a malformed context closes the session, same as a malformed detail', async () => {
+  let closed = false;
+  const { server, client } = await connected({
+    request: async () => ({ readings: [{ id: 1, summary: 'x', detail: {}, context: { gaze: 4 } }], missed: 0 }),
+    close: () => { closed = true; },
+  });
+  try {
+    const result = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
+    assert.equal(result.isError, true);
+    assert.equal(closed, true);
+  } finally { await client.close(); await server.close(); }
 });
 
 test('a beat marks the window after a question and returns its interpretation', async () => {
