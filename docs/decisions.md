@@ -99,6 +99,24 @@ a line saying which entry replaced it.
     to no instrumentable branch; confirmed against that commit's own diff.
     No facepalm regression test applies — the bug is in FuzzTest's own
     source, fixed by moving to the commit that already fixes it there.
+-   **A real bug in facepalm's own code, found once the fuzzing job got
+    past the problem above:** `SessionCameraFuzz.ChosenRateWithinSupportedRange`
+    found a genuine UndefinedBehaviorSanitizer signed-integer-overflow in
+    `src/session_camera.cc`'s `NearestSupportedRate`, on its very next
+    fuzzed input after the fix above: `Nearest`'s candidate-to-`wanted`
+    distance, `std::abs(candidate - wanted)`, overflows `int` once
+    `wanted` is far enough from a candidate (its counterexample: `wanted
+    = -2147483647`, a candidate of `60`). GoogleTest's own brief replay
+    mode never generates so extreme a value, so this was invisible until
+    the fuzzing job's own run. Fixed by widening the subtraction to
+    `int64_t` before taking the absolute value (a new `Distance`
+    function), which cannot overflow for any `int` pair. Verified the bug
+    and the fix directly: a standalone `-fsanitize=undefined
+    -fno-sanitize-recover=all` build of the old `std::abs(candidate -
+    wanted)` aborts on the counterexample's inputs; the widened version
+    does not, and computes the same (correct) distance. Regression test:
+    `SessionCameraFrameRateTest.DoesNotOverflowOnARateNearIntMin`
+    (`test/session_camera_test.cc`), the exact counterexample.
 -   **Two build-integration problems found and fixed, not FuzzTest's own
     bugs:** Abseil, FuzzTest's own dependency, defines a raw CMake target
     literally named `config`, colliding with facepalm's own `config` unit;

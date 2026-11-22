@@ -409,5 +409,21 @@ TEST(SessionCameraFrameRateTest, PicksTheClosestAmongSeveralRanges) {
   EXPECT_EQ(StartedRate(30, ranges), 25);
 }
 
+// A rate near INT_MIN, with a range far from it, once overflowed int while
+// comparing two candidates' distance from it (#120: found by
+// SessionCameraFuzz.ChosenRateWithinSupportedRange's fuzzing mode under
+// UndefinedBehaviorSanitizer, not its own brief replay mode, since that
+// never generates so extreme a value). Asserting on the result, not just
+// that the call survives, is what UBSan's check of the subtraction itself
+// stands in for here; this test's job is to keep this exact input from
+// crashing or misbehaving again.
+TEST(SessionCameraFrameRateTest, DoesNotOverflowOnARateNearIntMin) {
+  const FrameRates ranges{FrameRateRange{.min = 60, .max = 60},
+                          FrameRateRange{.min = 53, .max = 104},
+                          FrameRateRange{.min = 4, .max = 20},
+                          FrameRateRange{.min = 60, .max = 61}};
+  EXPECT_EQ(NearestSupportedRate(-2147483647, ranges), 4);
+}
+
 }  // namespace
 }  // namespace facepalm

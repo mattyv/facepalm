@@ -1,6 +1,7 @@
 #include "src/session_camera.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <optional>
@@ -15,6 +16,15 @@ int Nearest(int wanted, const CaptureSession::FrameRateRange& range) {
   return std::clamp(wanted, range.min, range.max);
 }
 
+// How far `candidate` is from `wanted`, widened to int64_t before
+// subtracting: `wanted` can be any int the service is asked for (#120,
+// found by SessionCameraFuzz.ChosenRateWithinSupportedRange's fuzzing,
+// not its own replay mode: 60 minus INT_MIN + 1 overflows int).
+std::int64_t Distance(int wanted, int candidate) {
+  return std::abs(static_cast<std::int64_t>(candidate) -
+                  static_cast<std::int64_t>(wanted));
+}
+
 }  // namespace
 
 int NearestSupportedRate(int wanted, const CaptureSession::FrameRates& rates) {
@@ -24,7 +34,7 @@ int NearestSupportedRate(int wanted, const CaptureSession::FrameRates& rates) {
   int best = Nearest(wanted, rates.front());
   for (const CaptureSession::FrameRateRange& range : rates) {
     const int candidate = Nearest(wanted, range);
-    if (std::abs(candidate - wanted) < std::abs(best - wanted)) {
+    if (Distance(wanted, candidate) < Distance(wanted, best)) {
       best = candidate;
     }
   }
