@@ -370,6 +370,22 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   facepalm_unit(v4l2_session DIRECTORY linux)
   target_include_directories(v4l2_session SYSTEM PUBLIC ${V4L2_INCLUDE_DIRECTORY})
   target_link_libraries(v4l2_session PUBLIC Threads::Threads)
+  # The camera preview's JPEG encoding on Linux (#37 item 8 follow-up,
+  # #108), through real libjpeg calls: preview_jpeg_checks is its test,
+  # following src/macos/preview_jpeg.mm's own preview_jpeg_checks (and,
+  # behind that, menu_store_checks) for a real round trip through a
+  # framework this file has no seam to mock, rather than facepalm_unit's
+  # mocked, coverage-floored kind.
+  find_package(JPEG REQUIRED)
+  add_library(preview_jpeg src/linux/preview_jpeg.cc)
+  target_include_directories(preview_jpeg PUBLIC ${PROJECT_SOURCE_DIR})
+  target_link_libraries(preview_jpeg PUBLIC frame JPEG::JPEG)
+  if(BUILD_TESTING)
+    add_executable(preview_jpeg_checks test/linux/preview_jpeg_check.cc)
+    target_link_libraries(preview_jpeg_checks PRIVATE preview_jpeg
+      GTest::gmock GTest::gtest_main JPEG::JPEG)
+    add_test(NAME preview_jpeg_checks COMMAND preview_jpeg_checks)
+  endif()
   # screen_context_linux needs a real X server, like avfoundation_session
   # needs a real camera, so, unlike the two units above, it has no
   # facepalm_unit of its own: it goes straight into the daemon.
@@ -386,7 +402,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     look_away_reader screen_context_reader screen_context_reporter screen_context
     reaction_feed feeling_store service session_camera unix_socket v4l2_hotplug v4l2_session
     face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
-    ${X11_LIBRARIES} ${XRANDR_LIBRARY} preview_lease preview_publisher)
+    ${X11_LIBRARIES} ${XRANDR_LIBRARY} preview_lease preview_publisher preview_jpeg)
   target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"

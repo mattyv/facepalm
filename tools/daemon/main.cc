@@ -44,6 +44,7 @@
 #include "src/screen_context_reporter.h"
 #include "src/screen_source.h"
 #ifdef __linux__
+#include "src/linux/preview_jpeg.h"
 #include "src/linux/screen_context_linux.h"
 #include "src/linux/v4l2_hotplug.h"
 #include "src/linux/v4l2_session.h"
@@ -213,17 +214,8 @@ class Engine : public DaemonController, public DaemonPipeline {
                      FileExists(preview_request_path_);
             },
             [](const Frame& frame) -> std::optional<std::string> {
-#ifdef __linux__
-              // The preview's JPEG encoding is macOS-only for now (#37
-              // item 8 follow-up, filed as a Linux gap): nothing is ever
-              // published there, so PreviewLease still tracks the
-              // camera correctly, but no frame ever leaves this stub.
-              (void)frame;
-              return std::nullopt;
-#else
               constexpr float kPreviewQuality = 0.6F;
               return EncodePreviewJpeg(frame, kPreviewQuality);
-#endif
             },
             [this](const std::string& bytes) {
               return !preview_frame_path_.empty() &&
