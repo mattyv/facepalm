@@ -38,7 +38,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
 | `McpSocket.cfg` | one session, up to two requests | holds | 4 |
-| `PreviewLease.cfg` | three camera sessions | holds, with `EventuallyOpens` | 19 |
+| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 19 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
@@ -281,41 +281,91 @@ seconds the indicator is asked to.
 
 ## `PreviewLease`: the camera preview's lease
 
-Models #61 item 8's camera preview, as `src/preview_lease.cc` implements it.
-`DaemonAdmission.tla`'s own camera open and close are taken as given
-(`CameraOpens`, `CameraCloses`); this checks only the lease that gates
-whether a frame is ever encoded or published at all, which a camera
-session counter (`camera_session`) and the session a grant names
-(`started_session`) enforce: they must match for streaming to be on, so
-a camera that closed and reopened needs a fresh `StartPreview` from the
-menu. No image reaches a client but the menu through this: the gate
+Models #61 item 8's camera preview, as `src/preview_lease.cc` implements it,
+and #114's fix to it: a preview request left behind by a menu that quit
+without cleaning up, crashed, or whose session logged out, must not keep
+the daemon streaming to nobody. `DaemonAdmission.tla`'s own camera open
+and close are taken as given (`CameraOpens`, `CameraCloses`); this checks
+only the lease that gates whether a frame is ever encoded or published at
+all. No image reaches a client but the menu through this: the gate
 decides only whether to publish to the menu's own local channel, never
 whether the approved-token service every other client reaches carries
 one (it never does, either way).
+
+Issue #114 adds a second gate: `requested` (the request file's presence)
+must also be fresh, `age` (ticks since a live menu's own `StartPreview` -- its
+first ask, or its 0.5 s refresh timer, tools/menu/main.mm and
+tools/menu/main_linux.cc -- last reset it) having stayed within
+`StaleAge`. `menu_alive` is the model's own ghost of whether the menu
+that made the request still exists: nothing in the daemon ever reads it
+directly, but it is what the two new liveness properties below hold the
+freshness check accountable to. While the menu is alive, `StartPreview`
+keeps resetting `age` to zero, so a live menu's own request never goes
+stale on its own; `age` only climbs once `menu_alive` is FALSE, and only
+`Frame` -- the daemon's own per-frame check, `src/preview_publisher.cc`'s
+`PreviewPublisher::OnFrame` -- advances it, since that check runs only
+while the camera is open and frames are flowing, the only time a stale
+request could otherwise still be seen to stream.
+
+An earlier revision also tracked which camera session (a counter bumped
+on every `CameraOpens`) a grant was made for, and compared it against the
+current one before letting streaming stay on. The #61 item 8 Fable
+review (#114) found the comparison had no real counterpart in code
+(`src/preview_lease.cc`'s own `camera_session_`/`started_session_` were
+set but never read): `CameraOpened` and `CameraClosed` already force
+streaming off directly, on every transition, so nothing a later grant's
+session number could still be stale against ever survives one. Both the
+model and the class dropped the counters rather than inventing a check
+for code that already worked without it, which is also why
+`NeverStreamsWithoutAFreshStart`, named in an earlier draft of this
+table, is gone: its concern is now `NeverStreamsOnAStaleRequest`'s alone.
 
 | Property | What it says | Test |
 |---|---|---|
 | `EventuallyOpens` | Something must happen: the camera can always eventually open. | `StartTest.NeedsTheCameraOpen` and the suite overall, through `PreviewLease::CameraOpened` |
 | `NeverStreamsWithoutCamera` | The lease never grants streaming while the camera is closed. | `StartTest.NeedsTheCameraOpen` |
-| `NeverStreamsWithoutAFreshStart` | Streaming is on only for the session it was last granted in. | `NeverStreamsWithoutAFreshStartTest.AReopenedCameraNeedsANewStart` |
-| `StreamingMatchesFormula` | `streaming` always equals `camera = open /\ started_session = camera_session`, checked at every state rather than only eventually (see the mutation table: a liveness version of this let an adversarial schedule hide a real bug). | Every `PreviewLeaseTest` in `test/preview_lease_test.cc` |
+| `NeverStreamsOnAStaleRequest` (#114) | Streaming needs the request both there and fresh. | `NeverStreamsOnAStaleRequestTest.AReopenedCameraNeedsANewStart` |
+| `MenuDeathEndsStreaming` (#114) | Liveness: once the menu that made a request is gone, streaming always eventually stops, and -- since only a live menu's own `StartPreview` can turn it back on -- stops for good. This is the acceptance bar's "nothing streams without a live menu window", phrased as a leads-to rather than an instant cutoff: the daemon can only learn of the menu's death indirectly, on its own per-frame check, within the couple of seconds `GuardRequestFresh`'s own grace period already allows for. | `IsFreshPreviewRequestTest.AbandonedLongAgoIsStale` in `test/preview_request_test.cc`; hand-checked against `tools/menu/main.mm`'s `applicationWillTerminate:` and `tools/menu/main_linux.cc`'s `QCoreApplication::aboutToQuit`, which remove a clean quit's own request outright rather than waiting on this grace period at all |
+| `PreviewStreamsWhenWanted` (#114) | Liveness, and something must happen: the camera, the request and the menu behind it, all held from some point on, lead to the preview actually streaming. `[](<>[]Wanted => <>streaming)`, as `specs/DaemonAdmission.tla`'s own `JoinOpens` uses the shape, rather than a plain `~>` a momentary ask could satisfy only by chance. | `OnFrameTest.GrantsAndPublishesOnceTheCameraIsOpenAndItIsRequested` in `test/preview_publisher_test.cc` |
 
 Each mutation, and what TLC found:
 
 | Mutation | Broke |
 |---|---|
-| `GuardStartNeedsCamera = FALSE`: `StartPreview` is let through with the camera closed | `NeverStreamsWithoutCamera` |
-| `GuardStreamingTracksLease = FALSE`: `streaming` is never recomputed | `StreamingMatchesFormula` |
-| `CameraOpens` never enabled (`camera_session < 0`, never true) | `EventuallyOpens` |
+| `GuardStartNeedsCamera = FALSE`: `StartPreview` is let through with the camera closed | `NeverStreamsWithoutCamera`, 2 states |
+| `GuardStreamingTracksLease = FALSE`: `streaming` is never recomputed | `PreviewStreamsWhenWanted`: nothing ever grants, 3 states |
+| `CameraOpens` never enabled (its guard replaced by `FALSE`) | `EventuallyOpens`, 4 states |
+| `GuardRequestFresh = FALSE` (#114): streaming never checks the request's age | `MenuDeathEndsStreaming`: a request a dead menu left behind streams forever once granted |
+| No fairness on `Frame` (#114): the daemon's own per-frame check is never required to run | `PreviewStreamsWhenWanted` (nothing is ever forced to grant) and `MenuDeathEndsStreaming` (nothing is ever forced to age a stale one away) |
 
-An earlier draft of `StreamingMatchesFormula` was a `<>(streaming = TRUE)`
-liveness property instead. TLC found a real gap in that version, not in
-the design: an environment that always closes the camera again right
-after opening it, forever, can keep `StartPreview` from ever winning the
-race against `CameraCloses`, so the property failed even with every
-guard correct. The state invariant above says the same thing without
-needing to win that race, and is what the mutations in the table above
-were run against instead.
+`StreamingMatchesFormula`, an earlier draft's exact `streaming = ...`
+state invariant checked at every step rather than only eventually, is
+gone along with the session counters: without them, the one step
+between `CameraOpens` (which forces `streaming` off directly, matching
+`CameraOpened()`) and the next `Frame` (which alone re-grants it) is a
+real, if momentary, gap no formula checked at every single state can
+state as an equality -- nothing outside this class ever observes it,
+since `PreviewPublisher::OnFrame` is the only caller of `IsStreaming()`,
+`Start()` and `Stop()`, and it always corrects it within the very call
+that would otherwise see it. `GuardStreamingTracksLease = FALSE` is
+still caught just as surely, now by `PreviewStreamsWhenWanted`: an
+earlier draft of that same liveness was a plain `<>(streaming = TRUE)`
+instead, and TLC found a real gap in that version, not in the design:
+an environment that always closes the camera again right after opening
+it, forever, can keep `StartPreview` from ever winning the race against
+`CameraCloses`, so the property failed even with every guard correct.
+`[](<>[]Wanted => <>streaming)` says the same thing without needing to
+win that race, since `Wanted` must settle, not just occur.
+
+`GuardRequestFresh = FALSE` does *not* make TLC flag
+`NeverStreamsOnAStaleRequest` broken, even though it names `Fresh`
+directly: with the guard off, `Fresh` itself reads TRUE regardless of
+`age`, so the broken `Fresh` appears on both sides and the invariant
+stays trivially consistent with it. `MenuDeathEndsStreaming` is what
+actually catches it, since it checks against `menu_alive`, a variable
+the mutation cannot touch -- the same lesson dropping
+`StreamingMatchesFormula` already taught, that a property checked
+against the same broken piece it is meant to guard proves nothing.
 
 `src/preview_publisher.cc` implements `PreviewLease`'s caller, following
 no spec of its own (it has no lifecycle beyond the lease's): it polls the
@@ -323,7 +373,11 @@ menu's request file, drives `CameraOpened`/`Start`/`Stop`, and encodes
 and publishes a frame exactly while `IsStreaming()`, tested directly in
 `test/preview_publisher_test.cc` with `PreviewLease` run for real (as
 `tuning_test.cc` runs the feelings rule for real), since it is already
-proved above and has no I/O of its own to mock.
+proved above and has no I/O of its own to mock. `src/preview_request.cc`
+implements the request's own freshness check (`IsFreshPreviewRequest`,
+specs/PreviewLease.tla's `Fresh`), which `tools/daemon/main.cc` wires as
+the `requested` callback `PreviewPublisher` polls every frame, in place of
+the plain file-existence check #114 found insufficient.
 
 ## `FeedWaitRetirement`: canceled wait ownership
 

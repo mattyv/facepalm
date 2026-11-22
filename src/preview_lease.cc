@@ -12,7 +12,6 @@ void PreviewLease::CameraOpened() {
   {
     const std::scoped_lock lock(mutex_);
     camera_open_ = true;
-    ++camera_session_;
     changed = SetStreaming(false);
   }
   if (changed) {
@@ -38,7 +37,6 @@ bool PreviewLease::Start() {
   {
     const std::scoped_lock lock(mutex_);
     if (camera_open_) {
-      started_session_ = camera_session_;
       changed = SetStreaming(true);
       granted = true;
     }
@@ -53,7 +51,6 @@ void PreviewLease::Stop() {
   bool changed = false;
   {
     const std::scoped_lock lock(mutex_);
-    started_session_ = 0;
     changed = SetStreaming(false);
   }
   if (changed) {
