@@ -9,6 +9,73 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(FACEPALM_COVERAGE "Instrument for source-based coverage" OFF)
 option(FACEPALM_TIDY "Run clang-tidy on every source as it compiles" OFF)
 option(FACEPALM_LINUX_TRAY "Build the optional Linux Qt 6 tray app and enable Debian packaging" OFF)
+# Fuzzes the parsers that read untrusted input and property-tests the pure
+# rules (#120), with Google FuzzTest, fetched only when this is on so the
+# default build and the jobs that do not set it are unaffected. Replayed
+# briefly, as ordinary GoogleTest tests, unless FUZZTEST_FUZZING_MODE is
+# also on, which asks FuzzTest to instrument for real coverage-guided
+# fuzzing (CI's `fuzzing` job, Linux and clang only; see docs/decisions.md).
+option(FACEPALM_FUZZTEST "Fetch Google FuzzTest and build its fuzz and property tests" OFF)
+
+# Moved ahead of FACEPALM_FUZZTEST below, which needs BUILD_TESTING (set
+# here) and GTest::gtest already a target before it fetches anything
+# (#120): FuzzTest's own CMakeLists.txt fetches and builds its own copy of
+# GoogleTest when GTest::gtest does not exist yet, and find_package(GTest)
+# later leaves that copy in place rather than importing Homebrew's or
+# apt's, silently swapping every other test executable in this build onto
+# a GoogleTest it built itself, with Abseil support that one std::visit
+# call in its own printers triggers a deprecated-declaration warning on.
+include(CTest)
+if(BUILD_TESTING)
+  find_package(GTest REQUIRED)
+  include(GoogleTest)
+endif()
+
+# Fetched, and built, before this project's own -Werror exists, just below:
+# FetchContent_MakeAvailable's add_subdirectory would otherwise pass it down
+# to Abseil and RE2, FuzzTest's own dependencies, whose headers use Clang
+# nullability extensions -Wpedantic rejects (#120; docs/decisions.md). This
+# is also FuzzTest's own documented order: add_subdirectory first, so it and
+# its dependencies build without the instrumentation flags below, then
+# fuzztest_setup_fuzzing_flags, so facepalm's own units, defined later in
+# this file, pick those up along with -Werror.
+if(FACEPALM_FUZZTEST)
+  include(FetchContent)
+  # ANTLR's own C++ runtime, an unused transitive dependency of FuzzTest's
+  # grammar-based domains (which this project does not use), otherwise
+  # builds and registers its own ~60 ctest cases by default, and its
+  # runtime libraries land in dist/ at the repository root rather than the
+  # build directory.
+  set(ANTLR_BUILD_CPP_TESTS OFF CACHE BOOL "" FORCE)
+  # Pinned to the 2026-06-29 release's commit, with FetchContent's own
+  # checksum verification of the archive (a GIT_REPOSITORY/GIT_TAG fetch has
+  # none): the commit a GIT_TAG names can be force-pushed over, but this
+  # archive's bytes cannot change without failing URL_HASH.
+  FetchContent_Declare(
+    fuzztest
+    URL https://github.com/google/fuzztest/archive/704efb341c23011cab2a750efcdd16ad04882c80.tar.gz
+    URL_HASH SHA256=80cc221bd9e0d7d4b4a336b710ae20b29faeb5df9e8164bee0700dc166ae8530
+    # FuzzTest's own CMakeLists.txt hard-codes `set(CMAKE_CXX_STANDARD 17)`,
+    # a plain (non-cache) variable that overrides this project's 20 for it
+    # and the Abseil and RE2 it fetches, however this project's own
+    # CMAKE_CXX_STANDARD is set: a normal variable set in a directory
+    # always wins over a cache entry of the same name there, including one
+    # forced from the parent. absl::Status's SourceLocation-sensitive
+    # symbols then differ from what a C++20 fuzz test target calling into
+    # them expects, and fail to link. Patched to 20 so the whole fetched
+    # tree matches facepalm's own standard; sed's own exit status does not
+    # depend on finding a match, so a future release that already builds
+    # at 20 patches harmlessly.
+    PATCH_COMMAND sed -i.bak "s/set(CMAKE_CXX_STANDARD 17)/set(CMAKE_CXX_STANDARD 20)/"
+                  CMakeLists.txt && rm -f CMakeLists.txt.bak)
+  FetchContent_MakeAvailable(fuzztest)
+  # A no-op unless the top-level configure also passed
+  # -DFUZZTEST_FUZZING_MODE=on (FuzzTest's own option, CI's `fuzzing` job):
+  # it then instruments every target configured from here on for real
+  # coverage-guided fuzzing instead of the brief GoogleTest replay every
+  # other job gets.
+  fuzztest_setup_fuzzing_flags()
+endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 if(FACEPALM_COVERAGE)
@@ -20,29 +87,32 @@ if(FACEPALM_TIDY)
   set(CMAKE_CXX_CLANG_TIDY ${CLANG_TIDY} --warnings-as-errors=*)
 endif()
 
-include(CTest)
 include(GNUInstallDirs)
-if(BUILD_TESTING)
-  find_package(GTest REQUIRED)
-  include(GoogleTest)
-endif()
 
 # Each source file gets a library and a test executable of its own, so that
 # its coverage is measured from its own tests alone. A unit's tests write
 # their profiles to profiles/<unit>-<pid>.profraw for scripts/coverage.sh.
 # A unit in a folder of src, such as linux, names it with DIRECTORY; its test
-# is in the same folder of test.
+# is in the same folder of test. TARGET names the library itself something
+# other than `name` when a fetched dependency's own CMakeLists already
+# claims `name` as a raw (non-namespaced) target: FACEPALM_FUZZTEST's
+# Abseil does, for "config" (#120). The executable stays `<name>_test`
+# either way, so scripts/coverage.sh's own naming is unaffected.
 function(facepalm_unit name)
-  cmake_parse_arguments(PARSE_ARGV 1 unit "" "DIRECTORY" "")
+  cmake_parse_arguments(PARSE_ARGV 1 unit "" "DIRECTORY;TARGET" "")
   set(path ${name})
   if(unit_DIRECTORY)
     set(path ${unit_DIRECTORY}/${name})
   endif()
-  add_library(${name} src/${path}.cc)
-  target_include_directories(${name} PUBLIC ${PROJECT_SOURCE_DIR})
+  set(library ${name})
+  if(unit_TARGET)
+    set(library ${unit_TARGET})
+  endif()
+  add_library(${library} src/${path}.cc)
+  target_include_directories(${library} PUBLIC ${PROJECT_SOURCE_DIR})
   if(BUILD_TESTING)
     add_executable(${name}_test test/${path}_test.cc)
-    target_link_libraries(${name}_test PRIVATE ${name} GTest::gmock GTest::gtest_main)
+    target_link_libraries(${name}_test PRIVATE ${library} GTest::gmock GTest::gtest_main)
     gtest_discover_tests(${name}_test
       DISCOVERY_MODE PRE_TEST
       PROPERTIES ENVIRONMENT
@@ -52,7 +122,7 @@ endfunction()
 
 facepalm_unit(approved_feed)
 facepalm_unit(settings_document)
-target_link_libraries(settings_document PUBLIC config)
+target_link_libraries(settings_document PUBLIC facepalm_config)
 facepalm_unit(client_token)
 facepalm_unit(client_approvals)
 facepalm_unit(daemon_control)
@@ -66,7 +136,12 @@ facepalm_unit(user_paths)
 facepalm_unit(user_service)
 facepalm_unit(single_instance)
 facepalm_unit(camera_controller)
-facepalm_unit(config)
+# The tab-separated text facepalm-daemon's `cameras` command prints (item
+# 10 of #61, #13), extracted from tools/menu/main.mm and
+# tools/menu/main_linux.cc, which had no pure entry point of their own to
+# fuzz (#120): both now call this instead of parsing it twice by hand.
+facepalm_unit(cameras_listing)
+facepalm_unit(config TARGET facepalm_config)
 facepalm_unit(expressions)
 facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
@@ -149,14 +224,14 @@ facepalm_unit(session_camera)
 # ScreenContextReaderForwarder (face_readers.cc) always wraps one given.
 facepalm_unit(face_readers)
 target_link_libraries(face_readers PUBLIC gesture_reader expression_reader
-  look_away_reader screen_context_reader config)
+  look_away_reader screen_context_reader facepalm_config)
 
 facepalm_unit(gesture_replay)
 target_link_libraries(gesture_replay PUBLIC gesture_reader)
 # The look-away replay runs the real tracker and detector (pure computation)
 # over recorded head poses in test/fixtures (#35).
 facepalm_unit(look_away_replay)
-target_link_libraries(look_away_replay PUBLIC look_away expressions config)
+target_link_libraries(look_away_replay PUBLIC look_away expressions facepalm_config)
 if(BUILD_TESTING)
   target_compile_definitions(look_away_replay_test PRIVATE
     FACEPALM_FIXTURES="${PROJECT_SOURCE_DIR}/test/fixtures")
@@ -180,6 +255,59 @@ install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
   mcp/feeling-elicitation.js mcp/package.json mcp/package-lock.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm/mcp COMPONENT MCP)
 
+# Fuzz and property tests (#120): a GoogleTest executable per unit fuzzed
+# or property-tested, named "<name>_fuzz", not "<name>_test", so
+# scripts/coverage.sh's own "*_test" glob, which measures each unit's
+# coverage floor from its own tests alone, skips these the way it already
+# skips menu_store_checks, preview_jpeg_checks and linux_tray_integration:
+# they hold a property over many generated inputs, not a floor of lines a
+# handful of examples exercise (CLAUDE.md's Tests section, docs/decisions.md).
+if(FACEPALM_FUZZTEST)
+  if(NOT BUILD_TESTING)
+    message(FATAL_ERROR "FACEPALM_FUZZTEST requires BUILD_TESTING")
+  endif()
+
+  # One GoogleTest/FuzzTest executable, test/fuzz/<name>_fuzz_test.cc,
+  # fuzzing or property-testing the unit(s) named in LIBS. Seeds, when
+  # `name` has any under test/fuzz/corpus/, reach the test as
+  # FACEPALM_FUZZ_CORPUS, following look_away_replay_test's own
+  # FACEPALM_FIXTURES convention.
+  function(facepalm_fuzz_test name)
+    cmake_parse_arguments(PARSE_ARGV 1 fuzz "" "" "LIBS")
+    add_executable(${name}_fuzz test/fuzz/${name}_fuzz_test.cc)
+    # Not GTest::gtest_main: link_fuzztest below supplies
+    # fuzztest::fuzztest_gtest_main, whose own main calls
+    # fuzztest::InitFuzzTest before GoogleTest's RUN_ALL_TESTS, which is
+    # what registers a FUZZ_TEST as a test GoogleTest can see at all.
+    # Linking GTest::gtest_main's plain main as well left it unresolved,
+    # the executable quietly ran zero tests.
+    target_link_libraries(${name}_fuzz PRIVATE ${fuzz_LIBS})
+    target_compile_definitions(${name}_fuzz PRIVATE
+      FACEPALM_FUZZ_CORPUS="${PROJECT_SOURCE_DIR}/test/fuzz/corpus/${name}")
+    # Including fuzztest/fuzztest.h pulls in Abseil's headers into this
+    # translation unit, and several use Clang extensions (nullability
+    # attributes, enable_if, diagnose_if) -Wpedantic and -Wextra reject
+    # here regardless of whose code declares them (#120); -Werror alone is
+    # turned back off, so a warning from the handful of lines this file
+    # itself adds would still show, not be silently dropped.
+    target_compile_options(${name}_fuzz PRIVATE -Wno-error)
+    link_fuzztest(${name}_fuzz)
+    gtest_discover_tests(${name}_fuzz DISCOVERY_MODE PRE_TEST)
+  endfunction()
+
+  # In the order #120 lists the fuzz targets, then the property tests.
+  facepalm_fuzz_test(protocol LIBS protocol)
+  facepalm_fuzz_test(config LIBS facepalm_config)
+  facepalm_fuzz_test(settings_document LIBS settings_document)
+  facepalm_fuzz_test(tuning LIBS tuning feelings)
+  facepalm_fuzz_test(frame_times LIBS frame_times)
+  facepalm_fuzz_test(calibration_store LIBS calibration_store head_pose)
+  facepalm_fuzz_test(cameras_listing LIBS cameras_listing)
+  facepalm_fuzz_test(feelings LIBS feelings)
+  facepalm_fuzz_test(head_pose LIBS head_pose)
+  facepalm_fuzz_test(session_camera LIBS session_camera)
+endif()
+
 if(FACEPALM_LINUX_TRAY)
   if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "FACEPALM_LINUX_TRAY requires Linux")
@@ -189,7 +317,7 @@ if(FACEPALM_LINUX_TRAY)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths daemon_status single_instance Qt6::Widgets Qt6::Network)
+    client_token user_paths daemon_status single_instance cameras_listing Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -247,12 +375,13 @@ if(APPLE)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths daemon_status "-framework AppKit")
+    client_token user_paths daemon_status cameras_listing "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
-      client_approvals client_token user_paths daemon_status GTest::gtest_main "-framework AppKit")
+      client_approvals client_token user_paths daemon_status cameras_listing
+      GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 
@@ -275,7 +404,7 @@ if(APPLE)
 
   add_executable(camera_probe tools/camera_probe/camera_probe.cc)
   target_link_libraries(camera_probe PRIVATE avfoundation_session camera_controller
-    config frame_pipeline frame_recorder face_analyzer expression_reader
+    facepalm_config frame_pipeline frame_recorder face_analyzer expression_reader
     gesture_reader head_pose_reader look_away_reader
     "-framework CoreGraphics"
     "-framework ImageIO")
@@ -319,7 +448,7 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
   target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
     client_approvals client_token
     daemon_control daemon_options daemon_status face_readers feed_clients user_paths
-    avfoundation_session camera_controller config frame_pipeline face_analyzer
+    avfoundation_session camera_controller facepalm_config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
     screen_context_reporter screen_context_macos reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe preview_lease preview_publisher preview_jpeg
@@ -398,7 +527,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
     client_approvals client_token
     daemon_control daemon_options daemon_status face_readers feed_clients user_paths
-    camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
+    camera_controller facepalm_config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader screen_context_reader screen_context_reporter screen_context
     reaction_feed feeling_store service session_camera unix_socket v4l2_hotplug v4l2_session
     face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}

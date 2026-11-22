@@ -15,10 +15,8 @@ int Nearest(int wanted, const CaptureSession::FrameRateRange& range) {
   return std::clamp(wanted, range.min, range.max);
 }
 
-// The rate nearest `wanted` that one of `rates`' ranges supports, or
-// `wanted` as it is when the camera reports no ranges (#43): collapsing
-// them into one overall minimum and maximum let `Start` be asked for a
-// rate none of the camera's actual ranges covered.
+}  // namespace
+
 int NearestSupportedRate(int wanted, const CaptureSession::FrameRates& rates) {
   if (rates.empty()) {
     return wanted;
@@ -32,8 +30,6 @@ int NearestSupportedRate(int wanted, const CaptureSession::FrameRates& rates) {
   }
   return best;
 }
-
-}  // namespace
 
 SessionCamera::SessionCamera(CaptureSession& capture, CameraReports& reports,
                              Post session, Post control, int frames_per_second)

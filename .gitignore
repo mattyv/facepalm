@@ -1,2 +1,6 @@
 .claude/worktrees/
 /build*/
+# FACEPALM_FUZZTEST's fetched antlr4 runtime (under fuzztest's own grammar
+# support) writes its library here, at the repository root, rather than
+# into the build directory it was configured from (#120).
+/dist/

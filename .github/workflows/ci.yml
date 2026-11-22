@@ -47,7 +47,12 @@ jobs:
       - name: Markdown
         run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"
       - name: Tests and coverage
-        run: bash scripts/coverage.sh
+        # FACEPALM_FUZZTEST here builds and runs #120's fuzz and property
+        # tests too, in GoogleTest's own brief replay mode (fuzzing mode
+        # needs Clang's coverage instrumentation, which is CI's Linux-only
+        # `fuzzing` job below): every test name ends `_fuzz`, not `_test`,
+        # so coverage.sh's own floors are unaffected by them existing.
+        run: bash scripts/coverage.sh -DFACEPALM_FUZZTEST=ON
 
   # Also builds the Linux camera daemon and tests its two Linux sources,
   # against MediaPipe's C headers and libmediapipe.so, pinned by
@@ -268,6 +273,50 @@ jobs:
             -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/$MEDIAPIPE_C/lib/libmediapipe.so"
           cmake --build build-tsan
           ctest --test-dir build-tsan --output-on-failure --no-tests=error
+
+  # Google FuzzTest (#120): real coverage-guided fuzzing of the parsers
+  # that read untrusted input (src/protocol.cc first, since its hello line
+  # reaches unauthenticated local processes, then config, settings_document,
+  # the feelings counts file, frame_times, the calibration profile and the
+  # cameras listing), and the property tests over the pure rules (Interpret,
+  # Tuning, the frame-rate choice, the settings document, head pose and
+  # protocol's own round trip), each for a fixed time budget under
+  # AddressSanitizer and UndefinedBehaviorSanitizer. Linux and Clang only:
+  # FuzzTest's fuzzing mode needs Clang's coverage instrumentation, and may
+  # not work on macOS (docs/decisions.md); every other job above already
+  # runs the same tests in GoogleTest's own brief, uninstrumented replay
+  # mode (the `macos` job's FACEPALM_FUZZTEST). No camera or MediaPipe:
+  # every fuzzed unit is OS-independent, pure computation over text.
+  fuzzing:
+    runs-on: ubuntu-latest
+    env:
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-rt-dev libgmock-dev libgtest-dev llvm ninja-build
+      - name: Build in fuzzing mode, with AddressSanitizer and UndefinedBehaviorSanitizer
+        run: |
+          cmake -S . -B build-fuzzing -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DFACEPALM_FUZZTEST=ON -DFUZZTEST_FUZZING_MODE=on \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+          cmake --build build-fuzzing
+      # --fuzz_for runs every FUZZ_TEST in the binary, continuously, for
+      # the given budget; 45s a target (10 targets) keeps the job under a
+      # few minutes while still exploring well past the seed corpus
+      # test/fuzz/corpus/ gives each one a starting point from.
+      - name: Fuzz every target for 45 seconds
+        run: |
+          status=0
+          for target in build-fuzzing/*_fuzz; do
+            echo "::group::${target}"
+            "${target}" --fuzz_for=45s || status=1
+            echo "::endgroup::"
+          done
+          exit "${status}"
 
   # Checks every TLA+ config, with TLC pinned as ai-pair's CI pins it.
   specs:

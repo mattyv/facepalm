@@ -50,6 +50,13 @@ class CaptureSession : public CameraDirectory {
   virtual void Stop() = 0;
 };
 
+// The rate nearest `wanted` that one of `rates`' ranges supports, or
+// `wanted` as it is when the camera reports no ranges (#43): collapsing
+// them into one overall minimum and maximum let `Start` be asked for a
+// rate none of the camera's actual ranges covered. Exposed so #120's
+// property test can check it always lies within one of `rates`' ranges.
+int NearestSupportedRate(int wanted, const CaptureSession::FrameRates& rates);
+
 // A camera over a CaptureSession. Session work runs on `session`, since it
 // blocks; every report runs on `control`, the queue that owns the controller,
 // so each is one specs/CameraLifecycle.tla action. It asks for the frame rate

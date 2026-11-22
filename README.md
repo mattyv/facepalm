@@ -241,6 +241,43 @@ cmake -S . -B build-tidy -G Ninja -DFACEPALM_TIDY=ON \
 bash specs/check.sh               # TLC on every spec; see specs/README.md.
 ```
 
+### Fuzz and property tests
+
+`FACEPALM_FUZZTEST` (off by default) fetches [Google
+FuzzTest](https://github.com/google/fuzztest) and builds `test/fuzz/`: the
+parsers that read untrusted input (`src/protocol.cc`'s hello line first,
+since it reaches unauthenticated local processes before any approval, then
+config, settings, the feelings counts file, frame times, the calibration
+profile and the `cameras` listing) fuzzed, and the pure rules (`Interpret`,
+`Tuning`, the frame-rate choice, the settings document, head pose and
+protocol's own round trip) property-tested, with a seed corpus in
+`test/fuzz/corpus/`. Each is a GoogleTest executable, `<name>_fuzz`, that
+runs normally (`ctest`, a plain `cmake --build`) too, briefly and without
+instrumentation:
+
+```shell
+cmake -S . -B build-fuzz -G Ninja -DFACEPALM_FUZZTEST=ON
+cmake --build build-fuzz
+ctest --test-dir build-fuzz -R '_fuzz$'
+```
+
+Real, continuous, coverage-guided fuzzing needs Clang's sanitizer coverage
+instrumentation (`-DFUZZTEST_FUZZING_MODE=on`), verified on Linux in CI's
+`fuzzing` job; it may not work on macOS, so a local check there stays in the
+brief mode above:
+
+```shell
+CXX=clang++ cmake -S . -B build-fuzzing -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DFACEPALM_FUZZTEST=ON -DFUZZTEST_FUZZING_MODE=on \
+  -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer"
+cmake --build build-fuzzing
+build-fuzzing/protocol_fuzz --fuzz_for=45s   # Every FUZZ_TEST in the binary.
+```
+
+`<name>_fuzz` is exempt from `coverage_thresholds.json`'s floors, the way
+`menu_store_checks` and `preview_jpeg_checks` are: it tests a property over
+many generated inputs, not the lines a fixed set of examples exercises.
+
 `coverage_shell.sh` runs every bats test under kcov and holds each shell
 script in git to 100 percent of its lines, its `shell` floor in
 `coverage_thresholds.json`; it names the lines a script's tests miss. It runs

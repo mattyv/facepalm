@@ -37,7 +37,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "src/cameras_listing.h"
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/daemon_status.h"
@@ -279,12 +281,14 @@ QString DaemonPath() {
 }
 
 // The cameras facepalm-daemon's own `cameras` command lists (item 10 of
-// #61, #13): id, name and whether built in, tab-separated, one camera a
-// line. Run synchronously, since opening Settings already waits on
-// reading the settings file; empty, with no error shown, when the daemon
-// cannot be found or does not run, so the picker then offers only the
-// default.
-QList<QStringList> ListCameras() {
+// #61, #13), parsed by facepalm::ParseCamerasListing (#120), the pure
+// entry point extracted from this function and tools/menu/main.mm's own
+// ListCameras so each parses the daemon's tab-separated stdout the same
+// way, unit-tested and fuzzed on its own. Run synchronously, since opening
+// Settings already waits on reading the settings file; empty, with no
+// error shown, when the daemon cannot be found or does not run, so the
+// picker then offers only the default.
+std::vector<facepalm::CamerasListingEntry> ListCameras() {
   const QString daemon = DaemonPath();
   if (daemon.isEmpty()) {
     return {};
@@ -295,16 +299,9 @@ QList<QStringList> ListCameras() {
   if (!process.waitForFinished(kListCamerasTimeoutMs)) {
     return {};
   }
-  const QString text = QString::fromUtf8(process.readAllStandardOutput());
-  QList<QStringList> devices;
-  for (const QString& line :
-       text.split(QLatin1Char('\n'), Qt::SkipEmptyParts)) {
-    const QStringList fields = line.split(QLatin1Char('\t'));
-    if (fields.size() == 3) {
-      devices.append(fields);
-    }
-  }
-  return devices;
+  const QByteArray text = process.readAllStandardOutput();
+  return facepalm::ParseCamerasListing(std::string_view(
+      text.constData(), static_cast<std::size_t>(text.size())));
 }
 
 QString Number(float value) {
@@ -520,12 +517,11 @@ class SettingsDialog : public QDialog {
     camera_->addItem(QStringLiteral("Default (built-in camera)"), QString());
     const QString wanted = QString::fromStdString(config.camera_device_id);
     bool found_wanted = wanted.isEmpty();
-    for (const QStringList& device : ListCameras()) {
-      const QString& id = device[0];
-      const QString& name = device[1];
-      const bool built_in = device[2] == QStringLiteral("1");
-      camera_->addItem(built_in ? name + QStringLiteral(" (built-in)") : name,
-                       id);
+    for (const facepalm::CamerasListingEntry& device : ListCameras()) {
+      const QString id = QString::fromStdString(device.id);
+      const QString name = QString::fromStdString(device.name);
+      camera_->addItem(
+          device.built_in ? name + QStringLiteral(" (built-in)") : name, id);
       found_wanted = found_wanted || id == wanted;
     }
     if (!found_wanted) {

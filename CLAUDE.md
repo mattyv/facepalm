@@ -104,6 +104,17 @@ tools. The design and its decisions are on
     under bash 3.2, which macOS ships, a false one before a test's last line
     does not fail the test (#22). `scripts/check_bats.sh` fails on one that
     does not, in CI's Shell step.
+-   **A fuzz or property test executable is exempt from the per-file
+    coverage gate, the way the fixture tool is** (set by the user on
+    2026-11-22, #120): it tests a property over many generated inputs, not
+    the lines a fixed set of examples exercises, so `coverage_thresholds.json`
+    holds no floor for it. `test/fuzz/<name>_fuzz_test.cc`, built as
+    `<name>_fuzz` (never `<name>_test`, which `scripts/coverage.sh`'s own
+    glob would otherwise fold into `<name>`'s floor), is one GoogleTest
+    executable FuzzTest also drives, behind `FACEPALM_FUZZTEST`
+    (`CMakeLists.txt`'s `facepalm_fuzz_test`). Each fuzz target still has
+    clang-format run over it; clang-tidy does not, since the build that
+    turns it on does not set `FACEPALM_FUZZTEST`.
 
 ## Style
 

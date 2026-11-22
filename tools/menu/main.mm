@@ -7,7 +7,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "src/cameras_listing.h"
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/config.h"
@@ -167,14 +169,16 @@ BOOL ServiceIsOn() {
 }
 
 // The cameras facepalm-daemon's own `cameras` command lists (item 10 of
-// #61, #13): id, name and whether built in, one camera an array. Run
-// synchronously, since opening Settings already waits on reading the
-// settings file; empty, with no error shown, when the daemon binary
-// cannot be found or does not run, so the picker then offers only the
-// default.
-NSArray<NSArray<NSString*>*>* ListCameras() {
+// #61, #13), parsed by facepalm::ParseCamerasListing (#120), the pure
+// entry point extracted from this function and tools/menu/main_linux.cc's
+// own ListCameras so each parses the daemon's tab-separated stdout the
+// same way, unit-tested and fuzzed on its own. Run synchronously, since
+// opening Settings already waits on reading the settings file; empty,
+// with no error shown, when the daemon binary cannot be found or does
+// not run, so the picker then offers only the default.
+std::vector<facepalm::CamerasListingEntry> ListCameras() {
   NSString* daemon = [[NSBundle mainBundle] pathForAuxiliaryExecutable:@"facepalm-daemon"];
-  if (daemon == nil) return @[];
+  if (daemon == nil) return {};
   NSTask* task = [[NSTask alloc] init];
   task.executableURL = [NSURL fileURLWithPath:daemon];
   task.arguments = @[ @"cameras" ];
@@ -182,17 +186,11 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
   task.standardOutput = output;
   task.standardError = [NSPipe pipe];
   NSError* error = nil;
-  if (![task launchAndReturnError:&error]) return @[];
+  if (![task launchAndReturnError:&error]) return {};
   NSData* data = [output.fileHandleForReading readDataToEndOfFile];
   [task waitUntilExit];
-  NSString* text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-  if (text == nil) return @[];
-  NSMutableArray<NSArray<NSString*>*>* devices = [NSMutableArray array];
-  for (NSString* line in [text componentsSeparatedByString:@"\n"]) {
-    NSArray<NSString*>* fields = [line componentsSeparatedByString:@"\t"];
-    if (fields.count == 3) [devices addObject:fields];
-  }
-  return devices;
+  return facepalm::ParseCamerasListing(std::string_view(static_cast<const char*>(data.bytes),
+                                                        static_cast<std::size_t>(data.length)));
 }
 }  // namespace
 
@@ -477,11 +475,11 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
   self.camera.lastItem.representedObject = @"";
   NSString* wanted = [NSString stringWithUTF8String:config->camera_device_id.c_str()];
   BOOL foundWanted = wanted.length == 0;
-  for (NSArray<NSString*>* device in ListCameras()) {
-    NSString* deviceId = device[0];
-    NSString* name = device[1];
-    const BOOL builtIn = [device[2] isEqualToString:@"1"];
-    [self.camera addItemWithTitle:builtIn ? [name stringByAppendingString:@" (built-in)"] : name];
+  for (const facepalm::CamerasListingEntry& device : ListCameras()) {
+    NSString* deviceId = [NSString stringWithUTF8String:device.id.c_str()];
+    NSString* name = [NSString stringWithUTF8String:device.name.c_str()];
+    [self.camera
+        addItemWithTitle:device.built_in ? [name stringByAppendingString:@" (built-in)"] : name];
     self.camera.lastItem.representedObject = deviceId;
     if ([deviceId isEqualToString:wanted]) foundWanted = YES;
   }
