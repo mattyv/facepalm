@@ -56,14 +56,23 @@ made since, each with its reason, are in the
     pose is degenerate is skipped, as a frame with no face, so that it
     cannot spoil the resting pose that gates out head movement (#79).
 -   `src/look_away_reader`, `src/look_away`: a `FaceReader` that reacts
-    `{"gesture":"looking_away"}` once each time the head stays away from its
-    resting pose (#35): yaw or pitch more than 15 degrees from it for a
-    second. `LookAwayDetector`, in `src/look_away`, is the rule; the
-    resting pose is `ExpressionTracker`'s, learned from the same faces with
-    the expression settings. Nods and shakes leave the resting pose for
-    less than a second and are not reported. A pose held for long enough,
-    under a minute, becomes the resting pose, so turning back from it reads
-    as a look away of its own. `specs/LookAway.tla` models the rule.
+    `{"gesture":"looked_away","kind":"...","duration_ms":n}` once a look
+    away ends (#35, #141): the composed gaze (head and eye together,
+    #137, src/eye_gaze.h's ComposeGaze) stays away from its resting pose,
+    yaw or pitch more than 15 degrees from it, for a second, and the
+    report comes once it returns within half that. `LookAwayDetector`, in
+    `src/look_away`, is the rule; the resting pose is `ExpressionTracker`'s,
+    learned from the same faces with the expression settings. A nod or a
+    shake leaves the resting pose for less than a second and is never
+    reported, under any kind (a glance). The kind is `averted` (back
+    within about 5 to 8 seconds), `other_screen` (the gaze landed inside
+    another calibrated screen's own box while away), `away` (longer, and
+    never in another screen's box) or `gone` (no face to read at some
+    point during the look, read from `LookAwayReader::OnNoFace`, which
+    LookAwayDetector treats as fully away from the very first missing
+    frame). A pose held for long enough, under a minute, becomes the
+    resting pose, so turning back from it reads as a look away of its
+    own. `specs/LookAway.tla` models the rule.
 -   `src/eyes_probe`, `src/eyes_replay`: the tooling half of eyes in other
     reads (#139). `FormatEyesLine`, in `src/eyes_probe`, is what
     `camera_probe` prints as its `eyes` line: the eye-look, blink, squint
@@ -556,6 +565,12 @@ expressions.eye_blink_threshold = 0.5
 looking_away.enabled = true
 looking_away.degrees = 15
 looking_away.hold_ms = 1000
+# Back within this long of first passing looking_away.degrees reads as
+# "averted" rather than "away" (#141, provisional: 5 to 8 seconds).
+looking_away.averted_ms = 6500
+# How far outside a calibrated screen's own box still counts as that
+# screen, for the "other_screen" kind (#141, provisional).
+looking_away.other_screen_margin_degrees = 3
 # Screen context (#36 item 11 of #61): the frontmost app, the mouse and a
 # coarse gaze on every reading. Window titles can hold private text and
 # need macOS's Screen Recording permission, so they default off.
@@ -567,9 +582,13 @@ screen_context.other_screen_degrees = 7.5
 ```
 
 The macOS menu's and the Linux tray's **Settings** windows show and save
-every setting above, including looking away's and screen context's
-(#79): window titles still default off there too. Turn Facepalm off and
-on again from the menu to apply a change, as for the other settings.
+most of the settings above, including looking away's own `enabled`,
+`degrees` and `hold_ms` (#79) and screen context's (window titles still
+default off there too). `eye_gaze.*`, `calibration.*` (#137) and looking
+away's own `averted_ms` and `other_screen_margin_degrees` (#141) are
+config-file only, provisional settings not yet shown there. Turn Facepalm
+off and on again from the menu to apply a change, as for the other
+settings.
 
 A nod, a shake or a tilt moves the blendshape scores as much as an
 expression does, so while the head is away from its resting pose, or has
@@ -746,8 +765,11 @@ The class and report numbers are 0 none, 1 nod, 2 shake, 3 tilt, 4 turn and
 
 Run `build/gesture_replay --looking-away < camera-probe.log` to replay a
 recording's looks away instead: it reads the probe's `head_pose <timestamp>
-<yaw> <pitch> <roll>` lines and prints `looking_away <timestamp>` for each
-look away reported with the default settings. Probe logs from before #35
+<yaw> <pitch> <roll>` lines (no eyes line, so gaze is head pose alone,
+#137's own fallback with no eye signal) and its `gesture_no_face` lines
+(#141's own `gone` kind), and prints
+`looked_away <timestamp> <kind> <duration_ms>` for each look away reported
+with the default settings, once it returns. Probe logs from before #35
 have no `head_pose` lines; `test/fixtures/README.md` shows how the three
 recordings there were converted.
 

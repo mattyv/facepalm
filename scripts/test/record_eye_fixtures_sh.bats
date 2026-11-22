@@ -15,6 +15,9 @@ setup() {
 echo "$*" >>"${CALLS}"
 echo "seconds $1"
 echo "eyes 10 0.1"
+echo "blendshapes 10 0.5"
+echo "gesture_raw 10 1 2"
+echo "gesture_probs 10 0.9"
 BIN
   chmod +x "${WORK}/camera_probe"
   touch "${WORK}/model.task"
@@ -50,6 +53,9 @@ teardown() {
   calls="$(wc -l <"${CALLS}")"
   [[ "${probe_count}" -eq 9 ]] || false
   [[ "$(<"${fixtures}/blinks.probe")" == *'eyes 10 0.1'* ]] || false
+  [[ "$(<"${fixtures}/blinks.probe")" != *'blendshapes'* ]] || false
+  [[ "$(<"${fixtures}/blinks.probe")" != *'gesture_raw'* ]] || false
+  [[ "$(<"${fixtures}/blinks.probe")" != *'gesture_probs'* ]] || false
   [[ "${calls}" -eq 9 ]] || false
 }
 

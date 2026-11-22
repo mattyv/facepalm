@@ -357,6 +357,35 @@ class Engine : public DaemonController, public DaemonPipeline {
                    const std::optional<EyeSignal>& eye_resting) {
               SampleScreenContext(pose, resting, eye, eye_resting);
             }),
+        // Outlives any one camera session too (#141, as screen_context_
+        // reader_ does, #61 item 11): its own kGone tracking, and the
+        // calibration profile OnCalibrationFinished swaps into it below,
+        // would otherwise be lost every time the camera reopens.
+        look_away_reader_(
+            ExpressionTracker::Settings{
+                .rise = config.expressions_smallest_rise,
+                .pose_degrees = config.expressions_pose_degrees,
+                .pose_range = config.expressions_pose_range,
+                .settle_ms = config.expressions_settle_ms,
+                .spreads = config.expressions_spreads,
+                .hold_ms = config.expressions_hold_ms,
+                .eye_look_down_threshold =
+                    config.expressions_eye_look_down_threshold,
+                .eye_blink_threshold = config.expressions_eye_blink_threshold},
+            EyeGazeTracker::Settings{
+                .blink_threshold = config.eye_gaze_blink_threshold,
+                .median_ms = config.eye_gaze_median_ms,
+                .resting_ms = config.eye_gaze_resting_ms,
+                .gap_ms = config.eye_gaze_gap_ms},
+            LookAwayDetector::Settings{
+                .degrees = config.looking_away_degrees,
+                .hold_ms = config.looking_away_hold_ms,
+                .averted_ms = config.looking_away_averted_ms,
+                .other_screen_margin_degrees =
+                    config.looking_away_other_screen_margin_degrees},
+            EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
+                     .vertical = config.eye_gaze_vertical_gain},
+            config.eye_gaze_head_only_yaw_degrees, calibration_profile),
         // std::in_place, not a temporary moved in: ScreenContextReporter
         // holds a mutex (SetProfile's own, #137), so it is neither
         // copyable nor movable.
@@ -572,6 +601,9 @@ class Engine : public DaemonController, public DaemonPipeline {
     if (reporter_) {
       reporter_->SetProfile(&*calibration_profile_);
     }
+    // #141's own kOtherScreen box test reads the same freshly saved
+    // profile at once, rather than only on the next run.
+    look_away_reader_.SetProfile(&*calibration_profile_);
   }
 
   // screen_context_reader_'s own OnSample callback (#142): every frame,
@@ -608,7 +640,7 @@ class Engine : public DaemonController, public DaemonPipeline {
         std::move(model),
         MakeFaceReaders(config_,
                         screen_source_ ? &screen_context_reader_ : nullptr,
-                        calibration_.Controller())));
+                        calibration_.Controller(), &look_away_reader_)));
     return analyzers;
   }
 
@@ -654,6 +686,9 @@ class Engine : public DaemonController, public DaemonPipeline {
   // (#61 item 11); nullptr/nullopt with screen_context disabled.
   std::unique_ptr<ScreenSource> screen_source_;
   ScreenContextReader screen_context_reader_;
+  // Outlives any one camera session, like screen_context_reader_ above
+  // (#141, #61 item 11).
+  LookAwayReader look_away_reader_;
   std::optional<ScreenContextReporter> reporter_;
   // The profile reporter_ reads (#61 item 12, #137): a copy, not a
   // borrow of main()'s own local, so calibration_session_'s on_finished

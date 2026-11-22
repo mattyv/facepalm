@@ -49,7 +49,7 @@ std::string Replay(const std::string& log, bool* ok = nullptr) {
   return output.str();
 }
 
-TEST(LookAwayReplayTest, ReportsAHeldLookAwayOnceWithItsTimestamp) {
+TEST(LookAwayReplayTest, ReportsALookAwayOnceItReturnsWithItsKindAndDuration) {
   std::ostringstream log;
   std::int64_t now = Poses(log, 1000, {.seconds = 5});
   now = Poses(log, now, {.seconds = 3, .yaw = 30});
@@ -57,15 +57,40 @@ TEST(LookAwayReplayTest, ReportsAHeldLookAwayOnceWithItsTimestamp) {
   bool ok = false;
   const std::string output = Replay(log.str(), &ok);
   EXPECT_TRUE(ok);
-  // 1000 + 75 * 66 is the first frame away; the hold is 1,000 ms.
-  EXPECT_EQ(output, "looking_away 7006\n");
+  // 1,000 + 75 * 66 is the first frame away (5,950); the first frame back
+  // (8,920) is 2,970 ms later, under Config's default averted_ms.
+  EXPECT_EQ(output, "looked_away 8920 averted 2970\n");
 }
 
-TEST(LookAwayReplayTest, IgnoresOtherLinesAndAMissingFace) {
+TEST(LookAwayReplayTest, IgnoresOtherLines) {
   std::ostringstream log;
   std::int64_t now = Poses(log, 1000, {.seconds = 5});
-  log << "gesture_raw 1 2 3\nreaction {}\ngesture_no_face\n";
+  log << "gesture_raw 1 2 3\nreaction {}\n";
   Poses(log, now, {.seconds = 0.5, .yaw = 30});
+  // Never returns to rest, so there is no look to end either way.
+  EXPECT_EQ(Replay(log.str()), "");
+}
+
+// #141's kGone: gesture_no_face, like LookAwayReader::OnNoFace, has no
+// timestamp of its own; the look it opens is measured from the last
+// head_pose line read, to the first once a face returns.
+TEST(LookAwayReplayTest, GestureNoFaceReportsGoneOnceAFaceReturns) {
+  std::ostringstream log;
+  Poses(log, 1000, {.seconds = 5});
+  log << "gesture_no_face\n";
+  // The gap itself, in real time: the fixture format carries none for a
+  // gesture_no_face line, so the test writes the next head_pose line far
+  // enough ahead of the last one to stand for it.
+  Poses(log, 8000, {.seconds = 1});
+  EXPECT_EQ(Replay(log.str()), "looked_away 8000 gone 2116\n");
+}
+
+// A no-face stretch too short to hold is a glance, as any other is.
+TEST(LookAwayReplayTest, ABriefGestureNoFaceIsAGlance) {
+  std::ostringstream log;
+  Poses(log, 1000, {.seconds = 5});
+  log << "gesture_no_face\n";
+  Poses(log, 5900, {.seconds = 1});
   EXPECT_EQ(Replay(log.str()), "");
 }
 
@@ -105,35 +130,42 @@ std::string Fixture(const std::string& name) {
   return text.str();
 }
 
-// The seconds into `log` at which each look away was reported.
+// The seconds into `log` at which each look away was reported (its own
+// return, not its start: #141).
 std::vector<double> ReportSeconds(const std::string& log) {
   std::int64_t first = 0;
   std::istringstream(log.substr(log.find(' ') + 1)) >> first;
   std::vector<double> seconds;
   std::istringstream output(Replay(log));
-  std::string kind;
+  std::string gesture;
   std::int64_t timestamp = 0;
-  while (output >> kind >> timestamp) {
+  std::string reported_kind;
+  std::int64_t duration_ms = 0;
+  while (output >> gesture >> timestamp >> reported_kind >> duration_ms) {
     seconds.push_back(static_cast<double>(timestamp - first) / 1000);
   }
   return seconds;
 }
 
 // Prompted: down at 6 s, center at 12, down at 18, center at 24. Each look
-// down is reported once, while it lasts.
+// down is reported once, a little after the head returns to center (#141:
+// the report is the look's end, not when hold_ms elapses while still
+// away).
 TEST(LookAwayReplayTest, EachRecordedLookDownIsReportedOnce) {
   EXPECT_THAT(ReportSeconds(Fixture("look_down.head_pose")),
-              ElementsAre(AllOf(Gt(6), Lt(12)), AllOf(Gt(18), Lt(24))));
+              ElementsAre(AllOf(Gt(12), Lt(15)), AllOf(Gt(24), Lt(27))));
 }
 
 // Prompted: down at 6 s, center at 13, a slight turn at 17, center at 24,
 // a medium turn at 29, center at 35, a wide turn at 40, center at 47. The
-// two turns the face model kept tracking are each reported once; during
-// the wide one it lost the face (no frames from 41 to 46 s), so there is
-// no resting pose to be away from, and nothing is reported.
+// two turns the face model kept tracking are each reported once, a little
+// after the head returns to center; during the wide one it lost the face
+// (no frames from 41 to 46 s) for long enough that its own resting pose
+// relearns before the head is read as back, so there is nothing to
+// return from and nothing is reported.
 TEST(LookAwayReplayTest, EachRecordedTurnAwayIsReportedOnce) {
   EXPECT_THAT(ReportSeconds(Fixture("turns.head_pose")),
-              ElementsAre(AllOf(Gt(17), Lt(24)), AllOf(Gt(29), Lt(35))));
+              ElementsAre(AllOf(Gt(24), Lt(27)), AllOf(Gt(35), Lt(38))));
 }
 
 // Prompted: a frown at 12 s, neutral at 22, a smile while nodding at 28,

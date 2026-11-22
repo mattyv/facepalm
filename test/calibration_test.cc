@@ -342,6 +342,106 @@ TEST_F(CalibrationWalksEveryTargetTest, SavesTheEstimatedGainsAndRestingEye) {
   EXPECT_NEAR(captured.gains.horizontal, 20, 1e-9);
 }
 
+TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheEyeAverage) {
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0.2, 0));
+  // A blink, with an eye signal that would skew the average if it counted:
+  // the head still updates (captured_ stays true from it alone), but the
+  // eye signal does not.
+  session_.Update(Pose(0, 0), Eye(0.9, 0, /*blink=*/true));
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_THAT(captured.resting_eye.horizontal, Eq(0.2));
+}
+
+TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheGainsStep) {
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  // A blink mid-step, with a head and eye pair that would corrupt the
+  // slope away from 20 if it counted: on the wrong side of the real
+  // fixate-and-turn line entirely.
+  session_.Update(Pose(100, 0), Eye(100, 0, /*blink=*/true));
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_NEAR(captured.gains.horizontal, 20, 1e-9);
+}
+
+// A step where every frame blinks captures nothing for the eye signal, so
+// it falls back to a centred (0, 0) average rather than crashing or
+// leaving a stale value (#137): one indivisible walk through a whole
+// session, the same as the other full-session tests above.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(CalibrationWalksEveryTargetTest,
+       AllBlinkFramesLeaveTheRestingEyeCentred) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0.9, 0.9, /*blink=*/true));
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    // Every point's own frame blinks too, so the composed gaze falls back
+    // to head pose alone and the corner-vs-centre spread check still
+    // passes on the head offset alone.
+    session_.Update(Pose(yaw, yaw), Eye(0.9, 0.9, /*blink=*/true));
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_THAT(captured.resting_eye.horizontal, Eq(0));
+  EXPECT_THAT(captured.resting_eye.vertical, Eq(0));
+}
+
+// #137's own bound on the gains step's own sample buffer: a session
+// walked well past kMaxGainsSamples still estimates gains correctly
+// rather than growing its buffer without limit.
+TEST_F(CalibrationWalksEveryTargetTest, TheGainsStepStopsBufferingPastItsCap) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  constexpr int kWellPastTheCap = 1100;
+  for (int sample = 0; sample < kWellPastTheCap; ++sample) {
+    const double step = (sample % 21) - 10;
+    session_.Update(Pose(step, 0), Eye(-step / 20.0, 0));
+  }
+  const auto status = session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_FALSE(status->gains_step);
+}
+
 // Walks every step before checking the last one finishes the session.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(CalibrationWalksEveryTargetTest, TheLastStepFinishesTheSession) {
@@ -586,6 +686,86 @@ TEST_F(NearestCalibratedScreenTest, ComparesYawAcrossTheWrapAt180Degrees) {
 
   // -175 is 10 degrees from 175, not 350: the second screen is nearer.
   EXPECT_THAT(NearestCalibratedScreen(profile, Pose(-175, 0)), Eq(1U));
+}
+
+// #141's own screen-box test for LookAwayDetector's other_screen kind.
+using CalibratedScreenBoxContainingTest = ::testing::Test;
+
+// One screen whose four corners span yaw -40..-20, pitch -5..5.
+ScreenCalibration ScreenSpanning(double left, double right, double top,
+                                 double bottom) {
+  ScreenCalibration screen;
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopLeft)] =
+      Pose(left, top);
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopRight)] =
+      Pose(right, top);
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomLeft)] =
+      Pose(left, bottom);
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomRight)] =
+      Pose(right, bottom);
+  // The centre is never read by CalibratedScreenBoxContaining; given an
+  // out-of-span value so a bug that read it would be caught.
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kCentre)] =
+      Pose(1000, 1000);
+  return screen;
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, NoScreensIsNoAnswer) {
+  EXPECT_THAT(CalibratedScreenBoxContaining({}, Pose(0, 0), 3),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, InsideTheSpanOfItsFourCorners) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 0), 0), Eq(0U));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, OutsideEveryBoxEvenWithTheMargin) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-10, 0), 3),
+              Eq(std::nullopt));
+  // Past the box's own left edge too, not only its right: both of yaw's
+  // own bounds are read, not just the one the test above already covers.
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-50, 0), 3),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest,
+       TheMarginWidensEveryBoxBySomeDegrees) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  // 18 degrees is just past the box's own -20 edge, but within 3 degrees
+  // of margin past it.
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-18, 0), 3), Eq(0U));
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-16, 0), 3),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, PitchOutsideTheBoxIsNoMatchEither) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 20), 0),
+              Eq(std::nullopt));
+  // Past the box's own top edge too, not only its bottom.
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, -20), 0),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, PicksTheFirstBoxThatMatches) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5),
+                     ScreenSpanning(20, 40, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 0), 0), Eq(0U));
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(30, 0), 0), Eq(1U));
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(0, 0), 0),
+              Eq(std::nullopt));
 }
 
 }  // namespace

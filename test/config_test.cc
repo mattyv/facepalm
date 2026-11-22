@@ -35,6 +35,8 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_TRUE(config.looking_away_enabled);
   EXPECT_THAT(config.looking_away_degrees, FloatEq(15.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1000));
+  EXPECT_THAT(config.looking_away_averted_ms, Eq(6500));
+  EXPECT_THAT(config.looking_away_other_screen_margin_degrees, FloatEq(3.0F));
   EXPECT_TRUE(config.screen_context_enabled);
   EXPECT_FALSE(config.screen_context_window_titles_enabled);
   EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(7.5F));
@@ -70,6 +72,8 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "looking_away.enabled = false\n"
       "looking_away.degrees = 20\n"
       "looking_away.hold_ms = 1500\n"
+      "looking_away.averted_ms = 7000\n"
+      "looking_away.other_screen_margin_degrees = 4\n"
       "screen_context.enabled = false\n"
       "screen_context.window_titles_enabled = true\n"
       "screen_context.other_screen_degrees = 5\n"
@@ -104,6 +108,8 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_FALSE(config.looking_away_enabled);
   EXPECT_THAT(config.looking_away_degrees, FloatEq(20.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1500));
+  EXPECT_THAT(config.looking_away_averted_ms, Eq(7000));
+  EXPECT_THAT(config.looking_away_other_screen_margin_degrees, FloatEq(4.0F));
   EXPECT_FALSE(config.screen_context_enabled);
   EXPECT_TRUE(config.screen_context_window_titles_enabled);
   EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(5.0F));
@@ -327,6 +333,15 @@ TEST(ParseConfigTest, RefusesALookAwayHoldOutsideZeroTo10000Ms) {
               Eq("line 1: expected a whole number from 0 to 10000"));
 }
 
+TEST(ParseConfigTest, RefusesALookAwayAvertedMsOutsideZeroTo30000) {
+  EXPECT_THAT(ErrorFor("looking_away.averted_ms = -1"),
+              Eq("line 1: expected a whole number from 0 to 30000"));
+  EXPECT_THAT(ErrorFor("looking_away.averted_ms = 30001"),
+              Eq("line 1: expected a whole number from 0 to 30000"));
+  EXPECT_THAT(ErrorFor("looking_away.averted_ms = 1.5"),
+              Eq("line 1: expected a whole number from 0 to 30000"));
+}
+
 TEST(ParseConfigTest, RefusesAScreenContextSwitchThatIsNotTrueOrFalse) {
   EXPECT_THAT(ErrorFor("screen_context.enabled = 1"),
               Eq("line 1: expected true or false"));
@@ -388,6 +403,10 @@ TEST(ParseConfigTest, RefusesADegreesSettingOutsideZeroToOneEighty) {
               Eq("line 1: expected a number from 0 to 180"));
   // from_chars reads "nan", and NaN passes a < 0 || > 180 check.
   EXPECT_THAT(ErrorFor("calibration.min_spread_degrees = nan"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("looking_away.other_screen_margin_degrees = far"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("looking_away.other_screen_margin_degrees = nan"),
               Eq("line 1: expected a number from 0 to 180"));
 }
 

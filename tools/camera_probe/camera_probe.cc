@@ -528,8 +528,20 @@ class Probe : public CameraReports {
               .eye_look_down_threshold =
                   config_.expressions_eye_look_down_threshold,
               .eye_blink_threshold = config_.expressions_eye_blink_threshold},
-          LookAwayDetector::Settings{.degrees = config_.looking_away_degrees,
-                                     .hold_ms = config_.looking_away_hold_ms}));
+          EyeGazeTracker::Settings{
+              .blink_threshold = config_.eye_gaze_blink_threshold,
+              .median_ms = config_.eye_gaze_median_ms,
+              .resting_ms = config_.eye_gaze_resting_ms,
+              .gap_ms = config_.eye_gaze_gap_ms},
+          LookAwayDetector::Settings{
+              .degrees = config_.looking_away_degrees,
+              .hold_ms = config_.looking_away_hold_ms,
+              .averted_ms = config_.looking_away_averted_ms,
+              .other_screen_margin_degrees =
+                  config_.looking_away_other_screen_margin_degrees},
+          EyeGains{.horizontal = config_.eye_gaze_horizontal_gain,
+                   .vertical = config_.eye_gaze_vertical_gain},
+          config_.eye_gaze_head_only_yaw_degrees));
     }
     readers.push_back(std::make_unique<GestureProbeReader>());
     analyzers.push_back(std::make_unique<FaceAnalyzer>(
