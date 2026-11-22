@@ -198,8 +198,8 @@ std::optional<std::int64_t> FileModifiedMs(const std::string& path) {
 #endif
   constexpr std::int64_t kMsPerSecond = 1000;
   constexpr std::int64_t kNsPerMs = 1000000;
-  return static_cast<std::int64_t>(seconds) * kMsPerSecond +
-         static_cast<std::int64_t>(nanoseconds) / kNsPerMs;
+  return (static_cast<std::int64_t>(seconds) * kMsPerSecond) +
+         (static_cast<std::int64_t>(nanoseconds) / kNsPerMs);
 }
 
 // `daemon_paths` is empty only when `--home` names a directory
