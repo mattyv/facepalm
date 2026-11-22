@@ -27,11 +27,20 @@ struct Config {
   static constexpr int kDefaultExpressionsSettleMs = 600;
   // eyes_narrowed's own gate (#140): the eyeLookDown and eyeBlink scores,
   // either eye, above which a glance down or a blink holds the squint
-  // back, so it is not read from a glance at the keyboard. Provisional:
-  // reasoned from MediaPipe's 0-to-1 scale, not yet tuned on a recording,
-  // pending #139's fixtures (test/fixtures/eyes/*.probe) or, lacking
-  // those, synthetic data replayed through src/eyes_replay.h (#147).
-  static constexpr float kDefaultExpressionsEyeLookDownThreshold = 0.3F;
+  // back, so it is not read from a glance at the keyboard. Tuned on
+  // #139's fixtures (test/fixtures/eyes/*.probe, measured through
+  // src/eyes_gaze_replay.h): was 0.3 for eyeLookDown, reasoned from
+  // MediaPipe's 0-to-1 scale alone; glance_keyboard.probe's own deliberate
+  // glances down read 0.20 to 0.24 on average (max 0.22 to 0.27), close
+  // enough to that session's own "looking at the screen" baseline (0.23)
+  // that 0.3 would have let a real glance through unguarded, so it comes
+  // down to 0.2, which still clears the calmer baseline most of the other
+  // eight fixtures hold (mostly under 0.19). eyeBlink's own 0.5 is
+  // unchanged: blinks.probe and long_blinks.probe's actual blinks read
+  // 0.45 to 0.74 at their peak, while every fixture's own calm baseline
+  // stays under 0.31 (one transient blink inside thinking_aversion's
+  // "look back" cue aside, which 0.5 correctly still catches).
+  static constexpr float kDefaultExpressionsEyeLookDownThreshold = 0.2F;
   static constexpr float kDefaultExpressionsEyeBlinkThreshold = 0.5F;
   // LookAwayDetector's defaults (#35), tuned on one person's recordings:
   // their turns and looks down held 20 to 45 degrees from the resting pose
@@ -39,27 +48,52 @@ struct Config {
   // each swing lasting about half a second (#34).
   static constexpr float kDefaultLookingAwayDegrees = 15.0F;
   static constexpr int kDefaultLookingAwayHoldMs = 1000;
-  // LookAwayDetector's other two settings (#141), both provisional: no
-  // #139 recording has tuned them yet, nor measured a calibrated
-  // screen's own box against one. kDefaultLookingAwayAvertedMs is
-  // reasoned from the issue's own "back within about 5 to 8 seconds",
-  // its midpoint rounded to a whole second;
-  // kDefaultLookingAwayOtherScreenMarginDegrees from
-  // CalibrationSettings::kDefaultMinSpreadDegrees (#137's own spread
-  // check): a margin smaller than the spread a corner must clear from
-  // its own screen's centre would blur one screen's box into another's.
+  // LookAwayDetector's other two settings (#141). kDefaultLookingAwayAvertedMs
+  // was reasoned from the issue's own "back within about 5 to 8 seconds",
+  // its midpoint rounded to a whole second; thinking_aversion.probe's own
+  // two aversions (#139, measured through src/eyes_gaze_replay.h) each
+  // last close to six seconds before returning, squarely inside that
+  // midpoint, so a pause that long still reads as averted rather than
+  // away, and the value is unchanged.
+  // kDefaultLookingAwayOtherScreenMarginDegrees stays from
+  // CalibrationSettings::kDefaultMinSpreadDegrees (#137's own spread check: a
+  // margin smaller than the spread a corner must clear from its own screen's
+  // centre would blur one screen's box into another's): #139's fixtures include
+  // no calibrated screen to measure a box against, so this one is still
+  // unproven on a recording.
   static constexpr int kDefaultLookingAwayAvertedMs = 6500;
   static constexpr float kDefaultLookingAwayOtherScreenMarginDegrees = 3.0F;
   // ScreenContextReporter's default (#61 item 11): half of
   // looking_away.degrees, the same halving LookAwayDetector's own
   // hysteresis uses for a middle ground.
   static constexpr float kDefaultScreenContextOtherScreenDegrees = 7.5F;
-  // src/eye_gaze.h's defaults (#137): given from memory, like the eyes
-  // line's own field order (#139), not yet tuned on a real recording --
-  // every one of these needs checking against #139's fixtures once they
-  // exist (see this issue's PR).
-  static constexpr float kDefaultEyeGazeHorizontalGain = 30.0F;
-  static constexpr float kDefaultEyeGazeVerticalGain = 30.0F;
+  // src/eye_gaze.h's defaults (#137), checked against #139's fixtures
+  // (test/fixtures/eyes/*.probe, measured through src/eyes_gaze_replay.h):
+  // horizontal_gain and vertical_gain were 30, given from memory, like
+  // the eyes line's own field order (#139), not tuned on a recording.
+  // head_turn_eyes_centered.probe's own two turns (eyes held on the
+  // camera while the head turns to 29.6 and 32.8 degrees of yaw) need
+  // ComposeGaze's eye term to cancel almost all of that head yaw back
+  // out, which only a horizontal gain of about 43 to 48 does; 30 left a
+  // third of the turn still showing in the composed gaze. Raised to 45.
+  // vertical_gain has no matching head-pitch-with-eyes-centred recording
+  // among #139's nine fixtures to measure the same way, so it keeps the
+  // horizontal gain's own value rather than guess an unmeasured one.
+  static constexpr float kDefaultEyeGazeHorizontalGain = 45.0F;
+  static constexpr float kDefaultEyeGazeVerticalGain = 45.0F;
+  // blink_threshold, median_ms, resting_ms, gap_ms and
+  // head_only_yaw_degrees are unchanged: the same fixtures confirm them.
+  // blink_threshold (0.5) separates blinks.probe's and long_blinks.probe's
+  // own blinks (0.45 to 0.74 at their peak) from every fixture's calm
+  // baseline (under 0.31), the same split expressions.eye_blink_threshold
+  // reads above. median_ms (250 ms) already damps the frame noise a held
+  // gaze shows (a standard deviation of roughly 0.01 to 0.09) without
+  // blurring a held corner look, which lasts the cue's own six seconds.
+  // resting_ms (3,000 ms) and gap_ms (2,000 ms) match ExpressionTracker's
+  // own design for the same reason it does (below); every "look at the
+  // camera" cue runs a full six seconds, well past 3,000 ms.
+  // head_only_yaw_degrees (35) stays clear of the two turns above (29.6
+  // and 32.8 degrees), where the eye correction above is still wanted.
   static constexpr float kDefaultEyeGazeBlinkThreshold = 0.5F;
   static constexpr int kDefaultEyeGazeMedianMs = 250;
   // Matches ExpressionTracker's own first-three-seconds and after-a-gap
@@ -68,7 +102,15 @@ struct Config {
   static constexpr int kDefaultEyeGazeRestingMs = 3000;
   static constexpr int kDefaultEyeGazeGapMs = 2000;
   static constexpr float kDefaultEyeGazeHeadOnlyYawDegrees = 35.0F;
-  // CalibrationSettings's defaults (#137), also unproven on a recording.
+  // CalibrationSettings's defaults (#137). Unchanged: #139's nine
+  // fixtures do not include a calibration gains step or a calibrated
+  // screen's corners, so there is nothing recorded to measure a travel,
+  // an axis or a spread against. head_turn_eyes_centered.probe's own
+  // yaw, end to end, covers more than 60 degrees, comfortably clearing
+  // min_head_travel_degrees and min_axis_degrees either way, which is as
+  // far as these fixtures can check them; a proper tuning needs its own
+  // recording of the gains step and a calibrated screen (see this
+  // issue's PR).
   static constexpr float kDefaultCalibrationMinHeadTravelDegrees = 10.0F;
   static constexpr float kDefaultCalibrationMinAxisDegrees = 4.0F;
   static constexpr float kDefaultCalibrationMinSpreadDegrees = 3.0F;

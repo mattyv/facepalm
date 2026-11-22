@@ -476,12 +476,13 @@ class SettingsDialog : public QDialog {
   }
 
  private:
-  // The first kAdvancedFieldCount entries are the expression tuning grid;
-  // the rest are looking away's and screen context's own numeric fields
+  // The first kAdvancedFieldCount entries are the expression tuning grid,
+  // including the squint-guard's own two thresholds (#140, #150); the
+  // rest are looking away's and screen context's own numeric fields
   // (#35, #61 item 11, #79).
-  static constexpr std::size_t kAdvancedFieldCount = 7;
+  static constexpr std::size_t kAdvancedFieldCount = 9;
   static constexpr int kWindowWidth = 560;
-  static constexpr int kWindowHeight = 610;
+  static constexpr int kWindowHeight = 610 + 64;
   static constexpr int kFormMargin = 24;
   static constexpr int kFormSpacing = 12;
   static constexpr int kHeadingSpacing = 14;
@@ -497,7 +498,8 @@ class SettingsDialog : public QDialog {
       "Gesture confidence (0–1)",   "Expression smallest rise (0–1)",
       "Expression spreads (0–100)", "Expression hold (0–5000 ms)",
       "Pose degrees (0–180)",       "Pose range (0–180)",
-      "Pose settle (0–5000 ms)",    "Degrees (0–180)",
+      "Pose settle (0–5000 ms)",    "Eye look-down threshold (0–1)",
+      "Eye blink threshold (0–1)",  "Degrees (0–180)",
       "Hold (0–10000 ms)",          "Other-screen degrees (0–180)",
   };
 
@@ -509,6 +511,8 @@ class SettingsDialog : public QDialog {
       &facepalm::MenuSettings::expression_pose_degrees,
       &facepalm::MenuSettings::expression_pose_range,
       &facepalm::MenuSettings::expression_settle_ms,
+      &facepalm::MenuSettings::expression_eye_look_down_threshold,
+      &facepalm::MenuSettings::expression_eye_blink_threshold,
       &facepalm::MenuSettings::looking_away_degrees,
       &facepalm::MenuSettings::looking_away_hold_ms,
       &facepalm::MenuSettings::screen_context_other_screen_degrees,
@@ -589,6 +593,8 @@ class SettingsDialog : public QDialog {
         Number(config.expressions_pose_degrees),
         Number(config.expressions_pose_range),
         QString::number(config.expressions_settle_ms),
+        Number(config.expressions_eye_look_down_threshold),
+        Number(config.expressions_eye_blink_threshold),
         Number(config.looking_away_degrees),
         QString::number(config.looking_away_hold_ms),
         Number(config.screen_context_other_screen_degrees),

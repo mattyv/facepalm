@@ -5,6 +5,50 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: The eye/gaze/squint/calibration/look-away defaults are tuned on #139's recordings, closing #137, #139 and #150
+
+-   **Decision (what changed, and what did not):** of every provisional
+    default #137, #140 and #141 left to be tuned on a recording,
+    `eye_gaze.horizontal_gain` and `eye_gaze.vertical_gain` move from 30 to
+    45, and `expressions.eye_look_down_threshold` from 0.3 to 0.2
+    (`src/config.h`, `src/calibration.h`'s matching `kDefaultGain`); every
+    other one -- `eye_gaze.blink_threshold`, `median_ms`, `resting_ms`,
+    `gap_ms`, `head_only_yaw_degrees`, `calibration.min_head_travel_degrees`,
+    `min_axis_degrees`, `min_spread_degrees`, `looking_away.averted_ms` and
+    `other_screen_margin_degrees` -- is left as it was, either confirmed by
+    the recordings or, for the three calibration minimums and the
+    other-screen margin, because #139's nine fixtures (`test/fixtures/eyes`)
+    include no calibration gains step or calibrated screen to measure one
+    against. The measured distributions behind each choice are in #139's
+    closing PR.
+-   **Decision (measured through a new replay, not the existing ones):**
+    `src/eyes_gaze_replay.h`/`.cc`, a new unit, replays a recording's
+    `head_pose` and `eyes` lines together through `ExpressionTracker`,
+    `EyeGazeTracker` and `LookAwayDetector` in `LookAwayReader`'s own order
+    (#139's own `eyes_probe_test.cc`-style formatting, #137's `ComposeGaze`),
+    since `src/look_away_replay.h`'s existing `ReplayLookingAway` reads head
+    pose alone by design and `src/eye_gaze.h`'s own tests build frames by
+    hand. `test/eyes_gaze_replay_test.cc`'s fixture tests are what hold the
+    tuned defaults to #139's recordings, and what found the two findings
+    below.
+-   **Decision (two findings filed, not fixed here):** facepalm#157 (a look
+    away spanning a no-face gap longer than `ExpressionTracker`'s own
+    relearning window can end with no report at all, reproduced on
+    `fully_away.probe`) and facepalm#158 (the squint-guard can still miss
+    eyeSquint's own slower decay between two blinks close together,
+    reproduced on `blinks.probe`) are both design gaps in code this PR does
+    not otherwise change, not constants; each is filed rather than fixed,
+    and `test/eyes_gaze_replay_test.cc` asserts the behaviour each fixture
+    actually shows today, naming the issue.
+-   **Decision (#150, the squint-guard's own two thresholds join the
+    Settings windows):** `MenuSettings` (`src/settings_document.h`) gains
+    `expression_eye_look_down_threshold` and `expression_eye_blink_threshold`,
+    wired into the macOS menu's "Advanced tuning" rows
+    (`tools/menu/main.mm`) and the Linux tray's own grid
+    (`tools/menu/main_linux.cc`) the same way every other expression
+    setting already is. The Linux change mirrors the macOS one; this
+    environment cannot build or run the Linux tray to check it.
+
 ## 2026-11-22: Looking away reads composed gaze, reports once at return with its kind and duration, closing #141
 
 -   **Decision (reporting moves from mid-look to the look's own end):**

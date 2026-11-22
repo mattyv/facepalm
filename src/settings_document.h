@@ -22,6 +22,10 @@ struct MenuSettings {
   std::string expression_pose_degrees = "10";
   std::string expression_pose_range = "3";
   std::string expression_settle_ms = "600";
+  // eyes_narrowed's own squint-guard (#140, #150: the Settings windows did
+  // not show these either).
+  std::string expression_eye_look_down_threshold = "0.2";
+  std::string expression_eye_blink_threshold = "0.5";
   // Looking away (#35, #79): the Settings windows did not show these.
   bool looking_away_enabled = true;
   std::string looking_away_degrees = "15";
