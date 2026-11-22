@@ -249,6 +249,22 @@ class CalibrationSession : public CalibrationController {
 std::optional<std::size_t> NearestCalibratedScreen(
     const CalibrationProfile& profile, const HeadRotation& gaze);
 
+// The index of the first screen in `profile` whose own box `gaze`
+// (src/eye_gaze.h's ComposeGaze) falls inside, by `margin_degrees` (#137's
+// own design, read from #137's issue body: "a screen is the box they
+// span, away is outside every box plus a margin"; #141 is its first use,
+// for LookAwayDetector's own_screen kind): each screen's box is the
+// smallest yaw/pitch rectangle spanning its four corners (every
+// CalibrationPoint but kCentre), widened by `margin_degrees` on every
+// side. nullopt with no screens in `profile`, or `gaze` outside every
+// one's own margin. Yaw is read as given, with no wrap at the +/-180 seam
+// (src/calibration.cc's own GazeDistance wraps it; a screen calibrated
+// across that seam is not modeled, as stacked monitors are not in
+// src/screen_context.h).
+std::optional<std::size_t> CalibratedScreenBoxContaining(
+    const CalibrationProfile& profile, const HeadRotation& gaze,
+    double margin_degrees);
+
 }  // namespace facepalm
 
 #endif  // FACEPALM_SRC_CALIBRATION_H_

@@ -38,11 +38,27 @@ class ScreenContextReaderForwarder : public FaceReader {
   ScreenContextReader& target_;
 };
 
+// As ScreenContextReaderForwarder, for a LookAwayReader MakeFaceReaders is
+// given (#141): outlives this, owned by the daemon.
+class LookAwayReaderForwarder : public FaceReader {
+ public:
+  explicit LookAwayReaderForwarder(LookAwayReader& target) : target_(target) {}
+  void OnFace(const Face& face, int width, int height,
+              std::int64_t timestamp_ms,
+              std::vector<Reaction>& reactions) override {
+    target_.OnFace(face, width, height, timestamp_ms, reactions);
+  }
+  void OnNoFace() override { target_.OnNoFace(); }
+
+ private:
+  LookAwayReader& target_;
+};
+
 }  // namespace
 
 std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
     const Config& config, ScreenContextReader* screen_context_reader,
-    CalibrationController* calibration) {
+    CalibrationController* calibration, LookAwayReader* look_away_reader) {
   const ExpressionTracker::Settings tracker{
       .rise = config.expressions_smallest_rise,
       .pose_degrees = config.expressions_pose_degrees,
@@ -61,10 +77,27 @@ std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
     readers.push_back(std::make_unique<ExpressionReader>(tracker));
   }
   if (config.looking_away_enabled) {
-    readers.push_back(std::make_unique<LookAwayReader>(
-        tracker,
-        LookAwayDetector::Settings{.degrees = config.looking_away_degrees,
-                                   .hold_ms = config.looking_away_hold_ms}));
+    if (look_away_reader != nullptr) {
+      readers.push_back(
+          std::make_unique<LookAwayReaderForwarder>(*look_away_reader));
+    } else {
+      readers.push_back(std::make_unique<LookAwayReader>(
+          tracker,
+          EyeGazeTracker::Settings{
+              .blink_threshold = config.eye_gaze_blink_threshold,
+              .median_ms = config.eye_gaze_median_ms,
+              .resting_ms = config.eye_gaze_resting_ms,
+              .gap_ms = config.eye_gaze_gap_ms},
+          LookAwayDetector::Settings{
+              .degrees = config.looking_away_degrees,
+              .hold_ms = config.looking_away_hold_ms,
+              .averted_ms = config.looking_away_averted_ms,
+              .other_screen_margin_degrees =
+                  config.looking_away_other_screen_margin_degrees},
+          EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
+                   .vertical = config.eye_gaze_vertical_gain},
+          config.eye_gaze_head_only_yaw_degrees));
+    }
   }
   if (config.screen_context_enabled && screen_context_reader != nullptr) {
     readers.push_back(

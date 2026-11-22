@@ -239,9 +239,11 @@ target_link_libraries(head_pose_reader PUBLIC reaction)
 target_link_libraries(gesture_reader PUBLIC head_gesture_model)
 target_link_libraries(expression_reader PUBLIC expressions head_pose)
 # The look-away reader runs the real detector and tracker, pure computation
-# like the expression reader's (#35).
-target_link_libraries(look_away PUBLIC head_pose)
-target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose)
+# like the expression reader's (#35). look_away also needs calibration for
+# its own kOtherScreen box test (#141's CalibratedScreenBoxContaining).
+target_link_libraries(look_away PUBLIC head_pose calibration)
+target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose
+  eye_gaze protocol)
 facepalm_unit(calibration)
 target_link_libraries(calibration PUBLIC head_pose eye_gaze)
 facepalm_unit(calibration_store)

@@ -688,6 +688,86 @@ TEST_F(NearestCalibratedScreenTest, ComparesYawAcrossTheWrapAt180Degrees) {
   EXPECT_THAT(NearestCalibratedScreen(profile, Pose(-175, 0)), Eq(1U));
 }
 
+// #141's own screen-box test for LookAwayDetector's other_screen kind.
+using CalibratedScreenBoxContainingTest = ::testing::Test;
+
+// One screen whose four corners span yaw -40..-20, pitch -5..5.
+ScreenCalibration ScreenSpanning(double left, double right, double top,
+                                 double bottom) {
+  ScreenCalibration screen;
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopLeft)] =
+      Pose(left, top);
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopRight)] =
+      Pose(right, top);
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomLeft)] =
+      Pose(left, bottom);
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomRight)] =
+      Pose(right, bottom);
+  // The centre is never read by CalibratedScreenBoxContaining; given an
+  // out-of-span value so a bug that read it would be caught.
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kCentre)] =
+      Pose(1000, 1000);
+  return screen;
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, NoScreensIsNoAnswer) {
+  EXPECT_THAT(CalibratedScreenBoxContaining({}, Pose(0, 0), 3),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, InsideTheSpanOfItsFourCorners) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 0), 0), Eq(0U));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, OutsideEveryBoxEvenWithTheMargin) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-10, 0), 3),
+              Eq(std::nullopt));
+  // Past the box's own left edge too, not only its right: both of yaw's
+  // own bounds are read, not just the one the test above already covers.
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-50, 0), 3),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest,
+       TheMarginWidensEveryBoxBySomeDegrees) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  // 18 degrees is just past the box's own -20 edge, but within 3 degrees
+  // of margin past it.
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-18, 0), 3), Eq(0U));
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-16, 0), 3),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, PitchOutsideTheBoxIsNoMatchEither) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 20), 0),
+              Eq(std::nullopt));
+  // Past the box's own top edge too, not only its bottom.
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, -20), 0),
+              Eq(std::nullopt));
+}
+
+TEST_F(CalibratedScreenBoxContainingTest, PicksTheFirstBoxThatMatches) {
+  CalibrationProfile profile;
+  profile.screens = {ScreenSpanning(-40, -20, -5, 5),
+                     ScreenSpanning(20, 40, -5, 5)};
+
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 0), 0), Eq(0U));
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(30, 0), 0), Eq(1U));
+  EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(0, 0), 0),
+              Eq(std::nullopt));
+}
+
 }  // namespace
 }  // namespace facepalm
 // NOLINTEND(bugprone-unchecked-optional-access)

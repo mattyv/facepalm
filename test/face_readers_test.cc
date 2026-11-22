@@ -141,5 +141,59 @@ TEST(FaceReadersTest, ScreenContextAndCalibrationBothAppendedWhenGiven) {
   EXPECT_THAT(MakeFaceReaders(Config{}, &reader, &calibration), SizeIs(5));
 }
 
+// #141: a LookAwayReader given is wrapped, not built fresh, the same way
+// a ScreenContextReader given is (its own test file,
+// test/look_away_reader_test.cc, covers the forwarding and the kOtherScreen
+// and kGone kinds themselves; here it is only wiring, so a real face
+// through the last reader is enough to show the given one is fed).
+TEST(FaceReadersTest, LookAwayReaderIsAppendedWhenGiven) {
+  LookAwayReader reader{
+      ExpressionTracker::Settings{}, EyeGazeTracker::Settings{},
+      LookAwayDetector::Settings{.degrees = 1000,
+                                 .hold_ms = 0,
+                                 .averted_ms = 0,
+                                 .other_screen_margin_degrees = 0}};
+  const std::vector<std::unique_ptr<FaceReader>> readers =
+      MakeFaceReaders(Config{}, /*screen_context_reader=*/nullptr,
+                      /*calibration=*/nullptr, &reader);
+
+  ASSERT_THAT(readers, SizeIs(3));
+  std::vector<Reaction> reactions;
+  Face face{};
+  face.pose_column_major[0] = 1;
+  face.pose_column_major[5] = 1;
+  face.pose_column_major[10] = 1;
+  face.pose_column_major[15] = 1;
+  readers[2]->OnFace(face, /*width=*/640, /*height=*/480, /*timestamp_ms=*/0,
+                     reactions);
+  readers[2]->OnNoFace();  // Must not crash.
+
+  EXPECT_THAT(reactions, IsEmpty());
+}
+
+TEST(FaceReadersTest, LookAwayDisabledSkipsItEvenWhenGiven) {
+  Config config;
+  config.looking_away_enabled = false;
+  LookAwayReader reader{ExpressionTracker::Settings{},
+                        EyeGazeTracker::Settings{},
+                        LookAwayDetector::Settings{}};
+
+  EXPECT_THAT(MakeFaceReaders(config, /*screen_context_reader=*/nullptr,
+                              /*calibration=*/nullptr, &reader),
+              SizeIs(2));
+}
+
+TEST(FaceReadersTest, NoLookAwayReaderGivenBuildsOneFromConfig) {
+  // Config{}'s own defaults, through MakeFaceReaders' fallback
+  // construction (every one of EyeGazeTracker::Settings's and
+  // LookAwayDetector::Settings's own fields, not just the ones the
+  // earlier EveryReaderTheDefaultsEnableInOrder test already covers).
+  const std::vector<std::unique_ptr<FaceReader>> readers =
+      MakeFaceReaders(Config{});
+
+  ASSERT_THAT(readers, SizeIs(3));
+  EXPECT_NE(dynamic_cast<LookAwayReader*>(readers[2].get()), nullptr);
+}
+
 }  // namespace
 }  // namespace facepalm

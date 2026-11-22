@@ -5,6 +5,105 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: Looking away reads composed gaze, reports once at return with its kind and duration, closing #141
+
+-   **Decision (reporting moves from mid-look to the look's own end):**
+    `LookAwayDetector` (`src/look_away.cc`) no longer reports
+    `{"gesture":"looking_away"}` the moment `hold_ms` elapses while still
+    away (#35's own design); it reports
+    `{"gesture":"looked_away","kind":"...","duration_ms":n}` once the
+    gaze returns within half of `Settings::degrees`, so thinking (a short
+    `averted` look) can be told from leaving (`away`, `other_screen` or
+    `gone`) only once the whole look is known. `specs/LookAway.tla`'s own
+    `Report` and `Rearm` actions, separate in #35's model, merge into one
+    `Return`, since there is no longer an earlier moment to report at or
+    a later one to rearm on its own.
+-   **Decision (the kinds, and their priority):** `LookAwayKind` is
+    `kAverted` (back within `Settings::averted_ms` of the look's own
+    start), `kOtherScreen` (the gaze was ever inside another calibrated
+    screen's own box while away), `kAway` (longer than `averted_ms`,
+    never in another screen's box) or `kGone` (no face to read at some
+    point during the look). A look under `Settings::hold_ms` is a glance
+    and is never reported, under any kind. Priority at the moment the
+    kind is read, highest first: `kGone`, then `kOtherScreen`, then
+    `heldLong` (`averted_ms` elapsed) deciding `kAway` from `kAverted`.
+    Leaving the camera's view is read as more informative than where the
+    gaze last sat before it did, and actually landing on another screen
+    is more informative than how long the look merely ran.
+-   **Decision (another screen's box, not a side guess):** #141's
+    `kOtherScreen` reads `src/calibration.h`'s new
+    `CalibratedScreenBoxContaining`: each calibrated screen's box is the
+    smallest yaw/pitch rectangle spanning its four corners (every
+    `CalibrationPoint` but the centre), widened by
+    `Settings::other_screen_margin_degrees`, following #137's own design
+    ("a screen is the box they span, away is outside every box plus a
+    margin"). This is a different, more precise test than
+    `src/screen_context.h`'s own `CoarseGazeFrom`, which keeps its
+    existing uncalibrated side guess for the `context` JSON every
+    reading carries (#61 item 11): that reader is unchanged by #141,
+    since its own gaze snapshot has no notion of a look's duration or
+    kind to report in the first place.
+-   **Decision (provisional thresholds, like #137's own):**
+    `Config::kDefaultLookingAwayAvertedMs` (6500) is the issue's own
+    "back within about 5 to 8 seconds", its midpoint rounded to a whole
+    second; `kDefaultLookingAwayOtherScreenMarginDegrees` (3.0) matches
+    `CalibrationSettings::kDefaultMinSpreadDegrees`, the same margin
+    #137's own spread check already uses for "far enough from this
+    screen's own centre to be a real corner". Neither is tuned on a
+    recording: #139's fixtures are not yet recorded, and no camera was
+    opened to record them for this change. Like #137's own `eye_gaze.*`
+    and `calibration.*` settings, neither is added to the macOS or Linux
+    Settings window (`src/settings_document.h` is unchanged): both are
+    config-file-only until a recording tunes them, the same provisional
+    treatment #137 gave its own new settings.
+-   **Decision (no face is read as fully away, from the very first
+    frame):** `LookAwayDetector::Update` takes an `std::optional`
+    composed gaze, not a bare `HeadRotation`; `nullopt` (no face) opens
+    or continues a look exactly as being genuinely away does, so a face
+    lost from the very first frame of a look still counts, and
+    `LookAwayReader::OnNoFace` (still given no timestamp of its own,
+    `FaceReader`'s own interface) feeds it the last timestamp `OnFace`
+    read. `src/look_away_replay.h`'s own replay tool reads
+    `gesture_no_face` lines the same way, for #139's eventual recordings.
+-   **Decision (the frame that closes a look must not see the gap's own
+    relearning):** `LookAwayReader::OnFace` now reads
+    `tracker_.RestingPose()` before calling `tracker_.Update()`, not
+    after (`src/look_away_replay.cc`'s own replay matches it). Found
+    while fixing #141: `ExpressionTracker::Update`'s own gap (over two
+    seconds since the last frame, #46) relearns the resting pose afresh,
+    and `RestingPose()` then reads `nullopt` for a further three
+    seconds (`kLearningMs`) -- which, read on the very same frame a long
+    `kGone` look is trying to close, would discard it entirely
+    (`LookAwayDetector::Update`'s own `!resting` branch), rather than
+    reporting it. Reading the resting pose before this frame's own
+    update lets that one frame still close the look against the pose it
+    opened against; a `kGone` look whose return pose also differs from
+    the old resting pose by more than `Settings::degrees`, straddling
+    the whole three-second relearning window before it settles, can
+    still lose its report -- a known, narrower residual limitation,
+    not one this change tries to close.
+-   **Decision (`Absorb` must report too, now that reporting waits for
+    `Return`):** `specs/LookAway.tla`'s `Absorb` (the resting pose
+    catching up to a gaze that never itself returned) used to transition
+    quietly to `rest`, safe because `Report` had already fired earlier
+    in #35's own model if it was going to. With reporting moved to
+    `Return`, a quiet `Absorb` would have nothing left to fire it,
+    silently dropping a look -- this issue's own instruction to check
+    that it still can't. `ReturnByAbsorb` now carries the exact same
+    reporting effect `ReturnByMove` does; `RestHasNothingPending` is the
+    invariant that would catch a quiet `Absorb` reintroduced, and the
+    mutation that reintroduces it is in `specs/README.md`'s own table.
+-   **Decision (a `LookAwayReader` given to `MakeFaceReaders` is reused,
+    like `ScreenContextReader`'s):** the daemon's own composition root
+    (`tools/daemon/main.cc`) now keeps one `LookAwayReader` for the whole
+    process, not one per camera session, mirroring `screen_context_reader_`
+    (#61 item 11): its own `kGone` tracking, and the calibration profile
+    `OnCalibrationFinished` swaps into it (`LookAwayReader::SetProfile`,
+    mirroring `ScreenContextReporter::SetProfile`, #136, #137), would
+    otherwise be lost every time the camera reopens. `MakeFaceReaders`
+    still builds one fresh from `Config` when none is given, for
+    `tools/camera_probe` and any test that does not care.
+
 ## 2026-11-22: Coarse gaze and calibration read eyes with head pose, over every screen, and apply at once, closing #135 and most of #137
 
 -   **Decision (composition):** `src/eye_gaze.h`'s `ComposeGaze` reads

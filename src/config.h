@@ -39,6 +39,17 @@ struct Config {
   // each swing lasting about half a second (#34).
   static constexpr float kDefaultLookingAwayDegrees = 15.0F;
   static constexpr int kDefaultLookingAwayHoldMs = 1000;
+  // LookAwayDetector's other two settings (#141), both provisional: no
+  // #139 recording has tuned them yet, nor measured a calibrated
+  // screen's own box against one. kDefaultLookingAwayAvertedMs is
+  // reasoned from the issue's own "back within about 5 to 8 seconds",
+  // its midpoint rounded to a whole second;
+  // kDefaultLookingAwayOtherScreenMarginDegrees from
+  // CalibrationSettings::kDefaultMinSpreadDegrees (#137's own spread
+  // check): a margin smaller than the spread a corner must clear from
+  // its own screen's centre would blur one screen's box into another's.
+  static constexpr int kDefaultLookingAwayAvertedMs = 6500;
+  static constexpr float kDefaultLookingAwayOtherScreenMarginDegrees = 3.0F;
   // ScreenContextReporter's default (#61 item 11): half of
   // looking_away.degrees, the same halving LookAwayDetector's own
   // hysteresis uses for a middle ground.
@@ -83,6 +94,9 @@ struct Config {
   bool looking_away_enabled = true;
   float looking_away_degrees = kDefaultLookingAwayDegrees;
   int looking_away_hold_ms = kDefaultLookingAwayHoldMs;
+  int looking_away_averted_ms = kDefaultLookingAwayAvertedMs;
+  float looking_away_other_screen_margin_degrees =
+      kDefaultLookingAwayOtherScreenMarginDegrees;
   // Active app, mouse position and coarse gaze (#61 item 11). Window
   // titles need the Screen Recording permission on macOS and can hold
   // private text, so they default off.
@@ -118,6 +132,8 @@ struct Config {
 // from 0 to 5000), expressions.eye_look_down_threshold and
 // expressions.eye_blink_threshold (0 to 1), looking_away.degrees (0 to
 // 180), looking_away.hold_ms (a whole number from 0 to 10000),
+// looking_away.averted_ms (a whole number from 0 to 30000, #141) and
+// looking_away.other_screen_margin_degrees (0 to 180, #141),
 // screen_context.enabled, screen_context.window_titles_enabled (true or
 // false), screen_context.other_screen_degrees (0 to 180),
 // eye_gaze.horizontal_gain and eye_gaze.vertical_gain (0 to 200),

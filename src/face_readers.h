@@ -7,6 +7,7 @@
 #include "src/calibration.h"
 #include "src/config.h"
 #include "src/face_reader.h"
+#include "src/look_away_reader.h"
 #include "src/screen_context_reader.h"
 
 namespace facepalm {
@@ -18,13 +19,21 @@ namespace facepalm {
 // `config.screen_context_enabled`, is wrapped so it keeps being fed,
 // rather than owned here: it outlives any one call, the way the daemon's
 // long-lived pose cache has to (#61 item 11), so the caller owns it and
-// may pass the same one again next time. `calibration`, when given, is
-// always added (#116): calibration has no config flag of its own,
-// gated only by whether the daemon's composition root resolved a profile
-// store for this run (src/daemon_calibration.h).
+// may pass the same one again next time. `look_away_reader` is the same
+// kind of exception, for the same reason (#141): a LookAwayReader given
+// and `config.looking_away_enabled` is wrapped rather than built fresh,
+// so its own kGone tracking survives a camera session that outlives one
+// call, and so its calibration profile (SetProfile) keeps being whatever
+// the daemon's composition root last swapped in; without one, a fresh
+// LookAwayReader is still built from `config`, as before #141, with no
+// calibration profile of its own. `calibration`, when given, is always
+// added (#116): calibration has no config flag of its own, gated only
+// by whether the daemon's composition root resolved a profile store for
+// this run (src/daemon_calibration.h).
 std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
     const Config& config, ScreenContextReader* screen_context_reader = nullptr,
-    CalibrationController* calibration = nullptr);
+    CalibrationController* calibration = nullptr,
+    LookAwayReader* look_away_reader = nullptr);
 
 }  // namespace facepalm
 
