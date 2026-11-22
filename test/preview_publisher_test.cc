@@ -27,10 +27,17 @@ class PreviewPublisherTest : public ::testing::Test {
   std::optional<std::string> encode_result_ = "jpeg-bytes";
   std::vector<std::string> published_;
   bool publish_result_ = true;
+  // #129: lets a test stand in for a camera close landing, on a
+  // different queue, while this call's own encode is still running --
+  // the window the finding lived in.
+  bool close_during_encode_ = false;
   PreviewLease lease_{[](bool) {}};
   PreviewPublisher publisher_{[this] { return requested_; },
                               [this](const Frame& frame) {
                                 encoded_.push_back(&frame);
+                                if (close_during_encode_) {
+                                  lease_.CameraClosed();
+                                }
                                 return encode_result_;
                               },
                               [this](const std::string& bytes) {
@@ -101,6 +108,24 @@ TEST_F(OnFrameTest, AFailedEncodePublishesNothing) {
   publisher_.OnFrame(kFrame);
 
   EXPECT_TRUE(lease_.IsStreaming());
+  EXPECT_THAT(published_, IsEmpty());
+}
+
+// #129 (PreviewLease!Publish, GuardPublishChecksStreaming): a camera
+// close landing while this very call is still inside encode_ -- which
+// already clears any frame through PreviewLease's own streaming_changed
+// hook -- must not have that clear undone by this call's own publish
+// going on to write the frame back once the encode returns.
+TEST_F(OnFrameTest,
+       SkipsPublishingAFrameEncodedBeforeTheCameraClosedMidEncode) {
+  lease_.CameraOpened();
+  requested_ = true;
+  close_during_encode_ = true;
+
+  publisher_.OnFrame(kFrame);
+
+  EXPECT_FALSE(lease_.IsStreaming());
+  EXPECT_THAT(encoded_, ElementsAre(&kFrame));
   EXPECT_THAT(published_, IsEmpty());
 }
 

@@ -157,7 +157,12 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 // not through an ofstream, whose own default mode leaks whatever the
 // process umask allows: the preview frame is a snapshot of the camera,
 // private to the user the same as every other file src/user_paths.h
-// names.
+// names. open()'s own mode argument only applies the first time O_CREAT
+// actually creates the file (#129): an existing .tmp left by an earlier
+// failed write -- or, before this fix, one created under a looser umask
+// -- keeps whatever mode it already had through O_TRUNC, so fchmod()
+// enforces 0600 unconditionally, every call, rather than only on a fresh
+// create.
 bool WriteFileAtomically(const std::string& path, std::string_view bytes) {
   constexpr mode_t kPrivateFile = 0600;
   const std::string temporary = path + ".tmp";
@@ -165,6 +170,11 @@ bool WriteFileAtomically(const std::string& path, std::string_view bytes) {
       open(temporary.c_str(),
            O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, kPrivateFile);
   if (fd < 0) {
+    return false;
+  }
+  if (fchmod(fd, kPrivateFile) != 0) {
+    close(fd);
+    std::remove(temporary.c_str());
     return false;
   }
   const bool written = write(fd, bytes.data(), bytes.size()) ==
@@ -403,9 +413,15 @@ class Engine : public DaemonController, public DaemonPipeline {
   // CameraLost (#116): the camera is not yet open at startup, the way
   // CameraController's own kClosed is, overriding CalibrationSession's
   // default of an up camera, which is right only for a session built with
-  // no camera signal at all (#96).
+  // no camera signal at all (#96). PreviewLease!GuardStartClearsFrame
+  // (#129): a frame a previous crash left behind, while still streaming,
+  // is removed the same way, before anything can serve it as though the
+  // camera were still being shown.
   void Start() {
     PublishStatus(false);
+    if (!preview_frame_path_.empty()) {
+      std::remove(preview_frame_path_.c_str());
+    }
     calibration_.OnCameraLost();
     // #115 (Linux), #121 (macOS): every member capture_'s device-change
     // callbacks can reach, camera_ among them, is constructed by now;

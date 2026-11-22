@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../server.js';
-import { OfflineError } from '../session.js';
+import { OfflineError, UnapprovedError } from '../session.js';
 
 async function connected(session, options) {
   const server = createServer(session, options);
@@ -65,6 +65,65 @@ test('a session that is not connected right now says Facepalm is off, for both t
     const told = await client.callTool({ name: 'tell_feeling', arguments: { id: 1, feeling: 'confused' } });
     assert.equal(told.isError, true);
     assert.match(told.content[0].text, /Facepalm is off/);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('an unapproved session says so, not that Facepalm is off, for both tools (#129)', async () => {
+  const session = { request: async () => { throw new UnapprovedError('unapproved'); } };
+  const { server, client } = await connected(session);
+  try {
+    const waited = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
+    assert.equal(waited.isError, true);
+    assert.match(waited.content[0].text, /hasn't approved this client/);
+    const told = await client.callTool({ name: 'tell_feeling', arguments: { id: 1, feeling: 'confused' } });
+    assert.equal(told.isError, true);
+    assert.match(told.content[0].text, /hasn't approved this client/);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('tell_feeling refuses an interpretation this session no longer remembers, unsent (#129)', async () => {
+  const commands = [];
+  const session = {
+    request: async (command) => { commands.push(command); return { ok: true }; },
+    knowsInterpretation: (id) => id === 12,
+  };
+  const { server, client } = await connected(session);
+  try {
+    const refused = await client.callTool({ name: 'tell_feeling', arguments: { id: 1, feeling: 'confused' } });
+    assert.equal(refused.isError, true);
+    assert.match(refused.content[0].text, /no longer recognizes/);
+    const told = await client.callTool({ name: 'tell_feeling', arguments: { id: 12, feeling: 'confused' } });
+    assert.equal(told.content[0].text, 'Feeling taken.');
+    assert.deepEqual(commands, ['feel 12 confused']);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('wait_for_reaction records an interpretation id so tell_feeling can recognize it later (#129)', async () => {
+  const noted = [];
+  const session = {
+    request: async () => ({
+      readings: [], missed: 0,
+      interpretation: { id: 7, feeling: 'agreement', beat: 'question', feelings: ['agreement', 'unknown'] },
+    }),
+    noteInterpretation: (id) => noted.push(id),
+  };
+  const { server, client } = await connected(session);
+  try {
+    await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'question' } });
+    assert.deepEqual(noted, [7]);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('wait_for_reaction with no interpretation never calls noteInterpretation (#129)', async () => {
+  const noted = [];
+  const session = {
+    request: async () => ({ readings: [], missed: 0 }),
+    noteInterpretation: (id) => noted.push(id),
+  };
+  const { server, client } = await connected(session);
+  try {
+    await client.callTool({ name: 'wait_for_reaction', arguments: {} });
+    assert.deepEqual(noted, []);
   } finally { await client.close(); await server.close(); }
 });
 

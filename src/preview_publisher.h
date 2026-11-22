@@ -30,7 +30,11 @@ class PreviewPublisher {
                    PreviewLease& lease);
 
   // Call once for each frame the camera captures, from the same queue
-  // that already dispatches them.
+  // that already dispatches them. Encoding happens on this call before
+  // the frame is published (#129): a Start/Stop/CameraOpened/CameraClosed
+  // landing on another queue while this call is still inside encode_ is
+  // what PreviewLease::Publish, not a plain IsStreaming() check, guards
+  // the write itself against.
   void OnFrame(const Frame& frame);
 
  private:

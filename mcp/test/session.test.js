@@ -4,7 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { SocketSession, OfflineError } from '../session.js';
+import { SocketSession, OfflineError, UnapprovedError } from '../session.js';
 
 async function fixture(handler, hello = '{"ok":true}\n', address = undefined) {
   const dir = address ? undefined : await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
@@ -287,6 +287,68 @@ test('backoff grows on each failure in a row, and resets once a connection succe
     await settle();
     await assert.rejects(session.request('feel 8 agreement')); // The reset wait has now passed.
     assert.equal(f.connections.length, 4);
+  } finally { session.close(); await f.close(); }
+});
+
+test('an unapproved hello rejects with UnapprovedError, not OfflineError (#129)', async () => {
+  const commands = [];
+  const f = await fixture((line) => commands.push(line), '{"error":"client not approved"}\n');
+  const session = new SocketSession(f.address);
+  try {
+    await assert.rejects(session.request('feel 1 agreement'), UnapprovedError);
+    assert.equal(session.closed, false);
+    assert.deepEqual(commands, []);
+  } finally { session.close(); await f.close(); }
+});
+
+test('a different hello refusal still rejects with OfflineError, not UnapprovedError (#129)', async () => {
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'), '{"error":"refused"}\n');
+  const session = new SocketSession(f.address);
+  try {
+    await assert.rejects(session.request('feel 1 agreement'), OfflineError);
+  } finally { session.close(); await f.close(); }
+});
+
+test('a stale socket close cannot tear down the socket that replaced it (#129)', async () => {
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'));
+  const session = new SocketSession(f.address);
+  let stale;
+  try {
+    await session.request('feel 1 agreement');
+    stale = session.socket;
+    const sentinel = { destroy() {} };
+    session.socket = sentinel;
+    stale.emit('close');
+    assert.equal(session.socket, sentinel);
+  } finally { stale?.destroy(); session.close(); await f.close(); }
+});
+
+test('a stale socket error cannot tear down the socket that replaced it (#129)', async () => {
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'));
+  const session = new SocketSession(f.address);
+  let stale;
+  try {
+    await session.request('feel 1 agreement');
+    stale = session.socket;
+    const sentinel = { destroy() {} };
+    session.socket = sentinel;
+    stale.emit('error', new Error('stale'));
+    assert.equal(session.socket, sentinel);
+  } finally { stale?.destroy(); session.close(); await f.close(); }
+});
+
+test('an interpretation id is forgotten once the link is lost, and known again once relearned (#129)', async () => {
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'));
+  const session = new SocketSession(f.address);
+  try {
+    assert.equal(session.knowsInterpretation(1), false);
+    session.noteInterpretation(1);
+    assert.equal(session.knowsInterpretation(1), true);
+    session.disconnect();
+    assert.equal(session.knowsInterpretation(1), false);
+    session.noteInterpretation(1);
+    await session.request('feel 1 agreement');
+    assert.equal(session.knowsInterpretation(1), true);
   } finally { session.close(); await f.close(); }
 });
 

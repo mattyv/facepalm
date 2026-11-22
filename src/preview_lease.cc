@@ -63,6 +63,22 @@ bool PreviewLease::IsStreaming() const {
   return streaming_;
 }
 
+bool PreviewLease::Publish(const std::function<bool()>& write) {
+  // Unlike every other method here, `write` runs with mutex_ held: it is
+  // the one piece of "arbitrary code" this class ever calls under its
+  // own lock (#129). It is safe to, since write is PreviewPublisher's
+  // own file write, not a call back into this class the way
+  // streaming_changed_ could be; the point of taking the lock around it
+  // is exactly to serialize it against CameraOpened/CameraClosed/Stop's
+  // own clear of the same file, so neither can be undone by the other
+  // landing in between.
+  const std::scoped_lock lock(mutex_);
+  if (!streaming_) {
+    return false;
+  }
+  return write();
+}
+
 // Called with mutex_ already held; never calls streaming_changed_ itself,
 // since that could run arbitrary code (PreviewPublisher's write to the
 // menu's frame file) while holding the lock. Returns whether the value

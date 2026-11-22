@@ -113,5 +113,52 @@ TEST_F(NeverStreamsOnAStaleRequestTest, AReopenedCameraNeedsANewStart) {
   EXPECT_TRUE(lease_.IsStreaming());
 }
 
+using PublishTest = PreviewLeaseTest;
+
+// PreviewLease!Publish, GuardPublishChecksStreaming (#129).
+TEST_F(PublishTest, WritesWhileStreaming) {
+  lease_.CameraOpened();
+  lease_.Start();
+
+  int calls = 0;
+  EXPECT_TRUE(lease_.Publish([&] {
+    calls++;
+    return true;
+  }));
+  EXPECT_EQ(calls, 1);
+}
+
+TEST_F(PublishTest, ReturnsTheWritesOwnFailure) {
+  lease_.CameraOpened();
+  lease_.Start();
+
+  EXPECT_FALSE(lease_.Publish([] { return false; }));
+}
+
+// #129: the write is skipped, not merely checked beforehand, so a write
+// decided on while still streaming is still gated at the moment it
+// actually runs.
+TEST_F(PublishTest, SkipsTheWriteOnceStreamingHasStopped) {
+  int calls = 0;
+  EXPECT_FALSE(lease_.Publish([&] {
+    calls++;
+    return true;
+  }));
+  EXPECT_EQ(calls, 0);
+}
+
+TEST_F(PublishTest, SkipsTheWriteOnceTheCameraHasClosed) {
+  lease_.CameraOpened();
+  lease_.Start();
+  lease_.CameraClosed();
+
+  int calls = 0;
+  EXPECT_FALSE(lease_.Publish([&] {
+    calls++;
+    return true;
+  }));
+  EXPECT_EQ(calls, 0);
+}
+
 }  // namespace
 }  // namespace facepalm
