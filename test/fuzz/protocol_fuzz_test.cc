@@ -1,3 +1,5 @@
+#include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
@@ -47,6 +49,45 @@ void HelloRoundTrips(const std::string& name, const std::string& token) {
 FUZZ_TEST(ProtocolFuzz, HelloRoundTrips)
     .WithDomains(ValidName(),
                  fuzztest::OneOf(fuzztest::Just(std::string()), ValidName()));
+
+// Property test (#144): a beat line Parse reads round-trips its kind,
+// window and content rectangle alike -- the old, plain form and the new,
+// with-rectangle form (#125's own fuzz target, updated for #142/#144).
+void BeatRoundTrips(bool is_question, std::int64_t ms, bool with_rect,
+                    std::int64_t x, std::int64_t y, std::int64_t width,
+                    std::int64_t height) {
+  const std::string kind = is_question ? "question" : "proposal";
+  std::string line = "beat " + kind + " " + std::to_string(ms);
+  if (with_rect) {
+    line += " " + std::to_string(x) + " " + std::to_string(y) + " " +
+            std::to_string(width) + " " + std::to_string(height);
+  }
+  std::string error;
+  const std::optional<Request> parsed = Parse(line, error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const BeatRequest* beat = std::get_if<BeatRequest>(&*parsed);
+  ASSERT_NE(beat, nullptr);
+  EXPECT_EQ(beat->kind,
+            is_question ? BeatKind::kQuestion : BeatKind::kProposal);
+  EXPECT_EQ(beat->window, std::chrono::milliseconds(ms));
+  if (with_rect) {
+    ASSERT_TRUE(beat->content.has_value());
+    EXPECT_EQ(beat->content->x, static_cast<double>(x));
+    EXPECT_EQ(beat->content->y, static_cast<double>(y));
+    EXPECT_EQ(beat->content->width, static_cast<double>(width));
+    EXPECT_EQ(beat->content->height, static_cast<double>(height));
+  } else {
+    EXPECT_EQ(beat->content, std::nullopt);
+  }
+}
+FUZZ_TEST(ProtocolFuzz, BeatRoundTrips)
+    .WithDomains(fuzztest::Arbitrary<bool>(),
+                 fuzztest::InRange<std::int64_t>(1, 10000),
+                 fuzztest::Arbitrary<bool>(),
+                 fuzztest::InRange<std::int64_t>(-1000000, 1000000),
+                 fuzztest::InRange<std::int64_t>(-1000000, 1000000),
+                 fuzztest::InRange<std::int64_t>(1, 1000000),
+                 fuzztest::InRange<std::int64_t>(1, 1000000));
 
 }  // namespace
 }  // namespace facepalm::protocol

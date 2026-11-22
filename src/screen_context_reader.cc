@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "src/camera_controller.h"
@@ -31,8 +32,11 @@ std::optional<HeadRotation> PoseOf(const Face& face) {
 }  // namespace
 
 ScreenContextReader::ScreenContextReader(ExpressionTracker::Settings tracker,
-                                         EyeGazeTracker::Settings eye_tracker)
-    : tracker_(tracker), eye_tracker_(eye_tracker) {}
+                                         EyeGazeTracker::Settings eye_tracker,
+                                         OnSample on_sample)
+    : on_sample_(std::move(on_sample)),
+      tracker_(tracker),
+      eye_tracker_(eye_tracker) {}
 
 void ScreenContextReader::OnFace(const Face& face, int /*width*/,
                                  int /*height*/, std::int64_t timestamp_ms,
@@ -44,19 +48,34 @@ void ScreenContextReader::OnFace(const Face& face, int /*width*/,
   }
   Scores scores{};
   std::ranges::copy(face.blendshapes, scores.begin());
-  const std::scoped_lock lock(mutex_);
+  std::unique_lock lock(mutex_);
   tracker_.Update(scores, *pose, timestamp_ms);
   eye_tracker_.Update(face, timestamp_ms);
   pose_ = pose;
   resting_ = tracker_.RestingPose();
   eye_ = eye_tracker_.Signal();
   eye_resting_ = eye_tracker_.Resting();
+  const std::optional<HeadRotation> sampled_pose = pose_;
+  const std::optional<HeadRotation> sampled_resting = resting_;
+  const std::optional<EyeSignal> sampled_eye = eye_;
+  const std::optional<EyeSignal> sampled_eye_resting = eye_resting_;
+  lock.unlock();
+  if (on_sample_) {
+    on_sample_(sampled_pose, sampled_resting, sampled_eye, sampled_eye_resting);
+  }
 }
 
 void ScreenContextReader::OnNoFace() {
-  const std::scoped_lock lock(mutex_);
+  std::unique_lock lock(mutex_);
   pose_ = std::nullopt;
   eye_ = std::nullopt;
+  const std::optional<HeadRotation> sampled_resting = resting_;
+  const std::optional<EyeSignal> sampled_eye_resting = eye_resting_;
+  lock.unlock();
+  if (on_sample_) {
+    on_sample_(std::nullopt, sampled_resting, std::nullopt,
+               sampled_eye_resting);
+  }
 }
 
 std::optional<HeadRotation> ScreenContextReader::Pose() const {

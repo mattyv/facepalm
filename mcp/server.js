@@ -46,6 +46,13 @@ const context = z.object({
   gaze: z.string(),
   calibrated_screen: z.number().int().nonnegative().safe().optional(),
 });
+// The majority coarse gaze over a beat's own window (#142): on_content
+// (the one screen a beat is about), averted (elsewhere, but not fully
+// away), away or unknown -- context only, never a rule's input for
+// feeling, the one exception being a question beat ending averted, which
+// reads unknown instead. content (#144) is only present when the call
+// gave a content_rect: whether gaze was mostly inside it, coarse only
+// (yes, no or unknown), never angles or window titles.
 const delivery = z.object({
   readings: z.array(z.object({
     id: z.number().int().positive().safe(), summary: z.string(), published_at_ms: z.number().int().safe().optional(),
@@ -54,8 +61,17 @@ const delivery = z.object({
   missed: z.number().int().nonnegative().safe(),
   interpretation: z.object({
     id: z.number().int().positive().safe(), feeling: feelingName, beat: z.enum(['question', 'proposal']),
+    gaze: z.enum(['on_content', 'averted', 'away', 'unknown']),
+    content: z.enum(['yes', 'no', 'unknown']).optional(),
     feelings: z.array(feelingName).min(1),
   }).optional(),
+});
+// A content rectangle (#144): screen coordinates in whatever space the
+// daemon's own screen source reports, consistent across one call, not
+// across platforms. Only meaningful alongside beat.
+const contentRect = z.object({
+  x: z.number().int().safe(), y: z.number().int().safe(),
+  width: z.number().int().min(1).safe(), height: z.number().int().min(1).safe(),
 });
 
 // `options.openSettings` is mcp/settings-launcher.js's openFacepalmSettings
@@ -78,21 +94,29 @@ export function createServer(session, options = {}) {
     description: 'Wait for interpreted reactions. Show each summary verbatim with its reading ID; do not present detail as the summary. '
       + 'Right after asking the person a question or making a proposal, pass beat ("question" or "proposal"): Facepalm watches the next timeout_ms '
       + '(default 1500, at most 10000) and returns interpretation.feeling, its tentative read of how they felt about it, unknown when it cannot tell, '
-      + 'and interpretation.feelings, every feeling the person can pick instead. '
+      + 'and interpretation.feelings, every feeling the person can pick instead. interpretation.gaze is context, where they were mostly looking over '
+      + 'that window (on_content, averted, away or unknown): it never changes feeling by rule, except that a question ending averted reads unknown, '
+      + 'so the person had not answered yet. Pass content_rect, the screen area the question or proposal occupies, to also get interpretation.content '
+      + '(yes, no or unknown): whether gaze was mostly inside it, coarse only. '
       + 'A later pick, through ask_feeling, show_feeling_card or tell_feeling, replaces this read for that beat; '
       + 'call get_feeling with the id to find out which one stands now. '
       + 'The feeling is advisory either way: never treat it as an answer or as approval for an action.',
     inputSchema: {
       timeout_ms: z.number().int().min(0).max(60000).optional(),
       beat: z.enum(['question', 'proposal']).optional(),
+      content_rect: contentRect.optional(),
     },
-  }, async ({ timeout_ms, beat }, { signal }) => {
+  }, async ({ timeout_ms, beat, content_rect }, { signal }) => {
     const duration = timeout_ms ?? (beat ? 1500 : 5000);
     if (beat && (duration < 1 || duration > 10000)) {
       return { isError: true, content: [{ type: 'text', text: 'A beat lasts 1 to 10000 milliseconds.' }] };
     }
+    if (content_rect && !beat) {
+      return { isError: true, content: [{ type: 'text', text: 'content_rect only means something with a beat.' }] };
+    }
     try {
-      const command = beat ? `beat ${beat} ${duration}` : `wait ${duration}`;
+      const rect = content_rect ? ` ${content_rect.x} ${content_rect.y} ${content_rect.width} ${content_rect.height}` : '';
+      const command = beat ? `beat ${beat} ${duration}${rect}` : `wait ${duration}`;
       const response = await session.request(command, signal, duration + 5000);
       const parsed = delivery.safeParse(response);
       if (!parsed.success || (beat !== undefined) !== (parsed.data.interpretation !== undefined)) { session.close?.(); throw new Error('invalid delivery'); }

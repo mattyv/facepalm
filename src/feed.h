@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "src/feelings.h"
+#include "src/screen_context.h"
 
 namespace facepalm {
 
@@ -27,11 +28,18 @@ class Feed {
     std::optional<std::string> context = std::nullopt;
   };
 
-  // How a beat's reaction was read (specs/FeelingBeat.tla).
+  // How a beat's reaction was read (specs/FeelingBeat.tla). `gaze` is the
+  // majority coarse gaze over the beat's own window (#142), context only:
+  // it never changes `feeling` by rule, the one exception being the
+  // thinking guard a question beat's own averted gaze applies (#142's
+  // own GuardAvertedUnknown, src/reaction_feed.cc's Beat). `content` is
+  // only given when the client's beat carried a content rectangle (#144).
   struct Interpretation {
     std::int64_t id;  // Unique among this run's interpretations.
     Feeling feeling;
     BeatKind beat;  // What the client marked the beat after.
+    Gaze gaze = Gaze::kUnknown;
+    std::optional<ContentHit> content = std::nullopt;
     friend auto operator<=>(const Interpretation&,
                             const Interpretation&) = default;
   };
@@ -58,9 +66,14 @@ class Feed {
   // Marks a beat after a question or a proposal, and waits out its
   // `window`: as Read, with the interpretation of the readings made in the
   // window. nullopt when the client is not connected, is waiting, or is
-  // disconnected during the beat.
+  // disconnected during the beat. `content` is a content rectangle
+  // (#144) the client's question or proposal occupies on screen, for
+  // the interpretation's own `content` field; std::nullopt for none
+  // (no default: Google's style forbids one on a virtual, so every
+  // caller gives it explicitly).
   virtual std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
-                                       std::chrono::milliseconds window) = 0;
+                                       std::chrono::milliseconds window,
+                                       std::optional<ContentRect> content) = 0;
   // The person's feeling about an interpretation this client was given
   // (specs/FeelingFeedback.tla): true only for one given in the last five
   // minutes, the first time, and once the feeling is saved.

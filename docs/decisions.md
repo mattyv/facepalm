@@ -5,6 +5,60 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: A beat's reply carries gaze as context, never a rule's input, closing #142 and #144
+
+-   **Decision (gaze is context, not a rule, with one named exception):**
+    `src/feelings.h`'s `Interpret`/`Rule` take only cues, unchanged;
+    `ReactionFeed::Beat` adds the majority gaze over the beat's own window
+    (`ScreenContextReporter::Between`) to the interpretation *after* the
+    cue-only feeling is computed, and only ever downgrades a question
+    beat's own feeling to unknown when that majority reads averted
+    (`Gaze::kOtherScreen`) -- "eyes never decide a feeling by rule"
+    (#137's own comment on #142), everywhere else gaze is reported but
+    changes nothing. `specs/FeelingBeat.tla` gains this as
+    `GuardAvertedUnknown`, the thinking guard, checked by two new
+    invariants against a ground-truth operator (`Averted(c)`) kept apart
+    from the formula that computes the real `feeling`, the same
+    "ghost checked against the computation" shape `during`/`lost` already
+    use for `Rule`.
+-   **Decision (the model's own stand-in for "majority"):** rather than
+    model a true tally, `gazeDuring[c]` is overwritten by every `Look`
+    while a beat stays open, so it holds whichever zone the beat *ends*
+    with. The real code (`ScreenContextReporter::Between`) tallies a true
+    majority; the model's simplification is enough to prove the two
+    properties that matter (gaze never changes the feeling outside the
+    guard, and the guard fires exactly when it should), and a short
+    window's gaze rarely flips in practice (#137's own median filter and
+    dwell already damp that before it ever reaches a beat).
+-   **Decision (state space, not the model's own correctness):** `Kinds`
+    (question/proposal) became a `CONSTANT`, like `Cues`, once `Mark`
+    needed one: a first attempt that quantified over both kinds in every
+    config nearly doubled `FeelingBeat.cfg`'s own 3.8 million states.
+    `FeelingBeat.cfg` holds `Kinds` to one element and `MaxLooks = 0`
+    (inert gaze); a new `FeelingBeat_Gaze.cfg`, with one client and small
+    bounds, is the one config that spends the branching both kinds and a
+    real `Look` cost, and where the thinking guard's own mutations run.
+-   **Decision (#144's content rectangle skips the calibration profile):**
+    `ContentHitFrom` maps gaze into a content rectangle by linear
+    interpolation across `CoarseGazeFrom`'s own uncalibrated cone
+    (`settings.other_screen_degrees`, centred on the resting pose),
+    never a calibration profile's own saved corners. Rejected: using
+    `#137`'s profile (`NearestCalibratedScreen` plus its four corners)
+    for a finer mapping -- it would need an unverified assumption that a
+    profile's `screens[i]` lines up index-for-index with
+    `ScreenSource::Screens()[i]`, and #144 asks for "coarse only" (#83)
+    regardless, so the simpler, calibration-free cone already meets the
+    bar without that risk. `ContentHitFromTest` in
+    `test/screen_context_test.cc` is the oracle; like `CoarseGazeFrom`,
+    it carries no `specs/` entry of its own (a stateless computation, no
+    lifecycle).
+-   **Decision (no default argument on `Feed::Beat`):** Google's style
+    forbids a default argument on a virtual function
+    (`google-default-arguments`), so the content rectangle `Beat` gained
+    has none, on `Feed`, `ReactionFeed` or `ApprovedFeed`; every call site
+    (`src/service.cc`, every test, `test/fixtures/mcp_service_fixture.cc`)
+    gives it `std::nullopt` explicitly instead.
+
 ## 2026-11-22: Looking away reads composed gaze, reports once at return with its kind and duration, closing #141
 
 -   **Decision (reporting moves from mid-look to the look's own end):**

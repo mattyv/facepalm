@@ -71,13 +71,14 @@ std::optional<Feed::Delivery> ApprovedFeed::Wait(
 }
 
 std::optional<Feed::Delivery> ApprovedFeed::Beat(
-    const std::string& client, BeatKind kind,
-    std::chrono::milliseconds window) {
+    const std::string& client, BeatKind kind, std::chrono::milliseconds window,
+    std::optional<ContentRect> content) {
   const std::string session = Session(client);
   if (session.empty()) {
     return std::nullopt;
   }
-  const std::optional<Delivery> delivery = feed_.Beat(session, kind, window);
+  const std::optional<Delivery> delivery =
+      feed_.Beat(session, kind, window, content);
   if (delivery && delivery->interpretation && on_beat_) {
     on_beat_(*delivery->interpretation);
   }

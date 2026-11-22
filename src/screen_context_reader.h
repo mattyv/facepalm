@@ -2,6 +2,7 @@
 #define FACEPALM_SRC_SCREEN_CONTEXT_READER_H_
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -30,8 +31,20 @@ namespace facepalm {
 // itself a spec-worthy state machine.
 class ScreenContextReader : public FaceReader {
  public:
+  // Told the same four readings OnFace/OnNoFace just updated, once a
+  // frame regardless of whether it carries a reaction (#142): the
+  // daemon's own hook into ScreenContextReporter::Sample, so a beat's
+  // window holds every frame's gaze, not only the ones a reaction
+  // happened to land on. nullptr (the default) tells no one.
+  using OnSample =
+      std::function<void(const std::optional<HeadRotation>& pose,
+                         const std::optional<HeadRotation>& resting,
+                         const std::optional<EyeSignal>& eye,
+                         const std::optional<EyeSignal>& eye_resting)>;
+
   ScreenContextReader(ExpressionTracker::Settings tracker,
-                      EyeGazeTracker::Settings eye_tracker);
+                      EyeGazeTracker::Settings eye_tracker,
+                      OnSample on_sample = nullptr);
 
   void OnFace(const Face& face, int width, int height,
               std::int64_t timestamp_ms,
@@ -56,6 +69,7 @@ class ScreenContextReader : public FaceReader {
 
  private:
   mutable std::mutex mutex_;
+  OnSample on_sample_;
   ExpressionTracker tracker_;
   EyeGazeTracker eye_tracker_;
   std::optional<HeadRotation> pose_;

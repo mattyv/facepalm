@@ -13,6 +13,7 @@
 #include "src/camera_directory.h"
 #include "src/feed.h"
 #include "src/feelings.h"
+#include "src/screen_context.h"
 
 // What a client and facepalm's service say to each other (#37): a request
 // is one line of text, and each reply is one line of JSON.
@@ -21,9 +22,13 @@
 //                           the first line of a connection
 //   read                    the readings since this client last looked
 //   wait <milliseconds>     as read, waiting up to 60 seconds for one
-//   beat <kind> <milliseconds>
+//   beat <kind> <milliseconds> [<x> <y> <width> <height>]
 //                           marks a beat after a question or a proposal, and
-//                           waits out its 1 to 10000 millisecond window
+//                           waits out its 1 to 10000 millisecond window; the
+//                           optional rectangle (#144) is a content area on
+//                           screen, in whatever coordinate space the
+//                           platform source reports (src/screen_context.h's
+//                           ScreenRect), for the reply's own content field
 //   feel <interpretation> <feeling>
 //                           says how the person felt at a beat this client
 //                           was given, once, within five minutes
@@ -52,6 +57,8 @@ struct ResetRequest {};
 struct BeatRequest {
   BeatKind kind;
   std::chrono::milliseconds window;
+  // The content rectangle a client may give alongside a beat (#144).
+  std::optional<ContentRect> content = std::nullopt;
 };
 
 struct CalibrateRequest {
@@ -76,9 +83,15 @@ std::optional<Request> Parse(std::string_view line, std::string& error);
 // what the screen showed at the moment of the reading, also written by
 // facepalm and passed through as it is.
 // The reply that ends a beat adds
-// "interpretation":{"id":..,"feeling":"..","beat":"..","feelings":[..]}:
-// the feeling is one of src/feelings.h's names, and "feelings" all of them,
-// in order, for a client to offer the person.
+// "interpretation":{"id":..,"feeling":"..","beat":"..","gaze":"..",
+// "feelings":[..]}, and, when the beat carried a content rectangle (#144),
+// "content":".." too: the feeling is one of src/feelings.h's names,
+// "feelings" all of them, in order, for a client to offer the person, gaze
+// is one of on_content, averted, away or unknown (#142,
+// src/screen_context.h's BeatGazeName; context only, never a rule's input
+// for feeling, the one exception being a question beat that ends averted,
+// which reads unknown), and content, when present, is yes, no or unknown
+// (src/screen_context.h's ContentHit).
 // The reply to a request that worked and has nothing to return.
 inline constexpr std::string_view kOkJson = R"({"ok":true})";
 

@@ -200,7 +200,7 @@ bool Service::Answer(Connection& connection, const std::string& name,
   std::optional<Feed::Delivery> delivery;
   if (const auto* beat = std::get_if<protocol::BeatRequest>(&*request)) {
     delivery = Watched(connection, name, [&] {
-      return feed_.Beat(name, beat->kind, beat->window);
+      return feed_.Beat(name, beat->kind, beat->window, beat->content);
     });
   } else if (const auto* wait = std::get_if<protocol::WaitRequest>(&*request)) {
     delivery = Watched(connection, name,

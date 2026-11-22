@@ -39,7 +39,8 @@ class ApprovedFeed : public Feed {
   std::optional<Delivery> Wait(const std::string& client,
                                std::chrono::milliseconds timeout) override;
   std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
-                               std::chrono::milliseconds window) override;
+                               std::chrono::milliseconds window,
+                               std::optional<ContentRect> content) override;
   bool Feel(const std::string& client, std::int64_t interpretation,
             Feeling feeling) override;
   bool Reset(const std::string& client) override;

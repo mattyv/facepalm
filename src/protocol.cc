@@ -24,6 +24,11 @@ constexpr std::int64_t kLongestWaitMs = 60000;
 // A reaction to a question comes within a few seconds of it, if at all.
 constexpr std::int64_t kLongestBeatMs = 10000;
 constexpr std::size_t kBeatWords = 3;
+// beat <kind> <ms> <x> <y> <width> <height> (#144).
+constexpr std::size_t kBeatWordsWithRect = 7;
+constexpr auto kBeatUsage =
+    "beat takes question or proposal, 1 to 10000 milliseconds, and an "
+    "optional content rectangle: x y width height";
 constexpr std::size_t kFeelWords = 3;
 constexpr std::size_t kCalibrateWords = 2;
 constexpr std::size_t kCalibrateStartWithScreens = 3;
@@ -66,18 +71,48 @@ bool IsName(std::string_view word) {
   });
 }
 
-// The beat request of `words`: beat, its kind, and its window.
-std::optional<Request> ParseBeat(const std::vector<std::string_view>& words,
-                                 std::string& error) {
-  const std::optional<BeatKind> kind =
-      words.size() == kBeatWords ? BeatKindNamed(words[1]) : std::nullopt;
-  const std::optional<std::int64_t> ms =
-      words.size() == kBeatWords ? Number(words[2]) : std::nullopt;
-  if (!kind || !ms || *ms < 1 || *ms > kLongestBeatMs) {
-    error = "beat takes question or proposal and 1 to 10000 milliseconds";
+// The content rectangle of `words`, starting at index 3 (#144): x, y,
+// width and height, the last two at least 1. nullopt, with `error` set,
+// on anything else.
+std::optional<ContentRect> ParseContentRect(
+    const std::vector<std::string_view>& words, std::string& error) {
+  const std::optional<std::int64_t> x = Number(words[3]);
+  const std::optional<std::int64_t> y = Number(words[4]);
+  const std::optional<std::int64_t> width = Number(words[5]);
+  const std::optional<std::int64_t> height = Number(words[6]);
+  if (!x || !y || !width || !height || *width < 1 || *height < 1) {
+    error = kBeatUsage;
     return std::nullopt;
   }
-  return BeatRequest{.kind = *kind, .window = std::chrono::milliseconds(*ms)};
+  return ContentRect{.x = static_cast<double>(*x),
+                     .y = static_cast<double>(*y),
+                     .width = static_cast<double>(*width),
+                     .height = static_cast<double>(*height)};
+}
+
+// The beat request of `words`: beat, its kind, its window, and an optional
+// content rectangle (#144).
+std::optional<Request> ParseBeat(const std::vector<std::string_view>& words,
+                                 std::string& error) {
+  const bool with_rect = words.size() == kBeatWordsWithRect;
+  const bool plain = words.size() == kBeatWords;
+  const std::optional<BeatKind> kind =
+      (plain || with_rect) ? BeatKindNamed(words[1]) : std::nullopt;
+  const std::optional<std::int64_t> ms =
+      (plain || with_rect) ? Number(words[2]) : std::nullopt;
+  if (!kind || !ms || *ms < 1 || *ms > kLongestBeatMs) {
+    error = kBeatUsage;
+    return std::nullopt;
+  }
+  BeatRequest request{.kind = *kind, .window = std::chrono::milliseconds(*ms)};
+  if (with_rect) {
+    const std::optional<ContentRect> content = ParseContentRect(words, error);
+    if (!content) {
+      return std::nullopt;
+    }
+    request.content = content;
+  }
+  return request;
 }
 
 // The feel request of `words`: feel, an interpretation's id, and a feeling.
@@ -225,8 +260,12 @@ std::string DeliveryJson(const Feed::Delivery& delivery) {
   if (const auto& interpretation = delivery.interpretation) {
     json += R"(,"interpretation":{"id":)" + std::to_string(interpretation->id) +
             R"(,"feeling":)" + Quoted(Name(interpretation->feeling)) +
-            R"(,"beat":)" + Quoted(Name(interpretation->beat)) +
-            R"(,"feelings":[)";
+            R"(,"beat":)" + Quoted(Name(interpretation->beat)) + R"(,"gaze":)" +
+            Quoted(BeatGazeName(interpretation->gaze));
+    if (interpretation->content) {
+      json += R"(,"content":)" + Quoted(Name(*interpretation->content));
+    }
+    json += R"(,"feelings":[)";
     for (const Feeling feeling : kEveryFeeling) {
       if (json.back() != '[') {
         json += ',';
