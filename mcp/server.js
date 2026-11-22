@@ -12,7 +12,7 @@ const offlineText = 'Facepalm is off; turn it on from its menu.';
 // What a tool says when the daemon's hello refused this client's own
 // token (#129), told apart from offlineText so the person is pointed at
 // Facepalm Settings, not at turning Facepalm on, which may already be on.
-const unapprovedText = "Facepalm hasn't approved this client; approve it from Facepalm Settings.";
+const unapprovedText = "Facepalm hasn't approved this client; turn Facepalm on from its menu, or run: facepalm-daemon approve mcp";
 // What tell_feeling and ask_feeling say for an interpretation id this
 // session no longer remembers (#129): forgotten on its last reconnect,
 // since src/reaction_feed.cc's own interpretation ids restart at 1 on
