@@ -148,6 +148,10 @@ facepalm_unit(feed_clients)
 facepalm_unit(user_paths)
 facepalm_unit(user_service)
 facepalm_unit(single_instance)
+# Counts how many of Settings, the preview and the calibration wizard are
+# open, and decides when tools/menu/main.mm must flip NSApp's activation
+# policy so Command-Tab can reach them (#146, #64).
+facepalm_unit(window_activation)
 facepalm_unit(camera_controller)
 # The tab-separated text facepalm-daemon's `cameras` command prints (item
 # 10 of #61, #13), extracted from tools/menu/main.mm and
@@ -409,13 +413,13 @@ if(APPLE)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
     client_token user_paths daemon_status calibration_flow calibration cameras_listing
-    "-framework AppKit")
+    window_activation "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm tools/menu/calibration_window_macos.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
       client_approvals client_token user_paths daemon_status calibration_flow calibration
-      cameras_listing GTest::gtest_main "-framework AppKit")
+      cameras_listing window_activation GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 

@@ -140,6 +140,12 @@ as "Last read: confused (question)"), which stays until the next one. Both
 are a diagnostic only, text written to a private file beside the frame under
 the same rules, read only by the menu and only while the preview streams.
 
+Command-Tab, the Dock and the app switcher reach Settings, the preview and
+the calibration wizard while any one of them is open (#146): the 🤦 menu is
+otherwise a menu-bar-only accessory app, invisible to all three, but switches
+to a regular app the moment the first of these windows opens and back the
+moment the last one closes.
+
 ## Calibration (optional)
 
 A short guided session improves on the coarse, uncalibrated gaze of item 11
