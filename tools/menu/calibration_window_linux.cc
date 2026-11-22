@@ -21,10 +21,15 @@ constexpr int kWriteTimeoutMs = 200;
 constexpr int kReadTimeoutMs = 5000;
 constexpr int kWindowSide = 420;
 
-const QString kIntroText = QStringLiteral(
-    "Calibration is optional. It teaches Facepalm where you look on this "
-    "screen, which makes the feelings and reactions it reports more "
-    "accurate; everything else keeps working without it.");
+// A function, not a QString global: QString's constructor is not
+// exception-free, which a static-duration global cannot safely rely on
+// (bugprone-throwing-static-initialization).
+QString IntroText() {
+  return QStringLiteral(
+      "Calibration is optional. It teaches Facepalm where you look on this "
+      "screen, which makes the feelings and reactions it reports more "
+      "accurate; everything else keeps working without it.");
+}
 
 // A QLocalSocket behind src/calibrate_cli.h's CalibrateClientIo (#118),
 // the tray's own equivalent of tools/posix_calibrate_client_io.h: plain
@@ -39,14 +44,14 @@ class QtCalibrateClientIo : public facepalm::CalibrateClientIo {
   }
 
   void WriteLine(std::string_view line) override {
-    QByteArray text = QByteArray::fromStdString(std::string(line)) + '\n';
+    const QByteArray text = QByteArray::fromStdString(std::string(line)) + '\n';
     socket_.write(text);
     socket_.waitForBytesWritten(kWriteTimeoutMs);
   }
 
   std::optional<std::string> ReadLine() override {
     for (;;) {
-      const int newline = pending_.indexOf('\n');
+      const qsizetype newline = pending_.indexOf('\n');
       if (newline >= 0) {
         const QByteArray line = pending_.left(newline);
         pending_.remove(0, newline + 1);
@@ -142,7 +147,7 @@ void CalibrationWindow::Open(std::string token) {
 
 void CalibrationWindow::Render() {
   if (!started_) {
-    label_->setText(kIntroText);
+    label_->setText(IntroText());
     primary_->setText(QStringLiteral("Start Calibration"));
     primary_->setVisible(true);
     secondary_->setText(QStringLiteral("Cancel"));

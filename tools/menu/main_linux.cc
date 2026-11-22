@@ -881,7 +881,8 @@ int main(int argc, char* argv[]) {
 
   // The calibration wizard (#118, item 12 of #61): optional, so it is a
   // menu entry a person chooses, never run on their behalf.
-  QAction* calibrate_action = menu.addAction(QStringLiteral("Calibrate…"));
+  const QAction* calibrate_action =
+      menu.addAction(QStringLiteral("Calibrate…"));
   facepalm_menu::CalibrationWindow calibration(&window,
                                                SocketPath().toStdString());
   QObject::connect(
