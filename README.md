@@ -378,13 +378,23 @@ last looked. Right after the agent asks the person something, it can pass
 `beat` (`question` or `proposal`): the service then watches the next
 `timeout_ms` (1500 by default, at most 10000) and adds `interpretation`, with
 an ID, the feeling the reaction was read as, which is `unknown` when it
-cannot tell, and `feelings`, every feeling the person can pick instead. The
-feeling is advisory, never an answer. When the person says how they really
-felt, `tell_feeling` takes the interpretation's ID and their pick, sends
-`feel <id> <feeling>`, and Facepalm tunes later reads from it. A client resets
-the person's picks with `reset feelings`. `open_facepalm_settings` requests
-the installed Facepalm Settings window (#61 item 8); it does not start the
-camera, change consent, or confirm the window became visible.
+cannot tell, and `feelings`, every feeling the person can pick instead. A pick
+the person later makes replaces this read for that beat; with no pick, the
+read stands, and nothing waits on one. The feeling is advisory either way,
+never an answer. When the person says how they really felt, `tell_feeling`
+takes the interpretation's ID and their pick, sends `feel <id> <feeling>`,
+and Facepalm tunes later reads from it. `tell_feeling`, `ask_feeling` (below)
+and `get_feeling` all return `{id, read, picked, feeling}`: `feeling` is
+`picked` once there is one, otherwise `read`. A pick Facepalm itself refuses
+(already given, or more than five minutes old) still carries `picked`, since
+the person did pick, even though it will not tune from it; a call that never
+reaches a definite yes or no from Facepalm at all (offline, unapproved, or an
+unrecognized ID) leaves the read standing instead. `get_feeling` looks up
+which feeling now stands for an ID with no call of its own, for a host that
+does not otherwise surface a tool's own result back to the agent. A client
+resets the person's picks with `reset feelings`. `open_facepalm_settings`
+requests the installed Facepalm Settings window (#61 item 8); it does not
+start the camera, change consent, or confirm the window became visible.
 
 Where the host renders interactive widgets ([MCP
 Apps](https://github.com/modelcontextprotocol/ext-apps)), `show_feeling_card`
@@ -393,18 +403,22 @@ interpretation: one button per feeling, in the order `feelings` lists them,
 Facepalm's own read already highlighted, and one click either way, which
 sends `tell_feeling` itself. The card never names the gesture, the
 interpretation's ID, or any basis, eligibility or retention detail; a second
-click is refused. A host without MCP Apps gets the tool's text instead, with
-the same `id`, `feeling` and `feelings` to act on directly. See [local macOS
-app staging](docs/local-app.md) for the Claude Desktop configuration that
-renders the card.
+click is refused. Once Facepalm takes the pick, the card passes
+`tell_feeling`'s own result to the host through `app.updateModelContext()`,
+where the host supports it, so the agent learns the pick even when the host
+never surfaces a tool call's own result back to it; `get_feeling` is the
+fallback elsewhere. A host without MCP Apps gets the tool's text instead,
+with the same `id`, `feeling` and `feelings` to act on directly. See [local
+macOS app staging](docs/local-app.md) for the Claude Desktop configuration
+that renders the card.
 
 Where the host cannot render a widget but supports MCP elicitation, such as
 the Claude Code terminal, `ask_feeling` asks the same question as a form: one
 field, an enum of `feelings` with the same plain-word names, Facepalm's own
 read as the default. An accepted pick is sent on as `tell_feeling` already
 is; a decline, a cancel, or a host that refuses to elicit is reported without
-an error. For Claude Code, `/facepalm:feel` calls it with the most recent
-beat's interpretation when given no arguments.
+an error, the read left standing. For Claude Code, `/facepalm:feel` calls it
+with the most recent beat's interpretation when given no arguments.
 
 To test the install and relocation without GoogleTest, pass a new, disposable
 path as `SMOKE_ROOT`; the test removes it afterwards. To also exercise the

@@ -19,9 +19,14 @@ Otherwise, use the most recent beat's interpretation from this conversation
 passed `beat`). If there is none, say so without calling a tool. Call
 `ask_feeling` once with that `id`, `feeling` and `feelings`: it asks the
 person how they felt, through a form, pre-selecting Facepalm's own read, and
-sends their pick to Facepalm itself. Report what it returns. Do not also
-call `tell_feeling` for the same interpretation; `ask_feeling` already took
-care of it.
+sends their pick to Facepalm itself. It returns `id`, `read`, `picked` and
+`feeling`: `feeling` is `picked` once there is one, otherwise `read` stands.
+Report what it returns, taking `feeling` as how the person felt from here
+on. Do not also call `tell_feeling` for the same interpretation;
+`ask_feeling` already took care of it. Either way this is advisory, never an
+answer or an approval.
 
 Facepalm refuses a feeling for an interpretation another session was given,
-one already given a feeling, or one more than five minutes old.
+one already given a feeling, or one more than five minutes old; the read
+stands for a refusal like that too. To find out which feeling now stands for
+an interpretation with no fresh call of its own, use `get_feeling {id}`.

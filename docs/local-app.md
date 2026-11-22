@@ -97,8 +97,14 @@ Restart Claude Desktop afterward. `wait_for_reaction` with a `beat` can then
 show its "pick the feeling" card inline, when Claude Desktop renders it
 (MCP Apps): ask Claude to call `show_feeling_card` with the `id`, `feeling`
 and `feelings` a beat returned, and watch for the card asking "How were you
-feeling just then?" with Facepalm's read already highlighted. A host without
-MCP Apps gets `show_feeling_card`'s text instead, with the same information.
+feeling just then?" with Facepalm's read already highlighted. Once a button
+is picked, the card calls `app.updateModelContext()` with the pick, where the
+host accepts it, so Claude's own context carries the pick without a further
+call; whether Claude Desktop actually surfaces this needs a live check, not
+exercised by any test here. A host without MCP Apps gets `show_feeling_card`'s
+text instead, with the same information; `get_feeling {id}` is the fallback
+everywhere, for finding out which feeling now stands when nothing else
+surfaced it.
 
 Choose **Settings** from the 🤦 menu to set the frame rate, choose the camera
 (item 10 of #61, #13), enable detectors, or adjust gesture confidence and

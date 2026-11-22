@@ -342,13 +342,51 @@ test('an interpretation id is forgotten once the link is lost, and known again o
   const session = new SocketSession(f.address);
   try {
     assert.equal(session.knowsInterpretation(1), false);
-    session.noteInterpretation(1);
+    session.noteInterpretation(1, 'agreement');
     assert.equal(session.knowsInterpretation(1), true);
     session.disconnect();
     assert.equal(session.knowsInterpretation(1), false);
-    session.noteInterpretation(1);
+    assert.equal(session.interpretation(1), undefined);
+    session.noteInterpretation(1, 'agreement');
     await session.request('feel 1 agreement');
     assert.equal(session.knowsInterpretation(1), true);
+  } finally { session.close(); await f.close(); }
+});
+
+test('interpretation() returns the read a noted id was given, with no pick yet (#133)', () => {
+  const session = new SocketSession('/does-not-matter');
+  try {
+    assert.equal(session.interpretation(1), undefined);
+    session.noteInterpretation(1, 'agreement');
+    assert.deepEqual(session.interpretation(1), { read: 'agreement', picked: undefined });
+  } finally { session.close(); }
+});
+
+test('recordPick() records a pick for an id this session knows, leaving its read untouched (#133)', () => {
+  const session = new SocketSession('/does-not-matter');
+  try {
+    session.noteInterpretation(1, 'agreement');
+    session.recordPick(1, 'disagreement');
+    assert.deepEqual(session.interpretation(1), { read: 'agreement', picked: 'disagreement' });
+  } finally { session.close(); }
+});
+
+test('recordPick() does nothing for an id this session does not know (#133)', () => {
+  const session = new SocketSession('/does-not-matter');
+  try {
+    session.recordPick(1, 'disagreement');
+    assert.equal(session.interpretation(1), undefined);
+  } finally { session.close(); }
+});
+
+test('a pick is forgotten along with its read once the link is lost (#133)', async () => {
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'));
+  const session = new SocketSession(f.address);
+  try {
+    session.noteInterpretation(1, 'agreement');
+    session.recordPick(1, 'disagreement');
+    session.disconnect();
+    assert.equal(session.interpretation(1), undefined);
   } finally { session.close(); await f.close(); }
 });
 
