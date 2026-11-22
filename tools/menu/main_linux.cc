@@ -7,6 +7,7 @@
 #include <QDialog>
 #include <QDir>
 #include <QFile>
+#include <QFileDevice>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QIcon>
@@ -652,17 +653,47 @@ class CameraPreview {
     }
   }
 
+  // The request file, if any -- the only signal the daemon needs to stop
+  // publishing (#108, #114). Safe to call whether or not the preview is
+  // running: at launch, and on QCoreApplication::aboutToQuit, nothing
+  // else here may have run yet, or ever run, this time around.
+  void RemoveRequest() { QFile::remove(request_path_); }
+
  private:
-  // PreviewLease!StartPreview: creating the request file is the only
-  // signal the daemon needs; it notices it on the next captured frame.
-  void Start() {
-    if (!QDir().mkpath(QFileInfo(request_path_).absolutePath())) {
-      Warn(QStringLiteral("Could not create the preview folder."));
-      return;
+  // Creates or touches the request file's directory and modified time
+  // (#114, specs/PreviewLease.tla's Fresh): the daemon reads the request
+  // as asking only while it was touched recently, so this is also what
+  // keeps a still-open window's ask from ever going stale on its own.
+  // The directory is put at exactly 0700 regardless of umask, the same
+  // way src/client_approvals.cc's MakePrivateDirectory does for the
+  // daemon's own side of this directory.
+  bool Touch() {
+    const QString directory = QFileInfo(request_path_).absolutePath();
+    if (!QDir().mkpath(directory) ||
+        !QFile::setPermissions(directory, QFileDevice::ReadOwner |
+                                              QFileDevice::WriteOwner |
+                                              QFileDevice::ExeOwner)) {
+      return false;
     }
     QFile request(request_path_);
-    if (!request.open(QIODevice::WriteOnly)) {
-      Warn(request.errorString());
+    return request.open(QIODevice::WriteOnly);
+  }
+
+  // PreviewLease!StartPreview (#114): creating the request file is the
+  // only signal the daemon needs; it notices it on the next captured
+  // frame. Needs the camera already on, read the same way the tray's own
+  // indicator does, since otherwise the window has nothing to ever show,
+  // and would open, flash, and have to close itself again the moment its
+  // own first poll found the same thing.
+  void Start() {
+    if (!facepalm::ReadCameraStatus(StatusPath().toStdString())) {
+      Warn(QStringLiteral(
+          "Turn on the camera, or wait for it to be used, before opening "
+          "the preview."));
+      return;
+    }
+    if (!Touch()) {
+      Warn(QStringLiteral("Could not create the preview request."));
       return;
     }
     Refresh();
@@ -678,19 +709,24 @@ class CameraPreview {
   // harmless, and overwritten the next time the preview starts.
   void Stop() {
     timer_.stop();
-    QFile::remove(request_path_);
+    RemoveRequest();
     window_.hide();
     action_->setText(QStringLiteral("Show Camera Preview"));
   }
 
   // PreviewLease!Poll: also stops the preview once the camera goes off,
   // since the daemon stops publishing then but the window would
-  // otherwise keep showing the last frame.
+  // otherwise keep showing the last frame. Also touches the request
+  // file (#114) so the daemon keeps seeing it as fresh for as long as
+  // this window stays open; a touch that fails is left for the next
+  // one, same as a dropped frame, rather than treated as a reason to
+  // stop.
   void Refresh() {
     if (!facepalm::ReadCameraStatus(StatusPath().toStdString())) {
       window_.reject();
       return;
     }
+    Touch();
     const QPixmap pixmap(frame_path_);
     if (!pixmap.isNull()) {
       label_->setPixmap(pixmap.scaled(label_->size(), Qt::KeepAspectRatio,
@@ -791,6 +827,19 @@ int main(int argc, char* argv[]) {
   CameraPreview preview(&window, preview_action);
   QObject::connect(preview_action, &QAction::triggered, &window,
                    [&preview] { preview.Toggle(); });
+  // A request file an earlier launch left behind -- it crashed, or its
+  // session logged out, while the preview was open (#114) -- is removed
+  // outright: the daemon's own freshness check would stop streaming to
+  // it soon anyway, but this launch owns no window for it to show
+  // regardless, so there is nothing to wait for. The tray quitting --
+  // by its own Quit action, or the session logging out -- removes it
+  // the same way an explicit stop does, so streaming ends with this
+  // tray rather than being left for that check to notice later; a crash
+  // skips this connection entirely, which is exactly the case the check
+  // exists for.
+  preview.RemoveRequest();
+  QObject::connect(&app, &QCoreApplication::aboutToQuit, &window,
+                   [&preview] { preview.RemoveRequest(); });
 
   const QAction* quit_action = menu.addAction(QStringLiteral("Quit"));
   QObject::connect(quit_action, &QAction::triggered, &app, &QApplication::quit);

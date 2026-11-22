@@ -38,7 +38,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
 | `McpSocket.cfg` | one session, up to two requests, backoff bounded to two ticks | holds, with `LinkRecovers` | 7 |
-| `PreviewLease.cfg` | three camera sessions | holds, with `EventuallyOpens` | 19 |
+| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 19 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
@@ -309,41 +309,91 @@ seconds the indicator is asked to.
 
 ## `PreviewLease`: the camera preview's lease
 
-Models #61 item 8's camera preview, as `src/preview_lease.cc` implements it.
-`DaemonAdmission.tla`'s own camera open and close are taken as given
-(`CameraOpens`, `CameraCloses`); this checks only the lease that gates
-whether a frame is ever encoded or published at all, which a camera
-session counter (`camera_session`) and the session a grant names
-(`started_session`) enforce: they must match for streaming to be on, so
-a camera that closed and reopened needs a fresh `StartPreview` from the
-menu. No image reaches a client but the menu through this: the gate
+Models #61 item 8's camera preview, as `src/preview_lease.cc` implements it,
+and #114's fix to it: a preview request left behind by a menu that quit
+without cleaning up, crashed, or whose session logged out, must not keep
+the daemon streaming to nobody. `DaemonAdmission.tla`'s own camera open
+and close are taken as given (`CameraOpens`, `CameraCloses`); this checks
+only the lease that gates whether a frame is ever encoded or published at
+all. No image reaches a client but the menu through this: the gate
 decides only whether to publish to the menu's own local channel, never
 whether the approved-token service every other client reaches carries
 one (it never does, either way).
+
+Issue #114 adds a second gate: `requested` (the request file's presence)
+must also be fresh, `age` (ticks since a live menu's own `StartPreview` -- its
+first ask, or its 0.5 s refresh timer, tools/menu/main.mm and
+tools/menu/main_linux.cc -- last reset it) having stayed within
+`StaleAge`. `menu_alive` is the model's own ghost of whether the menu
+that made the request still exists: nothing in the daemon ever reads it
+directly, but it is what the two new liveness properties below hold the
+freshness check accountable to. While the menu is alive, `StartPreview`
+keeps resetting `age` to zero, so a live menu's own request never goes
+stale on its own; `age` only climbs once `menu_alive` is FALSE, and only
+`Frame` -- the daemon's own per-frame check, `src/preview_publisher.cc`'s
+`PreviewPublisher::OnFrame` -- advances it, since that check runs only
+while the camera is open and frames are flowing, the only time a stale
+request could otherwise still be seen to stream.
+
+An earlier revision also tracked which camera session (a counter bumped
+on every `CameraOpens`) a grant was made for, and compared it against the
+current one before letting streaming stay on. The #61 item 8 Fable
+review (#114) found the comparison had no real counterpart in code
+(`src/preview_lease.cc`'s own `camera_session_`/`started_session_` were
+set but never read): `CameraOpened` and `CameraClosed` already force
+streaming off directly, on every transition, so nothing a later grant's
+session number could still be stale against ever survives one. Both the
+model and the class dropped the counters rather than inventing a check
+for code that already worked without it, which is also why
+`NeverStreamsWithoutAFreshStart`, named in an earlier draft of this
+table, is gone: its concern is now `NeverStreamsOnAStaleRequest`'s alone.
 
 | Property | What it says | Test |
 |---|---|---|
 | `EventuallyOpens` | Something must happen: the camera can always eventually open. | `StartTest.NeedsTheCameraOpen` and the suite overall, through `PreviewLease::CameraOpened` |
 | `NeverStreamsWithoutCamera` | The lease never grants streaming while the camera is closed. | `StartTest.NeedsTheCameraOpen` |
-| `NeverStreamsWithoutAFreshStart` | Streaming is on only for the session it was last granted in. | `NeverStreamsWithoutAFreshStartTest.AReopenedCameraNeedsANewStart` |
-| `StreamingMatchesFormula` | `streaming` always equals `camera = open /\ started_session = camera_session`, checked at every state rather than only eventually (see the mutation table: a liveness version of this let an adversarial schedule hide a real bug). | Every `PreviewLeaseTest` in `test/preview_lease_test.cc` |
+| `NeverStreamsOnAStaleRequest` (#114) | Streaming needs the request both there and fresh. | `NeverStreamsOnAStaleRequestTest.AReopenedCameraNeedsANewStart` |
+| `MenuDeathEndsStreaming` (#114) | Liveness: once the menu that made a request is gone, streaming always eventually stops, and -- since only a live menu's own `StartPreview` can turn it back on -- stops for good. This is the acceptance bar's "nothing streams without a live menu window", phrased as a leads-to rather than an instant cutoff: the daemon can only learn of the menu's death indirectly, on its own per-frame check, within the couple of seconds `GuardRequestFresh`'s own grace period already allows for. | `IsFreshPreviewRequestTest.AbandonedLongAgoIsStale` in `test/preview_request_test.cc`; hand-checked against `tools/menu/main.mm`'s `applicationWillTerminate:` and `tools/menu/main_linux.cc`'s `QCoreApplication::aboutToQuit`, which remove a clean quit's own request outright rather than waiting on this grace period at all |
+| `PreviewStreamsWhenWanted` (#114) | Liveness, and something must happen: the camera, the request and the menu behind it, all held from some point on, lead to the preview actually streaming. `[](<>[]Wanted => <>streaming)`, as `specs/DaemonAdmission.tla`'s own `JoinOpens` uses the shape, rather than a plain `~>` a momentary ask could satisfy only by chance. | `OnFrameTest.GrantsAndPublishesOnceTheCameraIsOpenAndItIsRequested` in `test/preview_publisher_test.cc` |
 
 Each mutation, and what TLC found:
 
 | Mutation | Broke |
 |---|---|
-| `GuardStartNeedsCamera = FALSE`: `StartPreview` is let through with the camera closed | `NeverStreamsWithoutCamera` |
-| `GuardStreamingTracksLease = FALSE`: `streaming` is never recomputed | `StreamingMatchesFormula` |
-| `CameraOpens` never enabled (`camera_session < 0`, never true) | `EventuallyOpens` |
+| `GuardStartNeedsCamera = FALSE`: `StartPreview` is let through with the camera closed | `NeverStreamsWithoutCamera`, 2 states |
+| `GuardStreamingTracksLease = FALSE`: `streaming` is never recomputed | `PreviewStreamsWhenWanted`: nothing ever grants, 3 states |
+| `CameraOpens` never enabled (its guard replaced by `FALSE`) | `EventuallyOpens`, 4 states |
+| `GuardRequestFresh = FALSE` (#114): streaming never checks the request's age | `MenuDeathEndsStreaming`: a request a dead menu left behind streams forever once granted |
+| No fairness on `Frame` (#114): the daemon's own per-frame check is never required to run | `PreviewStreamsWhenWanted` (nothing is ever forced to grant) and `MenuDeathEndsStreaming` (nothing is ever forced to age a stale one away) |
 
-An earlier draft of `StreamingMatchesFormula` was a `<>(streaming = TRUE)`
-liveness property instead. TLC found a real gap in that version, not in
-the design: an environment that always closes the camera again right
-after opening it, forever, can keep `StartPreview` from ever winning the
-race against `CameraCloses`, so the property failed even with every
-guard correct. The state invariant above says the same thing without
-needing to win that race, and is what the mutations in the table above
-were run against instead.
+`StreamingMatchesFormula`, an earlier draft's exact `streaming = ...`
+state invariant checked at every step rather than only eventually, is
+gone along with the session counters: without them, the one step
+between `CameraOpens` (which forces `streaming` off directly, matching
+`CameraOpened()`) and the next `Frame` (which alone re-grants it) is a
+real, if momentary, gap no formula checked at every single state can
+state as an equality -- nothing outside this class ever observes it,
+since `PreviewPublisher::OnFrame` is the only caller of `IsStreaming()`,
+`Start()` and `Stop()`, and it always corrects it within the very call
+that would otherwise see it. `GuardStreamingTracksLease = FALSE` is
+still caught just as surely, now by `PreviewStreamsWhenWanted`: an
+earlier draft of that same liveness was a plain `<>(streaming = TRUE)`
+instead, and TLC found a real gap in that version, not in the design:
+an environment that always closes the camera again right after opening
+it, forever, can keep `StartPreview` from ever winning the race against
+`CameraCloses`, so the property failed even with every guard correct.
+`[](<>[]Wanted => <>streaming)` says the same thing without needing to
+win that race, since `Wanted` must settle, not just occur.
+
+`GuardRequestFresh = FALSE` does *not* make TLC flag
+`NeverStreamsOnAStaleRequest` broken, even though it names `Fresh`
+directly: with the guard off, `Fresh` itself reads TRUE regardless of
+`age`, so the broken `Fresh` appears on both sides and the invariant
+stays trivially consistent with it. `MenuDeathEndsStreaming` is what
+actually catches it, since it checks against `menu_alive`, a variable
+the mutation cannot touch -- the same lesson dropping
+`StreamingMatchesFormula` already taught, that a property checked
+against the same broken piece it is meant to guard proves nothing.
 
 `src/preview_publisher.cc` implements `PreviewLease`'s caller, following
 no spec of its own (it has no lifecycle beyond the lease's): it polls the
@@ -351,7 +401,11 @@ menu's request file, drives `CameraOpened`/`Start`/`Stop`, and encodes
 and publishes a frame exactly while `IsStreaming()`, tested directly in
 `test/preview_publisher_test.cc` with `PreviewLease` run for real (as
 `tuning_test.cc` runs the feelings rule for real), since it is already
-proved above and has no I/O of its own to mock.
+proved above and has no I/O of its own to mock. `src/preview_request.cc`
+implements the request's own freshness check (`IsFreshPreviewRequest`,
+specs/PreviewLease.tla's `Fresh`), which `tools/daemon/main.cc` wires as
+the `requested` callback `PreviewPublisher` polls every frame, in place of
+the plain file-existence check #114 found insufficient.
 
 ## `FeedWaitRetirement`: canceled wait ownership
 
@@ -525,7 +579,7 @@ clears it. `CameraLifecycle.cfg` chooses the default device; the symmetric
 | `NoEventToStranger` | A reaction reaches only a subscribed client. | `NoEventToStrangerTest` |
 | `DeadHelperHoldsNoCamera` | A dead helper holds no camera. | `DeadHelperHoldsNoCameraTest`: a restarted helper is a new controller, which starts closed |
 | `CapturesOnlyChosenDevice` | The device captures only while the device the person chose is attached (#13). | `SessionCameraTest.IgnoresAnotherCameraDisconnecting`, `IgnoresAnotherCameraConnecting`; held to the spec by reading for `AvFoundationSession::Configure` and `V4l2Session::Configure`'s own identity match, which `V4l2SessionTest.ConfigureMatchesTheChosenDeviceAmongSeveral` and `ConfigureGivesNothingWhenNoNodeMatchesTheChoice` exercise directly |
-| `DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack` on Linux | A camera connecting or disconnecting while the daemon runs reaches `SessionCamera` on Linux too, the way AVFoundation's own notifications already do on macOS (#111). | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` holds `V4l2Session` to asking the given `HotplugMonitor` to watch with exactly the callbacks it was given, once asked to (`ConstructingDoesNotStartWatchingUntilToldTo`, #115); `V4l2HotplugTest`'s `ANewCameraFiresOnConnected`, `AKnownCameraDisconnects` and the rest hold `V4l2InotifyMonitor`, the real watch over inotify, to finding and reporting a node's id the same way `Configure`/`List` do, with a node `IN_CREATE` could not yet open retried on `IN_ATTRIB` (`AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects`, #115) |
+| `DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack` on Linux | A camera connecting or disconnecting while the daemon runs reaches `SessionCamera` on Linux too, the way AVFoundation's own notifications already do on macOS (#111), both only once `StartWatching` is called (#115, #121). | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` holds `V4l2Session` to asking the given `HotplugMonitor` to watch with exactly the callbacks it was given, once asked to (`ConstructingDoesNotStartWatchingUntilToldTo`, #115); `V4l2HotplugTest`'s `ANewCameraFiresOnConnected`, `AKnownCameraDisconnects` and the rest hold `V4l2InotifyMonitor`, the real watch over inotify, to finding and reporting a node's id the same way `Configure`/`List` do, with a node `IN_CREATE` could not yet open retried on `IN_ATTRIB` (`AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects`, #115); `AvFoundationSessionTest.StartWatchingWiresDeviceChangeCallbacksToTheGivenOnes` (`test/avfoundation_session_check.mm`) holds `AvFoundationSession` to the macOS analog, with `ConstructingDoesNotWatchDevicesUntilStartWatchingIsCalled` the regression test for its own constructor (#121) |
 | `CanOpen` | Something must happen: a wanted, closed camera can start opening, once neither the device nor a denied permission or failed start (#52) stands in the way. | `WantedOpensTest`, `RetriesTest` |
 | `RevokingCloses` | Revoking consent leads to the camera being closed. | `RevokingClosesTest` |
 | `LastLeaveCloses` | No subscribers leads to the camera being closed. | `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` |
@@ -627,7 +681,23 @@ now watches `IN_ATTRIB`, retrying a probed node `IN_CREATE` found it could
 not open: udev applies a node's permissions some moments after creating
 it, so the node may not have been readable yet (#115).
 
-| Mutation to `SessionCamera`, `FramePipeline` or `V4l2Session` | Fails |
+`AvFoundationSession`'s own device-change observers had the identical
+hazard on macOS (#121), found reading #122's Linux fix for #115:
+`AVCaptureDeviceWasConnectedNotification`/`WasDisconnectedNotification`
+are posted with `object:nil`, so, registered in the constructor, either
+could fire for any device as soon as it ran, calling back into `camera_`
+in `tools/daemon/main.cc` before `Engine`'s own constructor had built it.
+A new `StartWatching` registers them instead, called from
+`Engine::Start()` alongside `V4l2Session::StartWatching`, once every
+member is built; the runtime-error observer stays in the constructor,
+since it is scoped to this session's own `AVCaptureSession` (`object:`)
+and so cannot fire before `Start` makes that session run. The model does
+not cover this ordering either, only the device states themselves;
+`ConstructingDoesNotWatchDevicesUntilStartWatchingIsCalled` in
+`test/avfoundation_session_check.mm` is the regression test, read for by
+this table's own `AvFoundationSession` constructor row below.
+
+| Mutation to `SessionCamera`, `FramePipeline`, `V4l2Session` or `AvFoundationSession` | Fails |
 |---|---|
 | A start for a closed attempt runs | `SessionCameraTest.StartsNothingWhenPermissionIsGrantedAfterClose`, `StartsOnlyForTheCurrentAttempt`, `ARefusalAfterCloseReportsNothing` |
 | Only the camera in use counts coming back | `SessionCameraTest.ReportsAnyCameraConnectingBeforeOneIsPicked` |
@@ -637,6 +707,8 @@ it, so the node may not have been readable yet (#115).
 | `V4l2Session::Configure`/`List` do not skip a node that does not query | `V4l2SessionTest.ConfigureSkipsANodeThatDoesNotQuery`, `ListSkipsANodeThatDoesNotQuery` |
 | `V4l2Session` does not ask the given `HotplugMonitor` to watch, or not with the callbacks it was given | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` (#111) |
 | `V4l2Session`'s constructor starts the watch itself | `V4l2SessionTest.ConstructingDoesNotStartWatchingUntilToldTo` (#115) |
+| `AvFoundationSession`'s constructor registers the device-change observers itself | `AvFoundationSessionTest.ConstructingDoesNotWatchDevicesUntilStartWatchingIsCalled` (#121) |
+| `AvFoundationSession::StartWatching` does not register the observers, or not with the callbacks the constructor was given | `AvFoundationSessionTest.StartWatchingWiresDeviceChangeCallbacksToTheGivenOnes` (#121) |
 | `V4l2InotifyMonitor` fires `on_connected` for a node already attached when the watch starts | `V4l2HotplugTest.InitialScanProbesAllFourNodesWithoutFiringAnyCallback` (#111) |
 | `V4l2InotifyMonitor` does not filter by the four probed node names, firing for an unrelated entry under /dev | `V4l2HotplugTest.AnUnrelatedNameIsIgnored` (#111) |
 | `V4l2InotifyMonitor` does not retry a node `IN_CREATE` could not open, on `IN_ATTRIB` | `V4l2HotplugTest.AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects` (#115) |

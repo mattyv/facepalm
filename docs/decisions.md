@@ -147,6 +147,107 @@ a line saying which entry replaced it.
     [#61](https://github.com/mattyv/facepalm/issues/61),
     [#43](https://github.com/mattyv/facepalm/issues/43).
 
+## 2026-11-22: AvFoundationSession's device-change observers wait for StartWatching too (#121)
+
+-   **Decision:** `AvFoundationSession`'s constructor no longer registers
+    the `AVCaptureDeviceWasConnectedNotification`/
+    `WasDisconnectedNotification` observers itself; a new `StartWatching`
+    does, called from `Engine::Start()` in `tools/daemon/main.cc`
+    alongside the Linux `StartWatching()` call #115 already added, once
+    every member those callbacks reach, `camera_` among them, is
+    constructed. Before, those two observers, posted with `object:nil`,
+    could fire for any device as soon as the constructor ran, and the
+    blocks they ran, `on_connected`/`on_disconnected`, close over
+    `camera_` in `Engine`, which `capture_` (the `AvFoundationSession`) is
+    declared, and so constructed, before. The runtime-error observer is
+    unaffected and stays in the constructor: it is scoped to this
+    session's own `AVCaptureSession` (`object:`), which cannot run before
+    `Start`, well after construction.
+-   **Also decided:** `avfoundation_session_checks`
+    (`test/avfoundation_session_check.mm`) is a new real-framework check,
+    following `preview_jpeg_checks`' and `menu_store_checks`' own pattern,
+    since `AvFoundationSession` has no seam to mock `NSNotificationCenter`
+    behind, and posting a notification needs no camera, open or
+    otherwise. It has no coverage floor, the same as those two. The
+    `format-check` target's file glob in `CMakeLists.txt` was missing
+    `test/*.mm`, so it never checked those two existing files either;
+    fixed in the same change, found while adding a third.
+-   **Spec:** no change to `specs/CameraLifecycle.tla`: the construction
+    order is not part of the device lifecycle it models, the same call
+    #115 made for the identical hazard on Linux.
+-   **Evidence:** [#121](https://github.com/mattyv/facepalm/issues/121),
+    filed from reading #122's Linux fix for #115, the same hazard's
+    macOS analog.
+
+## 2026-11-22: A preview request must be fresh, and must be a menu's own, closing #114
+
+-   **Decision:** `specs/PreviewLease.tla` now also models the request
+    the menu makes (`requested`) as needing to be fresh
+    (`age <= StaleAge`), not merely present, and a menu that is gone
+    (`menu_alive = FALSE`, a crash, a quit that skipped cleanup, or a
+    session logging out) as never able to refresh one again. The code
+    follows: `src/preview_request.cc`'s `IsFreshPreviewRequest` is the
+    `requested` callback `tools/daemon/main.cc` now gives
+    `PreviewPublisher` in place of the plain file-existence check #114
+    found insufficient, so a request a dead menu left behind is treated
+    as gone once its last touch is more than `kPreviewRequestStaleMs`
+    (2 s) old; the menu's own 0.5 s refresh timer
+    (`tools/menu/main.mm`'s `refreshPreviewFrame`,
+    `tools/menu/main_linux.cc`'s `CameraPreview::Refresh`) now also
+    re-touches the request file on every tick, not only the first write,
+    which is what keeps a live menu's own request from ever reaching
+    that age; and both menus remove the request file outright at launch
+    and on a clean quit (`applicationWillTerminate:`,
+    `QCoreApplication::aboutToQuit`), rather than leaving even a clean
+    exit to the freshness check's own grace period.
+-   **Also decided:** three findings from the same review
+    (#61 item 8's Fable review, #114) are fixed in the same branch,
+    small enough not to need issues of their own:
+    -   The frame is written 0600
+        (`tools/daemon/main.cc`'s `WriteFileAtomically`, now POSIX
+        `open()` with an explicit mode rather than an `ofstream`, whose
+        own default leaks the process umask) and removed once streaming
+        stops, through `PreviewLease`'s own `streaming_changed` hook
+        (`src/preview_lease.h`), a no-op until now.
+    -   The state folder is put back to 0700 even when it was already
+        there: `src/client_approvals.cc`'s `MakePrivateDirectory` used to
+        accept an existing directory of any mode, and
+        `tools/menu/main_linux.cc`'s own `QDir().mkpath()` calls relied
+        on the process umask the same way; both now chmod the directory
+        they are asked to secure, whether they made it or found it.
+    -   Neither menu opens a preview window, or starts its timer, with
+        the camera off: both now check the camera-in-use file first
+        (the same one their own indicator reads) and show a message
+        instead, closing the gap where the window, and
+        `tools/menu/main.mm`'s own timer, would otherwise flash into
+        existence only to close themselves again on their first poll.
+-   **Also decided:** `src/preview_lease.cc`'s `camera_session_` and
+    `started_session_`, the same review's fourth finding, are removed
+    rather than given a real read somewhere to justify keeping them:
+    `CameraOpened` and `CameraClosed` already force `streaming` off
+    directly, on every transition, so no grant from before either one
+    ever has a session number left to be stale against by the time a
+    later `Start` could compare one. `specs/PreviewLease.tla` drops the
+    counters the same way, and `NeverStreamsWithoutAFreshStart` -- the
+    review's fifth finding, a property with no mutation row -- goes with
+    them, its concern folded into `NeverStreamsOnAStaleRequest`, which
+    does have one.
+-   **Why:** the review (#61 item 8, #114) found the daemon kept
+    encoding and writing frames from a request file nothing had removed,
+    across the menu quitting, crashing, or its session logging out, with
+    no window left to show them; and, separately, that `PreviewLease`'s
+    session bookkeeping was dead weight the fix should not carry forward
+    unexamined.
+-   **Rejected:** adding a real grant-level session check to make
+    `camera_session_`/`started_session_` "real", the review's other
+    offered option: the only readings or assignments of
+    `started_session_` were in service of a comparison that `CameraOpened`
+    and `CameraClosed`'s own direct reset already made redundant, so
+    inventing one would have protected against nothing a design that
+    never had it was not already safe from.
+-   **Evidence:** [#114](https://github.com/mattyv/facepalm/issues/114),
+    [#61 item 8](https://github.com/mattyv/facepalm/issues/61).
+
 ## 2026-11-22: The MCP session reconnects, with a bounded backoff, instead of dying (#117)
 
 -   **Decision:** `mcp/session.js`'s `SocketSession` no longer treats a lost

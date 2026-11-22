@@ -223,6 +223,12 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 @implementation FacepalmApp
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
   (void)notification;
+  // A request file an earlier launch of this menu left behind -- it
+  // crashed, or its session logged out, while the preview was open
+  // (#114) -- is removed outright: the daemon's own freshness check
+  // would stop streaming to it soon anyway, but this launch owns no
+  // window for it to show regardless, so there is nothing to wait for.
+  [self removePreviewRequest];
   self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
   self.statusItem.button.title = @"🤦";
   [self.statusItem.button setAccessibilityLabel:@"Facepalm"];
@@ -287,11 +293,34 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   [self startPreview];
 }
 
-// PreviewLease!StartPreview (#37 item 8, #108): creating the request file
-// is the only signal the daemon needs; it notices it on the next
-// captured frame, so no new timer of this method's own beyond the
-// refresh below.
+// Writes an empty request file, creating it the first time or touching
+// its modified time every other (#114, specs/PreviewLease.tla's Fresh):
+// the daemon reads the request as asking only while it was touched
+// recently, so this is also what keeps a still-open window's ask from
+// ever going stale on its own.
+- (BOOL)touchPreviewRequest:(NSString*)requestPath error:(NSError**)error {
+  return [[NSFileManager defaultManager]
+                   createDirectoryAtPath:requestPath.stringByDeletingLastPathComponent
+             withIntermediateDirectories:YES
+                              attributes:@{NSFilePosixPermissions : @0700}
+                                   error:error] &&
+         [[NSData data] writeToFile:requestPath options:NSDataWritingAtomic error:error];
+}
+
+// PreviewLease!StartPreview (#37 item 8, #108, #114): creating the
+// request file is the only signal the daemon needs; it notices it on
+// the next captured frame. Needs the camera already on -- read the same
+// way the menu's own indicator does, from the daemon's status file --
+// since otherwise the window has nothing to ever show, and would open,
+// flash, and have to close itself again the moment its own first poll
+// found the same thing (#114).
 - (void)startPreview {
+  if (!CameraInUse()) {
+    [self showError:@"Turn on the camera, or wait for it to be used, before "
+                    @"opening the preview."
+              title:@"Camera preview could not start"];
+    return;
+  }
   const std::optional<facepalm::UserPaths> paths = PreviewPaths();
   if (!paths) {
     [self showError:@"Your home folder could not be found."
@@ -300,12 +329,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   }
   NSString* requestPath = [NSString stringWithUTF8String:paths->preview_request.c_str()];
   NSError* error = nil;
-  if (![[NSFileManager defaultManager]
-                createDirectoryAtPath:requestPath.stringByDeletingLastPathComponent
-          withIntermediateDirectories:YES
-                           attributes:@{NSFilePosixPermissions : @0700}
-                                error:&error] ||
-      ![[NSData data] writeToFile:requestPath options:NSDataWritingAtomic error:&error]) {
+  if (![self touchPreviewRequest:requestPath error:&error]) {
     [self showError:(error.localizedDescription != nil ? error.localizedDescription
                                                        : @"The preview could not be started.")
               title:@"Camera preview could not start"];
@@ -324,6 +348,19 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
                                                       repeats:YES];
 }
 
+// The request file, if any -- the only signal the daemon needs to stop
+// publishing (#108, #114). Safe to call whether or not a preview is
+// running: at launch, and on quit (applicationWillTerminate:), nothing
+// else here may have run yet, or ever run, this time around.
+- (void)removePreviewRequest {
+  const std::optional<facepalm::UserPaths> paths = PreviewPaths();
+  if (paths) {
+    [[NSFileManager defaultManager]
+        removeItemAtPath:[NSString stringWithUTF8String:paths->preview_request.c_str()]
+                   error:nil];
+  }
+}
+
 // PreviewLease!StopPreview: removing the request file is the only
 // signal the daemon needs to stop publishing; a frame it already wrote
 // is left on disk, harmless, and overwritten the next time the preview
@@ -333,14 +370,22 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 - (void)stopPreview {
   [self.previewTimer invalidate];
   self.previewTimer = nil;
-  const std::optional<facepalm::UserPaths> paths = PreviewPaths();
-  if (paths) {
-    [[NSFileManager defaultManager]
-        removeItemAtPath:[NSString stringWithUTF8String:paths->preview_request.c_str()]
-                   error:nil];
-  }
+  [self removePreviewRequest];
   [self.previewWindow orderOut:nil];
   self.preview.title = @"Show Camera Preview";
+}
+
+// The menu quits -- by its own Quit item, Cmd-Q, or the system logging
+// the session out -- while the preview is open (#114): removes the
+// request the same way an explicit stop does, so streaming ends with
+// this menu rather than being left for the daemon's own freshness check
+// to notice later. A crash skips this method entirely, which is exactly
+// the case that check exists for.
+- (void)applicationWillTerminate:(NSNotification*)notification {
+  (void)notification;
+  [self.previewTimer invalidate];
+  self.previewTimer = nil;
+  [self removePreviewRequest];
 }
 
 - (void)createPreviewWindow {
@@ -365,7 +410,10 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 // camera itself goes off (the acceptance bar's "stops with the
 // camera"): PreviewLease already stops publishing then, but without
 // this check the window would otherwise go on showing the last frame
-// forever rather than closing.
+// forever rather than closing. Also touches the request file (#114), so
+// the daemon keeps seeing it as fresh for as long as this window stays
+// open; a touch that fails is left for the next one, same as a dropped
+// frame, rather than treated as a reason to stop.
 - (void)refreshPreviewFrame {
   if (!CameraInUse()) {
     [self stopPreview];
@@ -373,6 +421,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   }
   const std::optional<facepalm::UserPaths> paths = PreviewPaths();
   if (!paths) return;
+  NSError* error = nil;
+  [self touchPreviewRequest:[NSString stringWithUTF8String:paths->preview_request.c_str()]
+                      error:&error];
   NSImage* image = [[NSImage alloc]
       initWithContentsOfFile:[NSString stringWithUTF8String:paths->preview_frame.c_str()]];
   if (image != nil) self.previewImageView.image = image;

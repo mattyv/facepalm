@@ -49,19 +49,31 @@ class PosixIo : public ApprovalsIo {
       return false;
     }
     // Each component that is missing is made; one that is there must be a
-    // directory.
+    // directory. The full path itself (#114) is put back to
+    // kPrivateDirectory even when it was already there, left by an older
+    // build or a looser umask than this call's own explicit mode: an
+    // intermediate component already there is left alone, since it is
+    // not this call's own to secure (it may be a shared system directory,
+    // such as the one above it). Best effort, the same as the tray's own
+    // QDir().mkpath() calls: a directory that exists and is a directory
+    // is still usable even if tightening its mode happens to fail, so
+    // that alone is not reason enough to refuse it outright.
     for (std::size_t slash = directory.find('/', 1);;
          slash = directory.find('/', slash + 1)) {
       const std::string prefix = directory.substr(0, slash);
+      const bool full = slash == std::string::npos;
       struct stat info{};
       if (stat(prefix.c_str(), &info) == 0) {
         if (!S_ISDIR(info.st_mode)) {
           return false;
         }
+        if (full) {
+          chmod(prefix.c_str(), kPrivateDirectory);
+        }
       } else if (mkdir(prefix.c_str(), kPrivateDirectory) != 0) {
         return false;
       }
-      if (slash == std::string::npos) {
+      if (full) {
         return true;
       }
     }

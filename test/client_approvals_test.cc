@@ -196,6 +196,21 @@ TEST_F(PosixApprovalsIoTest, MakesPrivateDirectoriesAndFiles) {
   EXPECT_FALSE(io_->Remove(clients + "/mcp"));
 }
 
+// #114: a directory MakePrivateDirectory did not itself make -- left
+// behind by an older build, or by a looser umask than the daemon's own
+// explicit mode -- is put back to 0700 rather than trusted as is.
+TEST_F(PosixApprovalsIoTest, FixesAnExistingDirectoryLeftLoose) {
+  const std::string clients = root_ + "/state/facepalm/clients";
+  ASSERT_TRUE(io_->MakePrivateDirectory(clients));
+  ASSERT_EQ(chmod(clients.c_str(), 0755), 0);
+
+  ASSERT_TRUE(io_->MakePrivateDirectory(clients));
+
+  struct stat info{};
+  ASSERT_EQ(stat(clients.c_str(), &info), 0);
+  EXPECT_THAT(info.st_mode & static_cast<mode_t>(0777), Eq(0700U));
+}
+
 TEST_F(PosixApprovalsIoTest, ReportsWhatItCannotDo) {
   EXPECT_THAT(io_->List(root_ + "/missing"), Eq(std::nullopt));
   ASSERT_TRUE(io_->CreatePrivate(root_ + "/file", ""));

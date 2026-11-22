@@ -78,21 +78,28 @@ made since, each with its reason, are in the
     (below), which adds a `calibrated_screen` field from
     `NearestCalibratedScreen` alongside the uncalibrated `gaze` it already
     reads.
--   `src/preview_lease`, `src/preview_publisher`, `src/macos/preview_jpeg`,
-    `src/linux/preview_jpeg`: the camera preview (#36, #37, #61 item 8,
-    #108), gated so a frame is ever encoded only while the camera is
-    open and the menu has asked for it by creating
-    `UserPaths::preview_request` (removed to stop). `PreviewLease`,
-    following `specs/PreviewLease.tla`, is the gate: a grant never
-    carries over a camera close. `PreviewPublisher` polls the request
-    file on the frame-capture path already running, and while granted,
-    encodes each frame to JPEG (ImageIO on macOS, libjpeg on Linux) and
-    writes it to the private `UserPaths::preview_frame`, never to the
-    approved-token service every other client reaches. The menu's own
-    "Show Camera Preview" window (`tools/menu/main.mm`,
-    `tools/menu/main_linux.cc`) rereads that file on its own timer, and
-    stops the preview, removing the request file, when its own close
-    button is used or the camera itself goes off.
+-   `src/preview_lease`, `src/preview_publisher`, `src/preview_request`,
+    `src/macos/preview_jpeg`, `src/linux/preview_jpeg`: the camera
+    preview (#36, #37, #61 item 8, #108, #114), gated so a frame is ever
+    encoded only while the camera is open and the menu has asked for it
+    by creating `UserPaths::preview_request` (removed to stop) -- and
+    recently: a request left behind by a menu that quit without
+    cleaning up, crashed, or whose session logged out, goes stale
+    (`IsFreshPreviewRequest`) and stops streaming within a couple of
+    seconds rather than forever. `PreviewLease`, following
+    `specs/PreviewLease.tla`, is the gate: a grant never carries over a
+    camera close. `PreviewPublisher` polls the request file on the
+    frame-capture path already running, and while granted, encodes each
+    frame to JPEG (ImageIO on macOS, libjpeg on Linux) and writes it,
+    owner-only, to the private `UserPaths::preview_frame`, never to the
+    approved-token service every other client reaches, clearing it once
+    streaming stops. The menu's own "Show Camera Preview" window
+    (`tools/menu/main.mm`, `tools/menu/main_linux.cc`) rereads that file
+    and re-touches the request on its own timer, keeping it fresh for as
+    long as the window stays open; declines to open at all with the
+    camera off; and removes the request outright at launch, on a clean
+    quit, and when its own close button is used or the camera itself
+    goes off.
 -   `src/screen_context`, `src/screen_context_reporter`,
     `src/screen_context_reader`, `src/screen_source`: the screen context a
     reading's `context` carries (#36 item 11 of #61): the frontmost app,
@@ -309,9 +316,11 @@ subscription within a couple of seconds (#61 item 8). Only one tray
 runs at a time: choosing **Facepalm** again, which runs
 `facepalm-menu --settings`, while one is already running reopens its
 Settings form instead of opening a second tray icon (#98). **Show
-Camera Preview** opens a window of the camera, started only by hand and
-stopped from the same item, by the window's own close button, or when
-the camera goes off (#108).
+Camera Preview** opens a window of the camera, started only by hand
+(and only once the camera is already in use) and stopped from the same
+item, by the window's own close button, or when the camera goes off
+(#108); quitting the tray, or an earlier run that crashed or was logged
+out mid-preview, ends it too (#114).
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 
