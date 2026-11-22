@@ -195,6 +195,34 @@ std::optional<std::string> SetExpressionsSettleMs(std::string_view value,
   return std::nullopt;
 }
 
+// Sets expressions.eye_look_down_threshold from `value`, or returns why it
+// cannot.
+std::optional<std::string> SetExpressionsEyeLookDownThreshold(
+    std::string_view value, Config& config) {
+  const std::optional<float> threshold = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
+      *threshold > 1) {
+    return "expected a number from 0 to 1";
+  }
+  config.expressions_eye_look_down_threshold = *threshold;
+  return std::nullopt;
+}
+
+// Sets expressions.eye_blink_threshold from `value`, or returns why it
+// cannot.
+std::optional<std::string> SetExpressionsEyeBlinkThreshold(
+    std::string_view value, Config& config) {
+  const std::optional<float> threshold = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
+      *threshold > 1) {
+    return "expected a number from 0 to 1";
+  }
+  config.expressions_eye_blink_threshold = *threshold;
+  return std::nullopt;
+}
+
 // Sets looking_away.degrees from `value`, or returns why it cannot.
 std::optional<std::string> SetLookingAwayDegrees(std::string_view value,
                                                  Config& config) {
@@ -269,6 +297,12 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   }
   if (name == "expressions.settle_ms") {
     return SetExpressionsSettleMs(value, config);
+  }
+  if (name == "expressions.eye_look_down_threshold") {
+    return SetExpressionsEyeLookDownThreshold(value, config);
+  }
+  if (name == "expressions.eye_blink_threshold") {
+    return SetExpressionsEyeBlinkThreshold(value, config);
   }
   if (name == "looking_away.degrees") {
     return SetLookingAwayDegrees(value, config);

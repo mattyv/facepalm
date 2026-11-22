@@ -25,6 +25,14 @@ struct Config {
   static constexpr float kDefaultExpressionsPoseDegrees = 10.0F;
   static constexpr float kDefaultExpressionsPoseRange = 3.0F;
   static constexpr int kDefaultExpressionsSettleMs = 600;
+  // eyes_narrowed's own gate (#140): the eyeLookDown and eyeBlink scores,
+  // either eye, above which a glance down or a blink holds the squint
+  // back, so it is not read from a glance at the keyboard. Provisional:
+  // reasoned from MediaPipe's 0-to-1 scale, not yet tuned on a recording,
+  // pending #139's fixtures (test/fixtures/eyes/*.probe) or, lacking
+  // those, synthetic data replayed through src/eyes_replay.h (#147).
+  static constexpr float kDefaultExpressionsEyeLookDownThreshold = 0.3F;
+  static constexpr float kDefaultExpressionsEyeBlinkThreshold = 0.5F;
   // LookAwayDetector's defaults (#35), tuned on one person's recordings:
   // their turns and looks down held 20 to 45 degrees from the resting pose
   // for seconds, while their nods stayed within about 12 degrees of it,
@@ -51,6 +59,9 @@ struct Config {
   float expressions_pose_degrees = kDefaultExpressionsPoseDegrees;
   float expressions_pose_range = kDefaultExpressionsPoseRange;
   int expressions_settle_ms = kDefaultExpressionsSettleMs;
+  float expressions_eye_look_down_threshold =
+      kDefaultExpressionsEyeLookDownThreshold;
+  float expressions_eye_blink_threshold = kDefaultExpressionsEyeBlinkThreshold;
   bool looking_away_enabled = true;
   float looking_away_degrees = kDefaultLookingAwayDegrees;
   int looking_away_hold_ms = kDefaultLookingAwayHoldMs;
@@ -72,12 +83,13 @@ struct Config {
 // (0 to 1), expressions.spreads (0 to 100), expressions.hold_ms (a whole
 // number from 0 to 5000), expressions.pose_degrees (0 to 180),
 // expressions.pose_range (0 to 180), expressions.settle_ms (a whole number
-// from 0 to 5000), looking_away.degrees (0 to 180), looking_away.hold_ms (a
-// whole number from 0 to 10000), screen_context.enabled,
-// screen_context.window_titles_enabled (true or false), and
-// screen_context.other_screen_degrees (0 to 180). Returns the config, or
-// nothing with `error` naming the line, for an unknown name, a bad value, a
-// repeated name or a line with no `=`.
+// from 0 to 5000), expressions.eye_look_down_threshold and
+// expressions.eye_blink_threshold (0 to 1), looking_away.degrees (0 to
+// 180), looking_away.hold_ms (a whole number from 0 to 10000),
+// screen_context.enabled, screen_context.window_titles_enabled (true or
+// false), and screen_context.other_screen_degrees (0 to 180). Returns the
+// config, or nothing with `error` naming the line, for an unknown name, a
+// bad value, a repeated name or a line with no `=`.
 std::optional<Config> ParseConfig(std::string_view text, std::string& error);
 
 }  // namespace facepalm
