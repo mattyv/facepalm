@@ -30,6 +30,8 @@ export function registerFeelingCard(server) {
   registerAppTool(server, 'show_feeling_card', {
     description: 'Show the person a card to pick how they felt at one interpretation, when the host renders interactive widgets (MCP Apps). '
       + 'Pass id, feeling and feelings exactly as wait_for_reaction returned them for that beat. '
+      + 'A click sends tell_feeling itself: the pick replaces the read for that beat, in tell_feeling\'s own result where the host passes it on, '
+      + 'or otherwise found by calling get_feeling with the id. Advisory either way. '
       + 'A host without widget support shows this tool\'s own text instead: ask the person how they felt, in your own words, then call tell_feeling yourself.',
     inputSchema: { id: z.number().int().positive().safe(), feeling: feelingName, feelings: z.array(feelingName).min(1) },
     _meta: { ui: { resourceUri: feelingCardUri } },

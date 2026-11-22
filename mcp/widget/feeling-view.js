@@ -28,9 +28,18 @@ export function mountFeelingCard(app, doc) {
     all.forEach((button) => { button.disabled = true; });
     Promise.resolve(app.callServerTool({ name: 'tell_feeling', arguments: { id, feeling } }))
       .then((result) => {
-        status.textContent = result && !result.isError
-          ? 'Thanks — Facepalm will learn from this.'
-          : 'Facepalm could not take that feeling.';
+        if (result && !result.isError) {
+          status.textContent = 'Thanks — Facepalm will learn from this.';
+          // Tells the agent the pick itself (#133), for a host that does
+          // not otherwise pass this tool call's own result back to it:
+          // only once the host says it takes context updates at all, and
+          // never let a host that refuses one leave the thank-you behind.
+          if (result.structuredContent && app.getHostCapabilities?.()?.updateModelContext) {
+            Promise.resolve(app.updateModelContext({ structuredContent: result.structuredContent })).catch(() => {});
+          }
+        } else {
+          status.textContent = 'Facepalm could not take that feeling.';
+        }
       })
       .catch(() => { status.textContent = 'Facepalm could not take that feeling.'; });
   }

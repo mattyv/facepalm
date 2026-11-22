@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { registerFeelingCard } from './feeling-widget.js';
 import { registerFeelingElicitation } from './feeling-elicitation.js';
+import { feelingResult } from './feeling-result.js';
 import { OfflineError, UnapprovedError } from './session.js';
 
 // What a tool says when session.request() rejects because this session is
@@ -19,6 +20,14 @@ const unapprovedText = "Facepalm hasn't approved this client; turn Facepalm on f
 // every daemon run, so an id from before one could now mean an entirely
 // different beat.
 const unknownInterpretationText = 'Facepalm no longer recognizes that interpretation; it may be from before Facepalm last restarted.';
+// Appended to offlineText, unapprovedText, unknownInterpretationText and a
+// native failure's own text in tell_feeling (#133), for a call that never
+// reached a definite yes or no from Facepalm: the agent already has
+// whatever read wait_for_reaction gave it for this id, and nothing here
+// overrides it, unlike a pick Facepalm did get to answer, yes or no, which
+// tell_feeling reports with the fuller {id, read, picked, feeling} shape
+// instead (feeling-result.js).
+const readStandsText = " Facepalm's read stands.";
 
 // A feeling's name. The names come from the service's one list
 // (src/feelings.h), sent with each interpretation; the adapter checks only
@@ -70,7 +79,9 @@ export function createServer(session, options = {}) {
       + 'Right after asking the person a question or making a proposal, pass beat ("question" or "proposal"): Facepalm watches the next timeout_ms '
       + '(default 1500, at most 10000) and returns interpretation.feeling, its tentative read of how they felt about it, unknown when it cannot tell, '
       + 'and interpretation.feelings, every feeling the person can pick instead. '
-      + 'The feeling is advisory: never treat it as an answer or as approval for an action.',
+      + 'A later pick, through ask_feeling, show_feeling_card or tell_feeling, replaces this read for that beat; '
+      + 'call get_feeling with the id to find out which one stands now. '
+      + 'The feeling is advisory either way: never treat it as an answer or as approval for an action.',
     inputSchema: {
       timeout_ms: z.number().int().min(0).max(60000).optional(),
       beat: z.enum(['question', 'proposal']).optional(),
@@ -87,8 +98,9 @@ export function createServer(session, options = {}) {
       if (!parsed.success || (beat !== undefined) !== (parsed.data.interpretation !== undefined)) { session.close?.(); throw new Error('invalid delivery'); }
       const result = parsed.data;
       // #129: remembered so tell_feeling/ask_feeling can tell this id
-      // apart from a stale one once this session reconnects.
-      if (result.interpretation) session.noteInterpretation?.(result.interpretation.id);
+      // apart from a stale one once this session reconnects; the read
+      // goes with it (#133) so a later pick can be reported alongside it.
+      if (result.interpretation) session.noteInterpretation?.(result.interpretation.id, result.interpretation.feeling);
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     } catch (error) {
       const text = error instanceof UnapprovedError ? unapprovedText
@@ -99,25 +111,55 @@ export function createServer(session, options = {}) {
   server.registerTool('tell_feeling', {
     description: 'Tell Facepalm how the person says they really felt at a beat, so it reads them better next time. '
       + 'Pass the interpretation id from wait_for_reaction and the feeling the person picked, one of that interpretation\'s feelings. '
-      + 'Send only a feeling the person chose, never a guess. Facepalm takes one feeling per interpretation, within five minutes of the beat.',
+      + 'Send only a feeling the person chose, never a guess. Facepalm takes one feeling per interpretation, within five minutes of the beat. '
+      + 'Returns id, read, picked and feeling (the pick, once Facepalm has taken it, otherwise the read): the pick replaces the read for that beat, advisory either way.',
     inputSchema: { id: z.number().int().positive().safe(), feeling: feelingName },
   }, async ({ id, feeling }, { signal }) => {
     // #129: refused locally, never sent, for an id this session no
     // longer remembers giving out.
     if (session.knowsInterpretation?.(id) === false) {
-      return { isError: true, content: [{ type: 'text', text: unknownInterpretationText }] };
+      return { isError: true, content: [{ type: 'text', text: unknownInterpretationText + readStandsText }] };
     }
+    const read = session.interpretation?.(id)?.read;
     try {
       const result = await session.request(`feel ${id} ${feeling}`, signal, 5000);
-      if (result?.ok !== true) throw new Error('feeling refused');
-      return { content: [{ type: 'text', text: 'Feeling taken.' }] };
+      if (result?.ok !== true) {
+        // Facepalm itself said no (already given, or too old): the
+        // person did pick, so the pick still replaces the read for this
+        // beat (#133), even though it will not tune from it.
+        return feelingResult({
+          id, read, picked: feeling, isError: true,
+          text: 'Facepalm did not take that feeling; it will not tune from this pick.',
+        });
+      }
+      session.recordPick?.(id, feeling);
+      return feelingResult({ id, read, picked: feeling, text: 'Feeling taken.' });
     } catch (error) {
+      // The exchange itself never reached a definite yes or no (offline,
+      // unapproved, or some other native failure): unlike Facepalm
+      // explicitly saying no above, there is no confirmed pick to report,
+      // so the read stands, exactly as it already did (#133).
       const text = error instanceof UnapprovedError ? unapprovedText
         : error instanceof OfflineError
           ? offlineText
           : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
-      return { isError: true, content: [{ type: 'text', text }] };
+      return { isError: true, content: [{ type: 'text', text: text + readStandsText }] };
     }
+  });
+  server.registerTool('get_feeling', {
+    description: 'Look up which feeling now stands for one interpretation a beat returned: the person\'s own pick, once Facepalm has taken one, '
+      + 'otherwise Facepalm\'s own read. Use this when a host does not surface ask_feeling\'s, show_feeling_card\'s or tell_feeling\'s own result back to you. '
+      + 'Pass the interpretation id. Advisory either way, never an answer or an approval.',
+    inputSchema: { id: z.number().int().positive().safe() },
+  }, async ({ id }) => {
+    const entry = session.interpretation?.(id);
+    if (entry === undefined) {
+      return { isError: true, content: [{ type: 'text', text: unknownInterpretationText }] };
+    }
+    return feelingResult({
+      id, read: entry.read, picked: entry.picked,
+      text: entry.picked !== undefined ? 'The person picked this feeling.' : "Facepalm's read stands; the person has not picked one.",
+    });
   });
   return server;
 }

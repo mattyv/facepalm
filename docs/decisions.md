@@ -63,6 +63,75 @@ a line saying which entry replaced it.
     line beside it -- are what this decision ports onto the design actually
     on `main`.
 
+## 2026-11-22: camera_probe prints an eyes line, and a replay reader reads it back, for #139's fixtures
+
+-   **Decision (the eyes line's shape):** `camera_probe`'s new `eyes` line
+    (`FormatEyesLine`, `src/eyes_probe.h`) prints the eye-look, blink,
+    squint and wide blendshapes (MediaPipe's indices 9 through 22, left eye
+    then right, confirmed against `src/expressions.cc`'s own
+    `kEyesNarrowed = {19, 20}`), then the iris centres (landmarks 468 and
+    473) and the eye corners (33, 133, 362, 263), each as x, y and z,
+    numbers only. It prints alongside `head_pose`, under the same
+    `IsFiniteRotation` skip, since `GestureProbeReader::OnFace` already
+    holds the rotation when it decides whether to print that line.
+-   **Decision (fixture file shape):** `scripts/record_eye_fixtures.sh`
+    saves each fixture as `camera_probe`'s whole log
+    (`test/fixtures/eyes/<name>.probe`), not a line filtered down to
+    `eyes` alone the way the three `.head_pose` fixtures were. A later
+    issue's reader may want `head_pose` or `gesture_raw` from the same
+    recording, and `ReplayEyes` (`src/eyes_replay.h`) already skips every
+    line it does not read, so filtering at record time would only lose
+    information for no test that needs it.
+-   **Decision (eye corners, unnamed by side):** `EyesFrame`'s four corner
+    fields are named by landmark number (`corner_33`, `corner_133`,
+    `corner_362`, `corner_263`), not inner or outer, left or right: #139
+    groups them as `(33/133, 362/263)` without saying which is which, and
+    nothing else in this repository's code or comments settles it either.
+    The iris centres keep `iris_left`/`iris_right` instead, since
+    MediaPipe's own landmark numbering for the iris (468 left, 473 right)
+    is widely and consistently documented.
+-   **Decision (no eyes replay CLI tool, rejected):** unlike
+    `gesture_replay`'s CLI, the eyes replay reader gets no
+    `tools/eyes_replay` of its own in this change. Nothing yet prints from
+    an `EyesFrame` worth running by hand: #140 through #145 have not yet
+    written the detector whose output such a tool would show. Adding one
+    now would be code no real use can reach, against this repository's
+    rule on overengineering; one can follow once a detector exists to run.
+
+## 2026-11-22: `ask_feeling`, `tell_feeling` and the feeling card now tell the agent the person's pick, not only Facepalm, closing #133
+
+-   **Decision:** found in the live check on 2026-11-22 (#61 item 15),
+    `ask_feeling` told the agent only "Feeling taken," so a pick the person
+    made never reached the agent's own context: the agent kept treating
+    Facepalm's tentative read as what stood for that beat. `ask_feeling`,
+    `tell_feeling` and the new `get_feeling` now all return
+    `{id, read, picked, feeling}` through one result builder,
+    `mcp/feeling-result.js`: `read` is Facepalm's own interpretation,
+    `picked` is the person's pick once there is one, and `feeling` is
+    `picked ?? read` -- the pick replaces the read for that beat; with no
+    pick, the read stands, and nothing waits on one. Every result stays
+    advisory, never an answer or an approval, the card's thank-you line
+    unchanged. `mcp/session.js`'s `knownInterpretations` now keeps a
+    `{read, picked}` record per id, through two new methods,
+    `interpretation()` and `recordPick()`, rather than a bare `Set` of
+    known ids; `specs/McpSocket.tla`'s `Learn`, `Tell` and
+    `GuardForgetsIdsOnLinkDown` model only whether an id is known at all,
+    never what is stored alongside it, so they needed no change, read and
+    confirmed in the same branch (`specs/README.md`'s `McpSocket` section
+    now says so). A refusal Facepalm itself gives still carries the pick,
+    since the person did pick regardless of whether it tunes; a call that
+    never reaches a definite yes or no from Facepalm (offline, unapproved,
+    an unrecognized id, or any other native failure) leaves the read
+    standing instead, its own text unchanged but for "Facepalm's read
+    stands" appended. `mcp/widget/feeling-view.js`'s card now passes a
+    successful `tell_feeling`'s own result to the host through
+    `app.updateModelContext()`, gated on `getHostCapabilities()?.
+    updateModelContext`, with a rejection swallowed, for a host that does
+    not otherwise surface a tool call's own result back to the agent. The
+    one open risk, carried forward rather than resolved here: whether
+    Claude Desktop actually surfaces `updateModelContext` needs a live
+    check, not exercised by any test here.
+
 ## 2026-11-22: A publish in flight can no longer outlive the preview, and the MCP adapter now agrees with its own spec, closing #129
 
 -   **Decision (preview frame, #123's own review):** `specs/PreviewLease.tla`

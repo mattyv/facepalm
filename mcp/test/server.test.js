@@ -98,19 +98,19 @@ test('tell_feeling refuses an interpretation this session no longer remembers, u
   } finally { await client.close(); await server.close(); }
 });
 
-test('wait_for_reaction records an interpretation id so tell_feeling can recognize it later (#129)', async () => {
+test('wait_for_reaction records an interpretation id and its read so tell_feeling can recognize it later (#129, #133)', async () => {
   const noted = [];
   const session = {
     request: async () => ({
       readings: [], missed: 0,
       interpretation: { id: 7, feeling: 'agreement', beat: 'question', feelings: ['agreement', 'unknown'] },
     }),
-    noteInterpretation: (id) => noted.push(id),
+    noteInterpretation: (id, read) => noted.push([id, read]),
   };
   const { server, client } = await connected(session);
   try {
     await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'question' } });
-    assert.deepEqual(noted, [7]);
+    assert.deepEqual(noted, [[7, 'agreement']]);
   } finally { await client.close(); await server.close(); }
 });
 
@@ -150,6 +150,100 @@ test('a refused or failed feeling is an error', async () => {
       assert.doesNotMatch(JSON.stringify(result), /private/);
     } finally { await client.close(); await server.close(); }
   }
+});
+
+test('tell_feeling returns id, read, picked and feeling once Facepalm takes the pick, and records it (#133)', async () => {
+  const picks = [];
+  const session = {
+    request: async () => ({ ok: true }),
+    knowsInterpretation: (id) => id === 7,
+    interpretation: (id) => (id === 7 ? { read: 'agreement', picked: undefined } : undefined),
+    recordPick: (id, picked) => picks.push([id, picked]),
+  };
+  const { server, client } = await connected(session);
+  try {
+    const result = await client.callTool({ name: 'tell_feeling', arguments: { id: 7, feeling: 'disagreement' } });
+    assert.notEqual(result.isError, true);
+    assert.deepEqual(result.structuredContent, { id: 7, read: 'agreement', picked: 'disagreement', feeling: 'disagreement' });
+    assert.deepEqual(picks, [[7, 'disagreement']]);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('tell_feeling carries the picked feeling even when Facepalm refuses it, without recording it (#133)', async () => {
+  const picks = [];
+  const session = {
+    request: async () => ({ ok: false }),
+    knowsInterpretation: (id) => id === 7,
+    interpretation: (id) => (id === 7 ? { read: 'agreement', picked: undefined } : undefined),
+    recordPick: (id, picked) => picks.push([id, picked]),
+  };
+  const { server, client } = await connected(session);
+  try {
+    const result = await client.callTool({ name: 'tell_feeling', arguments: { id: 7, feeling: 'disagreement' } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /will not tune/);
+    assert.deepEqual(result.structuredContent, { id: 7, read: 'agreement', picked: 'disagreement', feeling: 'disagreement' });
+    assert.deepEqual(picks, []);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('tell_feeling says Facepalm\'s read stands when the exchange itself never reached a yes or no (#133)', async () => {
+  for (const session of [
+    { request: async () => { throw new OfflineError('offline'); }, interpretation: () => ({ read: 'agreement', picked: undefined }) },
+    { request: async () => { throw new UnapprovedError('unapproved'); }, interpretation: () => ({ read: 'agreement', picked: undefined }) },
+  ]) {
+    const { server, client } = await connected(session);
+    try {
+      const result = await client.callTool({ name: 'tell_feeling', arguments: { id: 7, feeling: 'disagreement' } });
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /Facepalm's read stands/);
+      assert.equal('structuredContent' in result, false);
+    } finally { await client.close(); await server.close(); }
+  }
+});
+
+test('tell_feeling says Facepalm\'s read stands for an id this session no longer remembers (#129, #133)', async () => {
+  const { server, client } = await connected({ request: () => assert.fail('must not send a pick'), knowsInterpretation: () => false });
+  try {
+    const result = await client.callTool({ name: 'tell_feeling', arguments: { id: 7, feeling: 'disagreement' } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /no longer recognizes/);
+    assert.match(result.content[0].text, /Facepalm's read stands/);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('get_feeling reports the person\'s pick once Facepalm has one, otherwise the read (#133)', async () => {
+  const session = {
+    request: async () => assert.fail('must not reach Facepalm'),
+    interpretation: (id) => {
+      if (id === 7) return { read: 'agreement', picked: 'disagreement' };
+      if (id === 9) return { read: 'confused', picked: undefined };
+      return undefined;
+    },
+  };
+  const { server, client } = await connected(session);
+  try {
+    const tool = (await client.listTools()).tools.find((item) => item.name === 'get_feeling');
+    assert.ok(tool);
+    const picked = await client.callTool({ name: 'get_feeling', arguments: { id: 7 } });
+    assert.notEqual(picked.isError, true);
+    assert.deepEqual(picked.structuredContent, { id: 7, read: 'agreement', picked: 'disagreement', feeling: 'disagreement' });
+    const unpicked = await client.callTool({ name: 'get_feeling', arguments: { id: 9 } });
+    assert.notEqual(unpicked.isError, true);
+    assert.deepEqual(unpicked.structuredContent, { id: 9, read: 'confused', picked: undefined, feeling: 'confused' });
+    assert.match(unpicked.content[0].text, /read stands/);
+    const unknown = await client.callTool({ name: 'get_feeling', arguments: { id: 1 } });
+    assert.equal(unknown.isError, true);
+    assert.match(unknown.content[0].text, /no longer recognizes/);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('get_feeling rejects malformed input', async () => {
+  const { server, client } = await connected({ request: async () => ({}) });
+  try {
+    const result = await client.callTool({ name: 'get_feeling', arguments: { id: 0 } });
+    assert.equal(result.isError, true);
+  } finally { await client.close(); await server.close(); }
 });
 
 test('screen context round-trips through the delivery, window title and calibrated screen included', async () => {
