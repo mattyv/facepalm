@@ -72,6 +72,7 @@ void CopyBgra(const v4l2_pix_format& format, const std::uint8_t* rgb,
 // specs/CameraLifecycle.tla's DeviceLost, DeviceBack, OtherDeviceLost and
 // OtherDeviceBack (#111): `hotplug` is asked to watch for them, the way
 // AVFoundation's own notifications already do for AvFoundationSession.
+// Starting the watch itself waits for StartWatching (#115).
 V4l2Session::V4l2Session(
     std::string device_id, std::function<void(const Frame&)> on_frame,
     std::function<void()> on_session_failed,
@@ -80,11 +81,19 @@ V4l2Session::V4l2Session(
     HotplugMonitor& hotplug)
     : device_id_(std::move(device_id)),
       on_frame_(std::move(on_frame)),
-      on_session_failed_(std::move(on_session_failed)) {
-  hotplug.Start(std::move(on_disconnected), std::move(on_connected));
-}
+      on_session_failed_(std::move(on_session_failed)),
+      on_disconnected_(std::move(on_disconnected)),
+      on_connected_(std::move(on_connected)),
+      hotplug_(hotplug) {}
 
 V4l2Session::~V4l2Session() { Stop(); }
+
+// #115: deferred from the constructor, so the watcher thread this starts
+// cannot call back into a sibling the constructor's own caller had not
+// yet constructed.
+void V4l2Session::StartWatching() {
+  hotplug_.Start(std::move(on_disconnected_), std::move(on_connected_));
+}
 
 // Configure checks device permissions on the first approved open attempt.
 CaptureSession::Permission V4l2Session::CurrentPermission() {
