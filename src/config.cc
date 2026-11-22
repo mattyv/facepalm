@@ -20,6 +20,7 @@ constexpr float kMostExpressionsPoseRange = 180;
 constexpr int kMostExpressionsSettleMs = 5000;
 constexpr float kMostLookingAwayDegrees = 180;
 constexpr int kMostLookingAwayHoldMs = 10000;
+constexpr int kMostLookingAwayAvertedMs = 30000;
 constexpr float kMostScreenContextOtherScreenDegrees = 180;
 constexpr float kMostEyeGazeGain = 200;
 constexpr int kMostEyeGazeMs = 10000;
@@ -250,6 +251,19 @@ std::optional<std::string> SetLookingAwayHoldMs(std::string_view value,
   return std::nullopt;
 }
 
+// Sets looking_away.averted_ms (#141) from `value`, or returns why it
+// cannot.
+std::optional<std::string> SetLookingAwayAvertedMs(std::string_view value,
+                                                   Config& config) {
+  const std::optional<int> averted_ms = Number<int>(value);
+  if (!averted_ms || *averted_ms < 0 ||
+      *averted_ms > kMostLookingAwayAvertedMs) {
+    return "expected a whole number from 0 to 30000";
+  }
+  config.looking_away_averted_ms = *averted_ms;
+  return std::nullopt;
+}
+
 // Sets screen_context.other_screen_degrees from `value`, or returns why it
 // cannot.
 std::optional<std::string> SetScreenContextOtherScreenDegrees(
@@ -317,9 +331,10 @@ std::optional<std::string> SetEyeGazeMs(const Setting& setting,
 }
 
 // Sets eye_gaze.head_only_yaw_degrees, calibration.min_head_travel_degrees,
-// calibration.min_axis_degrees or calibration.min_spread_degrees (#137)
-// from `value`, or returns why it cannot. `setting.name` is one of those
-// four, as `Set` has already checked.
+// calibration.min_axis_degrees, calibration.min_spread_degrees (#137) or
+// looking_away.other_screen_margin_degrees (#141) from `value`, or returns
+// why it cannot. `setting.name` is one of those five, as `Set` has
+// already checked.
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::optional<std::string> SetDegreesSetting(const Setting& setting,
                                              Config& config) {
@@ -335,8 +350,10 @@ std::optional<std::string> SetDegreesSetting(const Setting& setting,
     config.calibration_min_head_travel_degrees = *degrees;
   } else if (setting.name == "calibration.min_axis_degrees") {
     config.calibration_min_axis_degrees = *degrees;
-  } else {
+  } else if (setting.name == "calibration.min_spread_degrees") {
     config.calibration_min_spread_degrees = *degrees;
+  } else {
+    config.looking_away_other_screen_margin_degrees = *degrees;
   }
   return std::nullopt;
 }
@@ -390,6 +407,9 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   if (name == "looking_away.hold_ms") {
     return SetLookingAwayHoldMs(value, config);
   }
+  if (name == "looking_away.averted_ms") {
+    return SetLookingAwayAvertedMs(value, config);
+  }
   if (name == "screen_context.other_screen_degrees") {
     return SetScreenContextOtherScreenDegrees(value, config);
   }
@@ -406,7 +426,8 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   if (name == "eye_gaze.head_only_yaw_degrees" ||
       name == "calibration.min_head_travel_degrees" ||
       name == "calibration.min_axis_degrees" ||
-      name == "calibration.min_spread_degrees") {
+      name == "calibration.min_spread_degrees" ||
+      name == "looking_away.other_screen_margin_degrees") {
     return SetDegreesSetting(setting, config);
   }
   return "unknown setting " + std::string(name);

@@ -282,4 +282,43 @@ std::optional<std::size_t> NearestCalibratedScreen(
   return nearest;
 }
 
+std::optional<std::size_t> CalibratedScreenBoxContaining(
+    const CalibrationProfile& profile, const HeadRotation& gaze,
+    double margin_degrees) {
+  for (std::size_t index = 0; index < profile.screens.size(); ++index) {
+    const ScreenCalibration& screen = profile.screens[index];
+    double min_yaw = 0;
+    double max_yaw = 0;
+    double min_pitch = 0;
+    double max_pitch = 0;
+    bool first = true;
+    for (const CalibrationPoint point : kCalibrationPoints) {
+      if (point == CalibrationPoint::kCentre) {
+        continue;  // The box is the four corners' own span.
+      }
+      const HeadRotation& corner =
+          screen.points[static_cast<std::size_t>(point)];
+      if (first) {
+        min_yaw = corner.yaw_degrees;
+        max_yaw = corner.yaw_degrees;
+        min_pitch = corner.pitch_degrees;
+        max_pitch = corner.pitch_degrees;
+        first = false;
+      } else {
+        min_yaw = std::min(min_yaw, corner.yaw_degrees);
+        max_yaw = std::max(max_yaw, corner.yaw_degrees);
+        min_pitch = std::min(min_pitch, corner.pitch_degrees);
+        max_pitch = std::max(max_pitch, corner.pitch_degrees);
+      }
+    }
+    if (gaze.yaw_degrees >= min_yaw - margin_degrees &&
+        gaze.yaw_degrees <= max_yaw + margin_degrees &&
+        gaze.pitch_degrees >= min_pitch - margin_degrees &&
+        gaze.pitch_degrees <= max_pitch + margin_degrees) {
+      return index;
+    }
+  }
+  return std::nullopt;
+}
+
 }  // namespace facepalm
