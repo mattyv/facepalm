@@ -22,7 +22,10 @@ bool ReplayLookingAway(std::istream& input, std::ostream& output) {
       .pose_range = Config::kDefaultExpressionsPoseRange,
       .settle_ms = Config::kDefaultExpressionsSettleMs,
       .spreads = Config::kDefaultExpressionsSpreads,
-      .hold_ms = Config::kDefaultExpressionsHoldMs});
+      .hold_ms = Config::kDefaultExpressionsHoldMs,
+      .eye_look_down_threshold =
+          Config::kDefaultExpressionsEyeLookDownThreshold,
+      .eye_blink_threshold = Config::kDefaultExpressionsEyeBlinkThreshold});
   LookAwayDetector detector({.degrees = Config::kDefaultLookingAwayDegrees,
                              .hold_ms = Config::kDefaultLookingAwayHoldMs});
   std::int64_t last = -1;

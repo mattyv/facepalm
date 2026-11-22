@@ -2,6 +2,7 @@
 #define FACEPALM_SRC_FEED_H_
 
 #include <chrono>
+#include <compare>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -31,6 +32,8 @@ class Feed {
     std::int64_t id;  // Unique among this run's interpretations.
     Feeling feeling;
     BeatKind beat;  // What the client marked the beat after.
+    friend auto operator<=>(const Interpretation&,
+                            const Interpretation&) = default;
   };
 
   struct Delivery {

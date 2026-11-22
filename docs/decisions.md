@@ -17,6 +17,125 @@ reads), and keeping them local only (CI could not replay them). Decided by
 the user on 2026-11-22. Evidence:
 [#139](https://github.com/mattyv/facepalm/issues/139).
 
+## 2026-11-22: eyes_narrowed is gated on the raw eyeLookDown and eyeBlink scores, not #137's composed gaze
+
+-   **Decision (what gates it):** `ExpressionTracker`'s `eyes_narrowed`
+    (`src/expressions.cc`, #140) is also gated on MediaPipe's own
+    `eyeLookDown` (indices 11, 12) and `eyeBlink` (9, 10) blendshapes,
+    straight from the `Scores` `Update` already receives: the higher of
+    each pair, each against its own threshold. A downward glance, as at a
+    keyboard, or a blink lifts `eyeSquint` the same way a real squint
+    does, so without this gate a glance at the keyboard reads as
+    confused. Scoped to `eyes_narrowed` alone: the other four expressions
+    are read as usual while it is gated.
+-   **Decision (read from the raw scores, not #137's gaze):** #137 is
+    building a composed gaze reading in parallel on its own branch; this
+    gate does not depend on it, reads the two blendshapes directly, and
+    holds whether or not that composed reading ever lands.
+-   **Decision (skip the state entirely, like the pose gate):** a gated
+    frame skips `eyes_narrowed`'s own level, spread and hold update
+    entirely, mirroring how the existing pose gate (#46) skips every
+    state while the head is away: the glance or blink neither reports nor
+    learns into the resting squint, and a hold that straddles it restarts
+    once it ends, rather than carrying a partial hold across the gap.
+-   **Decision (provisional thresholds):** `Config::kDefaultExpressionsEyeLookDownThreshold`
+    (0.3) and `kDefaultExpressionsEyeBlinkThreshold` (0.5) are reasoned
+    from MediaPipe's 0-to-1 blendshape scale, not measured: #139's
+    fixtures (`test/fixtures/eyes/*.probe`) are not yet recorded, and no
+    camera was opened to record them for this change. They are to be
+    tuned once those fixtures exist, or, lacking those, against synthetic
+    data replayed through `src/eyes_replay.h` (#147).
+-   **Decision (no spec):** no TLA+ spec models `ExpressionTracker`; its
+    gates are simple per-frame arithmetic with no lifecycle or
+    concurrency of their own, so `CLAUDE.md`'s spec-first rule does not
+    apply here, as it did not for the pose gate (#46) either.
+
+## 2026-11-22: A window-count tracker decides when Command-Tab can reach the menu app (#146)
+
+-   **Decision (where the counting lives):** `WindowActivationTracker`
+    (`src/window_activation.h`), not booleans or an open-window count kept
+    on `FacepalmApp` itself, counts how many of Settings, the camera
+    preview and the calibration wizard are open and decides when
+    `tools/menu/main.mm` must flip `NSApp`'s activation policy between
+    `NSApplicationActivationPolicyAccessory` and `...Regular`: the one
+    piece of logic in the fix, kept apart and unit-tested the way #64
+    asked, with `main.mm` only wiring `WindowOpened()`/`WindowClosed()`
+    calls at each of the three windows' open and close points and
+    applying the `ActivationPolicyChange` it returns.
+-   **Decision (no TLA+ spec):** the tracker is a plain counter with a
+    floor at zero, run on Cocoa's single main thread with no concurrency
+    or cross-process race for a spec to model, unlike `SingleInstance.tla`
+    or `CalibrationMenu.tla`; it is tested the same way `src/look_away.h`'s
+    pure computation is, with ordinary unit tests enumerating its cases.
+-   **Decision (defensive, not failing, on an unmatched close):** a
+    `WindowClosed()` with nothing open returns `kNone` rather than letting
+    the count go negative, so a close notification this tracker was never
+    told to expect an open for can never flip the policy back a second
+    time; no such call is currently possible from `main.mm`'s own wiring,
+    but the tracker does not rely on that staying true.
+-   **Rejected:** giving each of the three windows its own boolean on
+    `FacepalmApp` and summing them inline at each open and close point --
+    the same decision, repeated three times in untested Objective-C++,
+    which is exactly what #64 found wrong with `main.mm` already.
+
+## 2026-11-22: The camera preview now shows the readings and the latest beat's feeling, closing #134
+
+-   **Decision:** beside the frame, in the same private folder, under the same
+    rules (0600 file, 0700 folder, written only while the preview streams,
+    cleared when it stops): `UserPaths::preview_readings`, a plain text file
+    holding the readings as they happen (the same summary
+    `FeedClients::Deliver` already builds for the reaction feed, such as
+    "Gesture: nod"), each held for two seconds so it can be read
+    (`src/preview_readings.h`'s `PreviewReadings::kHoldMs`), and the latest
+    beat's feeling (such as "Last read: confused (question)"), which never
+    expires on its own. Both menus (`tools/menu/main.mm`, which adds a text
+    field below the preview image; `tools/menu/main_linux.cc`'s `CameraPreview`,
+    which adds a `QLabel` and its own `RefreshReadings` method so `Refresh`'s
+    own cognitive complexity stays down) poll it the same way they already
+    poll the frame.
+-   **Why:** the preview, a diagnostic for watching Facepalm read you live
+    (#61 item 15), showed only the frame; a person watching it had no way to
+    see what Facepalm made of what it saw, moment to moment, or what the
+    last beat was read as.
+-   **Mechanism:** `PreviewReadings` holds only the text -- the reading (with
+    its own hold, reset by a new one, cleared by an empty summary's own
+    "nothing recognized" case, which changes nothing) and the feeling line --
+    never deciding on its own whether the preview is streaming. Engine
+    publishes it through `PreviewLease::Publish`, the very same gate
+    `PreviewPublisher::OnFrame` already takes for the frame -- one mutex, one
+    method, called twice over -- once a frame, alongside the frame's own
+    publish, so a reading's hold expiring shows up even when nothing new has
+    happened. The latest beat's feeling reaches it through a new optional
+    `on_beat` callback on `ApprovedFeed`, fired with the `Feed::Interpretation`
+    a `Beat` resolves with, so Engine never has to reach into `ReactionFeed`
+    for it. `specs/PreviewLease.tla` covers the new file the way #131 covers
+    the frame: `readings_exists`, published by the new `PublishReadings`
+    action, shares `GuardPublishChecksStreaming` and `GuardStartClearsFrame`
+    with the frame's own `frame_exists` -- the same method, the same mutex --
+    and needs no `pending_publish` of its own, since nothing in
+    `src/preview_readings.h` ever releases the lock between building the line
+    and writing it. `NeverReadingsWithoutStreaming` holds; both existing
+    mutations of the two shared guards now break it too.
+-   **Rejected:** a second lease or mutex of the readings' own (the frame's
+    already serializes every writer that needs to agree with it on whether
+    the preview is streaming, so a second one would only risk disagreeing
+    with the first); modeling the readings' own write with a `pending_publish`
+    of its own (there is no encode-like delay between deciding what to write
+    and writing it, unlike the frame, so there is no gap for another
+    transition to land inside); expiring the latest beat's feeling the way a
+    reading expires (the issue asks for the *latest* beat's feeling, not a
+    momentary one).
+-   **Evidence:** [#134](https://github.com/mattyv/facepalm/issues/134);
+    Codex's draft on `fix/delivery-audit` (`5757ad1`, `97af5ac`) was read
+    first, against a `PreviewLease` design (`Ticket`/`PreviewOwner`,
+    `Publish(ticket, frame)`) that predates #114/#129's simpler
+    `CameraOpened`/`CameraClosed`/`Start`/`Stop`/`Publish(write)` one now on
+    `main`, so its own `PreviewLease` and `PreviewPublisher` changes do not
+    apply; its ideas worth keeping -- a `PreviewInfo`-like summary already
+    built once and reused, a short-lived "recent cue" hold, and a feeling
+    line beside it -- are what this decision ports onto the design actually
+    on `main`.
+
 ## 2026-11-22: camera_probe prints an eyes line, and a replay reader reads it back, for #139's fixtures
 
 -   **Decision (the eyes line's shape):** `camera_probe`'s new `eyes` line

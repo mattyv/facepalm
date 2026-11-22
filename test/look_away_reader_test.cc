@@ -78,7 +78,9 @@ class LookAwayReaderTest : public ::testing::Test {
                                   .pose_range = 3,
                                   .settle_ms = 600,
                                   .spreads = 3,
-                                  .hold_ms = 200},
+                                  .hold_ms = 200,
+                                  .eye_look_down_threshold = 0.3,
+                                  .eye_blink_threshold = 0.5},
       LookAwayDetector::Settings{.degrees = 15, .hold_ms = 1000}};
   std::vector<Reaction> reactions_;
 };

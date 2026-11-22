@@ -39,6 +39,20 @@
 \* camera_session_/started_session_, rather than inventing a check for
 \* code that already worked without it.
 \*
+\* #134: the readings text beside the frame is modeled the same way, as
+\* `readings_exists`. It is published through the very same
+\* PreviewLease::Publish src/preview_readings.h's own writer calls for the
+\* frame -- one mutex, one method, called twice over -- so it shares
+\* `GuardPublishChecksStreaming` and `GuardStartClearsFrame` rather than
+\* needing guards of its own: disabling either already reproduces #129's
+\* finding for both files at once, which is exactly what sharing one
+\* method gives. Unlike `frame_exists`, it needs no `pending_publish` of
+\* its own: nothing in src/preview_readings.h ever releases the lock
+\* between building the text and writing it (no slow encode, as
+\* PreviewPublisher::OnFrame's frame has), so `PublishReadings` is one
+\* atomic step, the decision and the write together, the way `Frame` and
+\* `Publish` together are for the frame.
+\*
 \* #129: the file on disk is now modeled too. `frame_exists` is whether
 \* PreviewPublisher's own `publish_` has a frame written; `pending_publish`
 \* is whether OnFrame has decided to encode one and is still waiting, this
@@ -66,14 +80,16 @@ CONSTANTS StaleAge, MaxAge,
           GuardStartNeedsCamera, GuardStreamingTracksLease, GuardRequestFresh,
           GuardPublishChecksStreaming, GuardStartClearsFrame
 VARIABLES camera, streaming, requested, menu_alive, age, frame_exists,
-          pending_publish
+          pending_publish, readings_exists
 vars == <<camera, streaming, requested, menu_alive, age, frame_exists,
-          pending_publish>>
+          pending_publish, readings_exists>>
 
 Init == /\ camera = "closed" /\ streaming = FALSE
         /\ requested = FALSE /\ menu_alive = TRUE /\ age = 0
         /\ pending_publish = FALSE
         /\ frame_exists \in (IF GuardStartClearsFrame THEN {FALSE} ELSE BOOLEAN)
+        /\ readings_exists \in
+             (IF GuardStartClearsFrame THEN {FALSE} ELSE BOOLEAN)
 
 \* Whether the request is still within the couple of seconds the daemon
 \* grants a live menu's own refresh timer to catch up (#114):
@@ -88,7 +104,7 @@ Fresh == age <= StaleAge \/ ~GuardRequestFresh
 \* streaming off -- so frame_exists follows streaming' here too.
 CameraOpens == /\ camera = "closed"
                /\ camera' = "open" /\ streaming' = FALSE
-               /\ frame_exists' = FALSE
+               /\ frame_exists' = FALSE /\ readings_exists' = FALSE
                /\ UNCHANGED <<requested, menu_alive, age, pending_publish>>
 
 \* DaemonAdmission.tla's own last-leave, taken as given here: ends any
@@ -97,6 +113,8 @@ CameraCloses == /\ camera = "open" /\ camera' = "closed"
                 /\ streaming' = (IF GuardStreamingTracksLease
                                   THEN FALSE ELSE streaming)
                 /\ frame_exists' = (IF streaming' THEN frame_exists ELSE FALSE)
+                /\ readings_exists' = (IF streaming' THEN readings_exists
+                                        ELSE FALSE)
                 /\ UNCHANGED <<requested, menu_alive, age, pending_publish>>
 
 \* PreviewLease!Start: the menu's own ask (#108), fired again by its own
@@ -115,7 +133,7 @@ StartPreview == /\ menu_alive
                                   THEN camera = "open" \/ ~GuardStartNeedsCamera
                                   ELSE streaming)
                 /\ UNCHANGED <<camera, menu_alive, frame_exists,
-                              pending_publish>>
+                              pending_publish, readings_exists>>
 
 \* PreviewLease!Stop: the menu's own explicit stop -- toggling the menu
 \* item off, or its preview window's own close button (#108) -- while it
@@ -127,6 +145,8 @@ StopPreview == /\ requested /\ menu_alive
                /\ streaming' = (IF GuardStreamingTracksLease
                                  THEN FALSE ELSE streaming)
                /\ frame_exists' = (IF streaming' THEN frame_exists ELSE FALSE)
+               /\ readings_exists' = (IF streaming' THEN readings_exists
+                                       ELSE FALSE)
                /\ UNCHANGED <<camera, menu_alive, age, pending_publish>>
 
 \* The daemon's own per-frame check (#37 item 8, #114),
@@ -154,6 +174,7 @@ Frame == /\ camera = "open" /\ ~pending_publish
                            ELSE streaming)
          /\ pending_publish' = streaming'
          /\ frame_exists' = (IF streaming' THEN frame_exists ELSE FALSE)
+         /\ readings_exists' = (IF streaming' THEN readings_exists ELSE FALSE)
          /\ UNCHANGED <<camera, requested, menu_alive>>
 
 \* #129: PreviewPublisher::OnFrame's own publish_ call, once its encode
@@ -171,7 +192,20 @@ Publish == /\ pending_publish
            /\ pending_publish' = FALSE
            /\ frame_exists' = (IF GuardPublishChecksStreaming
                                 THEN streaming ELSE TRUE)
-           /\ UNCHANGED <<camera, streaming, requested, menu_alive, age>>
+           /\ UNCHANGED <<camera, streaming, requested, menu_alive, age,
+                         readings_exists>>
+
+\* #134: src/preview_readings.h's own write, through the same
+\* PreviewLease::Publish as Publish above -- one atomic step, since
+\* nothing releases the lock between building the text and writing it.
+\* GuardPublishChecksStreaming is that same method's re-check of
+\* `streaming` at the moment of the write, shared with Publish rather than
+\* given a guard of its own, since it is the very same check in the very
+\* same method either file's write runs through.
+PublishReadings == /\ readings_exists' = (IF GuardPublishChecksStreaming
+                                           THEN streaming ELSE TRUE)
+                    /\ UNCHANGED <<camera, streaming, requested, menu_alive,
+                                  age, frame_exists, pending_publish>>
 
 \* The menu quits without cleaning up, crashes, or the session logs out
 \* while the preview is open (#114): irreversible, and asks and removes
@@ -180,10 +214,10 @@ Publish == /\ pending_publish
 MenuDies == /\ menu_alive
             /\ menu_alive' = FALSE
             /\ UNCHANGED <<camera, streaming, requested, age, frame_exists,
-                          pending_publish>>
+                          pending_publish, readings_exists>>
 
 Next == CameraOpens \/ CameraCloses \/ StartPreview \/ StopPreview \/ Frame
-           \/ Publish \/ MenuDies
+           \/ Publish \/ PublishReadings \/ MenuDies
 \* Frame needs to be fair, not only CameraOpens (#114): it is what both
 \* grants a fresh request once the camera opens and ages a dead menu's
 \* stale one away, and neither liveness property below can hold if the
@@ -212,6 +246,14 @@ NeverStreamsOnAStaleRequest == streaming => (requested /\ Fresh)
 \* (GuardStartClearsFrame) or a publish in flight recreated one after a
 \* transition had already cleared it (GuardPublishChecksStreaming).
 NeverFrameWithoutStreaming == frame_exists => streaming
+
+\* #134: the readings text never outlives the preview either, the same
+\* way and for the same two reasons (a crash's leftover, or a write in
+\* flight landing after a transition already cleared it) -- both files
+\* going through the one PreviewLease::Publish, so one mutation of
+\* GuardPublishChecksStreaming or GuardStartClearsFrame breaks this
+\* alongside NeverFrameWithoutStreaming above.
+NeverReadingsWithoutStreaming == readings_exists => streaming
 
 \* Liveness (#114): once the menu that made a request is gone, streaming
 \* always eventually stops -- and, since nothing but a live menu's own
