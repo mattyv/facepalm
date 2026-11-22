@@ -394,7 +394,9 @@ TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheGainsStep) {
 
 // A step where every frame blinks captures nothing for the eye signal, so
 // it falls back to a centred (0, 0) average rather than crashing or
-// leaving a stale value (#137).
+// leaving a stale value (#137): one indivisible walk through a whole
+// session, the same as the other full-session tests above.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(CalibrationWalksEveryTargetTest,
        AllBlinkFramesLeaveTheRestingEyeCentred) {
   std::string start_error;

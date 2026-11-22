@@ -152,6 +152,18 @@ TEST_F(EyeGazeTrackerTest, ReportsNeitherSignalNorRestingBeforeAnyFrame) {
   EXPECT_FALSE(tracker_.Resting().has_value());
 }
 
+// A blink as the very first frame a fresh tracker ever sees: neither
+// LearnResting nor the median window's own deque is ever touched, so
+// recent_ is still empty when Update's eviction loop checks it -- the
+// same empty deque as before any frame at all, not a gap clearing a
+// window that had something in it.
+TEST_F(EyeGazeTrackerTest, ABlinkAsTheVeryFirstFrameLearnsNothing) {
+  const Face blinking = FaceWithEyes({.blink_left = 0.9F, .blink_right = 0.9F});
+  tracker_.Update(blinking, 0);
+  EXPECT_FALSE(tracker_.Signal().has_value());
+  EXPECT_FALSE(tracker_.Resting().has_value());
+}
+
 TEST_F(EyeGazeTrackerTest, LearnsARestingLevelOverTheRestingWindow) {
   // Centred eyes, steady, for just over resting_ms: by then the level is
   // learned and a face arriving the same instant also reports a signal.
