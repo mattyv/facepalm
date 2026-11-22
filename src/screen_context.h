@@ -65,7 +65,12 @@ ScreenSide SideOf(std::span<const ScreenRect> screens);
 // lifecycle, such as sampling started and stopped with the camera), so it
 // is tested directly rather than modeled.
 //
-// Reads `pose` against `resting`: no resting pose yet is kUnknown. Within
+// Reads `gaze` against `resting`: `gaze` is head pose composed with eye-in-
+// head signal (src/eye_gaze.h's ComposeGaze), not head pose alone (#137);
+// `resting` stays the resting head pose either way, since ComposeGaze
+// already reads eye signal relative to its own resting level, so the
+// difference below still isolates how far the person is looking from
+// where they rest. No resting pose yet is kUnknown. Within
 // `settings.other_screen_degrees` of it is kThisScreen. Past
 // `settings.away_degrees` is kAway. Between the two, the turn is read as
 // toward a screen `side` says is there (kOtherScreen) or, with none known
@@ -75,7 +80,7 @@ ScreenSide SideOf(std::span<const ScreenRect> screens);
 // cannot point at a second screen in this model, so it only ever pushes the
 // reading toward kAway. Monitors stacked above or below each other are not
 // modeled.
-Gaze CoarseGazeFrom(const HeadRotation& pose,
+Gaze CoarseGazeFrom(const HeadRotation& gaze,
                     const std::optional<HeadRotation>& resting, ScreenSide side,
                     const GazeSettings& settings);
 

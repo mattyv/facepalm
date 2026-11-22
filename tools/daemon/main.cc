@@ -39,6 +39,7 @@
 #include "src/daemon_control.h"
 #include "src/daemon_options.h"
 #include "src/daemon_status.h"
+#include "src/eye_gaze.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
 #include "src/face_readers.h"
@@ -287,24 +288,40 @@ class Engine : public DaemonController, public DaemonPipeline {
             preview_lease_),
         screen_source_(config.screen_context_enabled ? MakeScreenSource()
                                                      : nullptr),
-        screen_context_reader_(ExpressionTracker::Settings{
-            .rise = config.expressions_smallest_rise,
-            .pose_degrees = config.expressions_pose_degrees,
-            .pose_range = config.expressions_pose_range,
-            .settle_ms = config.expressions_settle_ms,
-            .spreads = config.expressions_spreads,
-            .hold_ms = config.expressions_hold_ms}),
+        screen_context_reader_(
+            ExpressionTracker::Settings{
+                .rise = config.expressions_smallest_rise,
+                .pose_degrees = config.expressions_pose_degrees,
+                .pose_range = config.expressions_pose_range,
+                .settle_ms = config.expressions_settle_ms,
+                .spreads = config.expressions_spreads,
+                .hold_ms = config.expressions_hold_ms},
+            EyeGazeTracker::Settings{
+                .blink_threshold = config.eye_gaze_blink_threshold,
+                .median_ms = config.eye_gaze_median_ms,
+                .resting_ms = config.eye_gaze_resting_ms,
+                .gap_ms = config.eye_gaze_gap_ms}),
+        // std::in_place, not a temporary moved in: ScreenContextReporter
+        // holds a mutex (SetProfile's own, #137), so it is neither
+        // copyable nor movable.
         reporter_(
             screen_source_
-                ? std::optional<ScreenContextReporter>(ScreenContextReporter(
-                      *screen_source_,
+                ? std::optional<ScreenContextReporter>(
+                      std::in_place, *screen_source_,
                       GazeSettings{
                           .other_screen_degrees =
                               config.screen_context_other_screen_degrees,
                           .away_degrees = config.looking_away_degrees},
                       config.screen_context_window_titles_enabled,
-                      calibration_profile))
+                      calibration_profile,
+                      EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
+                              .vertical = config.eye_gaze_vertical_gain},
+                      config.eye_gaze_head_only_yaw_degrees)
                 : std::nullopt),
+        calibration_profile_(calibration_profile
+                                 ? std::optional<CalibrationProfile>(
+                                       *calibration_profile)
+                                 : std::nullopt),
         feelings_(std::move(feelings)),
         status_path_(std::move(status_path)),
         feed_(kFeedCapacity, *feelings_),
@@ -319,7 +336,9 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this] {
               return reporter_ ? std::make_optional(reporter_->Json(
                                      screen_context_reader_.Pose(),
-                                     screen_context_reader_.RestingPose()))
+                                     screen_context_reader_.RestingPose(),
+                                     screen_context_reader_.EyeReading(),
+                                     screen_context_reader_.EyeResting()))
                                : std::nullopt;
             }),
         approved_(
@@ -343,17 +362,38 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
             }),
-        // Calibration (#116): empty with no --home, like the preview
+        // Calibration (#116, #137): empty with no --home, like the preview
         // paths above. CalibrationSession takes its store by reference, so
         // both are owned here, kept alive as long as calibration_ forwards
-        // to the controller they make together.
+        // to the controller they make together. on_finished is #136's own
+        // fix: the daemon's own composition root swaps the freshly saved
+        // profile into reporter_ at once (ScreenContextReporter::SetProfile),
+        // rather than only on the next run.
         calibration_store_(calibration_store_path.empty()
                                ? nullptr
                                : std::make_unique<CalibrationFileStore>(
                                      std::move(calibration_store_path))),
         calibration_session_(
             calibration_store_ != nullptr
-                ? std::make_unique<CalibrationSession>(*calibration_store_)
+                ? std::make_unique<CalibrationSession>(
+                      *calibration_store_,
+                      CalibrationSettings{
+                          .default_gains =
+                              {.horizontal = config.eye_gaze_horizontal_gain,
+                               .vertical = config.eye_gaze_vertical_gain},
+                          .min_head_travel_degrees =
+                              config.calibration_min_head_travel_degrees,
+                          .min_axis_degrees = config.calibration_min_axis_degrees,
+                          .min_spread_degrees =
+                              config.calibration_min_spread_degrees,
+                          .head_only_yaw_degrees =
+                              config.eye_gaze_head_only_yaw_degrees},
+                      [this](const CalibrationProfile& profile) {
+                        calibration_profile_ = profile;
+                        if (reporter_) {
+                          reporter_->SetProfile(&*calibration_profile_);
+                        }
+                      })
                 : nullptr),
         calibration_(calibration_session_.get()),
         service_(std::move(listener), approved_, approvals,
@@ -500,6 +540,11 @@ class Engine : public DaemonController, public DaemonPipeline {
   std::unique_ptr<ScreenSource> screen_source_;
   ScreenContextReader screen_context_reader_;
   std::optional<ScreenContextReporter> reporter_;
+  // The profile reporter_ reads (#61 item 12, #137): a copy, not a
+  // borrow of main()'s own local, so calibration_session_'s on_finished
+  // callback can replace it at once (#136) rather than only on the next
+  // run.
+  std::optional<CalibrationProfile> calibration_profile_;
   std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
   std::string status_path_;
   ReactionFeed feed_;

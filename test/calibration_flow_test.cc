@@ -106,6 +106,23 @@ TEST_F(CalibrationFlowTest, StartShowsAScreenStepWithItsPoint) {
   EXPECT_THAT(view.total, Eq(6));
 }
 
+TEST_F(CalibrationFlowTest, StartShowsTheGainsStep) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillOnce(Return(
+          R"({"ok":true,"calibration":{"state":"running","index":1,"total":7,"step":"gains"}})"));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kPrompting));
+  EXPECT_FALSE(view.resting_step);
+  EXPECT_TRUE(view.gains_step);
+  EXPECT_THAT(view.index, Eq(1));
+}
+
 TEST_F(CalibrationFlowTest, StartReachesFailedOnAConnectFailure) {
   EXPECT_CALL(io_, Connect).WillOnce(Return(false));
   EXPECT_CALL(io_, WriteLine).Times(0);
@@ -287,6 +304,25 @@ TEST_F(CalibrationFlowTest, NextTransitionsToDoneOnADoneReply) {
 
   EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kDone));
   EXPECT_THAT(flow.CurrentView().error, IsEmpty());
+}
+
+// #135, #137: the wizard's own result line ("Calibrated N screens.") is
+// built from this field.
+TEST_F(CalibrationFlowTest, NextTransitionsToDoneWithTheScreensCalibrated) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillOnce(Return(
+          R"({"ok":true,"calibration":{"state":"running","index":5,"total":6,"step":"screen","screen":0,"point":"bottom_right"}})"))
+      .WillOnce(
+          Return(R"({"ok":true,"calibration":{"state":"done","screens":2}})"));
+  CalibrationFlow flow = Make();
+  flow.Start(1);
+
+  flow.Next();
+
+  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kDone));
+  EXPECT_THAT(flow.CurrentView().screens, Eq(2));
 }
 
 // CalibrationMenu.tla's NextRefused/SessionEndsWithFlow: a refused "next"

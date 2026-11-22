@@ -21,6 +21,9 @@ constexpr int kMostExpressionsSettleMs = 5000;
 constexpr float kMostLookingAwayDegrees = 180;
 constexpr int kMostLookingAwayHoldMs = 10000;
 constexpr float kMostScreenContextOtherScreenDegrees = 180;
+constexpr float kMostEyeGazeGain = 200;
+constexpr int kMostEyeGazeMs = 10000;
+constexpr float kMostDegrees = 180;
 
 // `text` without spaces or tabs at either end.
 std::string_view Trim(std::string_view text) {
@@ -233,6 +236,83 @@ std::optional<std::string> SetScreenContextOtherScreenDegrees(
   return std::nullopt;
 }
 
+// Sets the on/off eye_gaze.horizontal_gain or eye_gaze.vertical_gain
+// (#137) from `value`, or returns why it cannot. `setting.name` is one of
+// those two, as `Set` has already checked.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::optional<std::string> SetEyeGazeGain(const Setting& setting,
+                                          Config& config) {
+  const std::optional<float> gain = Number<float>(setting.value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!gain || std::isnan(*gain) || *gain < 0 || *gain > kMostEyeGazeGain) {
+    return "expected a number from 0 to 200";
+  }
+  if (setting.name == "eye_gaze.horizontal_gain") {
+    config.eye_gaze_horizontal_gain = *gain;
+  } else {
+    config.eye_gaze_vertical_gain = *gain;
+  }
+  return std::nullopt;
+}
+
+// Sets eye_gaze.blink_threshold from `value`, or returns why it cannot.
+std::optional<std::string> SetEyeGazeBlinkThreshold(std::string_view value,
+                                                    Config& config) {
+  const std::optional<float> threshold = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
+      *threshold > 1) {
+    return "expected a number from 0 to 1";
+  }
+  config.eye_gaze_blink_threshold = *threshold;
+  return std::nullopt;
+}
+
+// Sets eye_gaze.median_ms, eye_gaze.resting_ms or eye_gaze.gap_ms (#137)
+// from `value`, or returns why it cannot. `setting.name` is one of those
+// three, as `Set` has already checked.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::optional<std::string> SetEyeGazeMs(const Setting& setting,
+                                        Config& config) {
+  const std::optional<int> milliseconds = Number<int>(setting.value);
+  if (!milliseconds || *milliseconds < 0 || *milliseconds > kMostEyeGazeMs) {
+    return "expected a whole number from 0 to 10000";
+  }
+  if (setting.name == "eye_gaze.median_ms") {
+    config.eye_gaze_median_ms = *milliseconds;
+  } else if (setting.name == "eye_gaze.resting_ms") {
+    config.eye_gaze_resting_ms = *milliseconds;
+  } else {
+    config.eye_gaze_gap_ms = *milliseconds;
+  }
+  return std::nullopt;
+}
+
+// Sets eye_gaze.head_only_yaw_degrees, calibration.min_head_travel_degrees,
+// calibration.min_axis_degrees or calibration.min_spread_degrees (#137)
+// from `value`, or returns why it cannot. `setting.name` is one of those
+// four, as `Set` has already checked.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::optional<std::string> SetDegreesSetting(const Setting& setting,
+                                             Config& config) {
+  const std::optional<float> degrees = Number<float>(setting.value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!degrees || std::isnan(*degrees) || *degrees < 0 ||
+      *degrees > kMostDegrees) {
+    return "expected a number from 0 to 180";
+  }
+  if (setting.name == "eye_gaze.head_only_yaw_degrees") {
+    config.eye_gaze_head_only_yaw_degrees = *degrees;
+  } else if (setting.name == "calibration.min_head_travel_degrees") {
+    config.calibration_min_head_travel_degrees = *degrees;
+  } else if (setting.name == "calibration.min_axis_degrees") {
+    config.calibration_min_axis_degrees = *degrees;
+  } else {
+    config.calibration_min_spread_degrees = *degrees;
+  }
+  return std::nullopt;
+}
+
 // Sets the setting in `config`, or returns why it cannot.
 std::optional<std::string> Set(const Setting& setting, Config& config) {
   const std::string_view name = setting.name;
@@ -278,6 +358,22 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
   }
   if (name == "screen_context.other_screen_degrees") {
     return SetScreenContextOtherScreenDegrees(value, config);
+  }
+  if (name == "eye_gaze.horizontal_gain" || name == "eye_gaze.vertical_gain") {
+    return SetEyeGazeGain(setting, config);
+  }
+  if (name == "eye_gaze.blink_threshold") {
+    return SetEyeGazeBlinkThreshold(value, config);
+  }
+  if (name == "eye_gaze.median_ms" || name == "eye_gaze.resting_ms" ||
+      name == "eye_gaze.gap_ms") {
+    return SetEyeGazeMs(setting, config);
+  }
+  if (name == "eye_gaze.head_only_yaw_degrees" ||
+      name == "calibration.min_head_travel_degrees" ||
+      name == "calibration.min_axis_degrees" ||
+      name == "calibration.min_spread_degrees") {
+    return SetDegreesSetting(setting, config);
   }
   return "unknown setting " + std::string(name);
 }

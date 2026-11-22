@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -31,6 +32,8 @@ using ::testing::Return;
 CalibrationProfile SampleProfile() {
   CalibrationProfile profile;
   profile.resting = {.yaw_degrees = 1, .pitch_degrees = -2, .roll_degrees = 3};
+  profile.resting_eye = {.horizontal = 0.1, .vertical = -0.2};
+  profile.gains = {.horizontal = 25, .vertical = 32};
   ScreenCalibration screen;
   double value = 10;
   for (const CalibrationPoint point : kCalibrationPoints) {
@@ -60,6 +63,11 @@ TEST(SerializeCalibrationProfileTest, RoundTripsThroughParse) {
   EXPECT_THAT(parsed->resting.pitch_degrees,
               Eq(original.resting.pitch_degrees));
   EXPECT_THAT(parsed->resting.roll_degrees, Eq(original.resting.roll_degrees));
+  EXPECT_THAT(parsed->resting_eye.horizontal,
+              Eq(original.resting_eye.horizontal));
+  EXPECT_THAT(parsed->resting_eye.vertical, Eq(original.resting_eye.vertical));
+  EXPECT_THAT(parsed->gains.horizontal, Eq(original.gains.horizontal));
+  EXPECT_THAT(parsed->gains.vertical, Eq(original.gains.vertical));
   ASSERT_THAT(parsed->screens.size(), Eq(1U));
   for (const CalibrationPoint point : kCalibrationPoints) {
     const auto index = static_cast<std::size_t>(point);
@@ -70,9 +78,18 @@ TEST(SerializeCalibrationProfileTest, RoundTripsThroughParse) {
   }
 }
 
+// Every field SerializeCalibrationProfile writes before "screens = N"
+// (#137's resting_eye and gains), with zero values: the shared prefix the
+// "past resting" tests below build on, so only their own missing field is
+// what's missing.
+constexpr std::string_view kRestingAndGainsText =
+    "version = 2\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n"
+    "resting_eye.horizontal = 0\nresting_eye.vertical = 0\n"
+    "gains.horizontal = 0\ngains.vertical = 0\n";
+
 TEST(ParseCalibrationProfileTest, RefusesAWrongVersion) {
   std::string error;
-  EXPECT_THAT(ParseCalibrationProfile("version = 2\n", error),
+  EXPECT_THAT(ParseCalibrationProfile("version = 3\n", error),
               Eq(std::nullopt));
   EXPECT_THAT(error, Eq("unsupported calibration file version"));
 }
@@ -86,21 +103,21 @@ TEST(ParseCalibrationProfileTest, RefusesANonNumericVersion) {
 
 TEST(ParseCalibrationProfileTest, RefusesAWholeNumberWithTrailingGarbage) {
   std::string error;
-  EXPECT_THAT(ParseCalibrationProfile("version = 1x\n", error),
+  EXPECT_THAT(ParseCalibrationProfile("version = 2x\n", error),
               Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected version = a number"));
 }
 
 TEST(ParseCalibrationProfileTest, RefusesAMissingField) {
   std::string error;
-  EXPECT_THAT(ParseCalibrationProfile("version = 1\n", error),
+  EXPECT_THAT(ParseCalibrationProfile("version = 2\n", error),
               Eq(std::nullopt));
   EXPECT_THAT(error, Not(IsEmpty()));
 }
 
 TEST(ParseCalibrationProfileTest, RefusesAWrongKeyWhereOneIsExpected) {
   std::string error;
-  const std::string text = "version = 1\nsomething.else = 1\n";
+  const std::string text = "version = 2\nsomething.else = 1\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected resting.yaw = a number"));
 }
@@ -108,7 +125,7 @@ TEST(ParseCalibrationProfileTest, RefusesAWrongKeyWhereOneIsExpected) {
 TEST(ParseCalibrationProfileTest, RefusesAMalformedNumber) {
   std::string error;
   const std::string text =
-      "version = 1\nresting.yaw = x\nresting.pitch = 0\nresting.roll = 0\n"
+      "version = 2\nresting.yaw = x\nresting.pitch = 0\nresting.roll = 0\n"
       "screens = 1\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected resting.yaw = a number"));
@@ -117,10 +134,27 @@ TEST(ParseCalibrationProfileTest, RefusesAMalformedNumber) {
 TEST(ParseCalibrationProfileTest, RefusesANumberWithTrailingGarbage) {
   std::string error;
   const std::string text =
-      "version = 1\nresting.yaw = 5x\nresting.pitch = 0\nresting.roll = 0\n"
+      "version = 2\nresting.yaw = 5x\nresting.pitch = 0\nresting.roll = 0\n"
       "screens = 1\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected resting.yaw = a number"));
+}
+
+TEST(ParseCalibrationProfileTest, RefusesAMissingRestingEyeField) {
+  std::string error;
+  const std::string text =
+      "version = 2\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n";
+  EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
+  EXPECT_THAT(error, Eq("expected resting_eye.horizontal = a number"));
+}
+
+TEST(ParseCalibrationProfileTest, RefusesAMissingGainsField) {
+  std::string error;
+  const std::string text = "version = 2\nresting.yaw = 0\nresting.pitch = 0\n"
+                           "resting.roll = 0\nresting_eye.horizontal = 0\n"
+                           "resting_eye.vertical = 0\n";
+  EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
+  EXPECT_THAT(error, Eq("expected gains.horizontal = a number"));
 }
 
 TEST(ParseCalibrationProfileTest, ParsesAFileMissingItsFinalNewline) {
@@ -135,25 +169,21 @@ TEST(ParseCalibrationProfileTest, ParsesAFileMissingItsFinalNewline) {
 
 TEST(ParseCalibrationProfileTest, RefusesAMissingScreensField) {
   std::string error;
-  const std::string text =
-      "version = 1\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n";
+  const std::string text(kRestingAndGainsText);
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected screens = a number"));
 }
 
 TEST(ParseCalibrationProfileTest, RefusesTooFewOrTooManyScreens) {
   std::string error;
-  const std::string text =
-      "version = 1\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n"
-      "screens = 0\n";
+  const std::string text = std::string(kRestingAndGainsText) + "screens = 0\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error,
               Eq("calibration file names an impossible number of screens"));
 
   std::string high_error;
   const std::string high_text =
-      "version = 1\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n"
-      "screens = 9\n";
+      std::string(kRestingAndGainsText) + "screens = 9\n";
   EXPECT_THAT(ParseCalibrationProfile(high_text, high_error), Eq(std::nullopt));
   EXPECT_THAT(high_error,
               Eq("calibration file names an impossible number of screens"));
@@ -161,18 +191,15 @@ TEST(ParseCalibrationProfileTest, RefusesTooFewOrTooManyScreens) {
 
 TEST(ParseCalibrationProfileTest, RefusesAScreenMissingItsFirstPoint) {
   std::string error;
-  const std::string text =
-      "version = 1\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n"
-      "screens = 1\n";
+  const std::string text = std::string(kRestingAndGainsText) + "screens = 1\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected screen.0.centre.yaw = a number"));
 }
 
 TEST(ParseCalibrationProfileTest, RefusesAScreenMissingItsPitch) {
   std::string error;
-  const std::string text =
-      "version = 1\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n"
-      "screens = 1\nscreen.0.centre.yaw = 0\n";
+  const std::string text = std::string(kRestingAndGainsText) +
+                           "screens = 1\nscreen.0.centre.yaw = 0\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected screen.0.centre.pitch = a number"));
 }
@@ -180,7 +207,7 @@ TEST(ParseCalibrationProfileTest, RefusesAScreenMissingItsPitch) {
 TEST(ParseCalibrationProfileTest, RefusesAScreenMissingItsRoll) {
   std::string error;
   const std::string text =
-      "version = 1\nresting.yaw = 0\nresting.pitch = 0\nresting.roll = 0\n"
+      std::string(kRestingAndGainsText) +
       "screens = 1\nscreen.0.centre.yaw = 0\nscreen.0.centre.pitch = 0\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected screen.0.centre.roll = a number"));
@@ -578,10 +605,20 @@ TEST_F(CalibrationStoreFileTest,
   ASSERT_TRUE(session.Start(2, error).has_value()) << error;
   session.Update({.yaw_degrees = 0});  // The resting pose, straight ahead.
   ASSERT_TRUE(session.Next(error).has_value()) << error;
+  // The gains step (#137): a real fixate-and-turn, well past every
+  // default threshold.
+  for (int step = -10; step <= 10; step += 2) {
+    session.Update({.yaw_degrees = static_cast<double>(step)},
+                   {.horizontal = -step / 20.0});
+  }
+  ASSERT_TRUE(session.Next(error).has_value()) << error;
   const std::array<double, 2> screen_centres = {-50, 10};
   for (const double centre : screen_centres) {
-    for (int point = 0; point < 5; ++point) {
-      session.Update({.yaw_degrees = centre});
+    // Each corner sits clearly apart from its own screen's centre
+    // (#137's spread check), without changing which centre
+    // NearestCalibratedScreen is tested against below.
+    for (const double offset : {0.0, 20.0, -20.0, 25.0, -25.0}) {
+      session.Update({.yaw_degrees = centre + offset});
       const auto status = session.Next(error);
       ASSERT_TRUE(status.has_value()) << error;
     }

@@ -257,14 +257,19 @@ std::string CamerasJson(const std::vector<CameraDevice>& devices) {
 
 std::string CalibrationStatusJson(const CalibrationController::Status& status) {
   if (!status.running) {
-    return status.done ? R"({"ok":true,"calibration":{"state":"done"}})"
-                       : R"({"ok":true,"calibration":{"state":"idle"}})";
+    if (!status.done) {
+      return R"({"ok":true,"calibration":{"state":"idle"}})";
+    }
+    return R"({"ok":true,"calibration":{"state":"done","screens":)" +
+           std::to_string(status.screens) + "}}";
   }
   std::string json = R"({"ok":true,"calibration":{"state":"running","index":)" +
                      std::to_string(status.index) + R"(,"total":)" +
                      std::to_string(status.total);
   if (status.resting_step) {
     json += R"(,"step":"resting"})";
+  } else if (status.gains_step) {
+    json += R"(,"step":"gains"})";
   } else {
     json += R"(,"step":"screen","screen":)" + std::to_string(status.screen) +
             R"(,"point":)" + Quoted(Name(status.point)) + "}";

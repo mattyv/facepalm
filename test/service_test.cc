@@ -62,7 +62,7 @@ class MockCalibrationController : public CalibrationController {
   MOCK_METHOD(std::optional<Status>, Start, (int, std::string&), (override));
   MOCK_METHOD(std::optional<Status>, Next, (std::string&), (override));
   MOCK_METHOD(bool, Cancel, (std::string&), (override));
-  MOCK_METHOD(void, Update, (const HeadRotation&), (override));
+  MOCK_METHOD(void, Update, (const HeadRotation&, const EyeSignal&), (override));
   MOCK_METHOD(void, OnCameraLost, (), (override));
   MOCK_METHOD(void, OnCameraUp, (), (override));
 };

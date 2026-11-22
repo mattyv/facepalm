@@ -23,7 +23,12 @@ constexpr mode_t kPrivateMode = S_IRUSR | S_IWUSR;
 constexpr mode_t kOtherPermissions = S_IRWXG | S_IRWXO;
 // Comfortably more than the largest profile (kMaxScreens screens) needs.
 constexpr std::size_t kMaxProfileBytes = 16UL * 1024;
-constexpr int kFormatVersion = 1;
+// Bumped from 1 to 2 for #137's resting_eye and gains fields: a profile a
+// v1 daemon saved has neither, so loading it under the new version check
+// below simply fails as "unsupported", which LoadCalibrationProfile's own
+// caller already treats as no profile at all -- #137's "old profiles
+// without eye fields count as uncalibrated", with no migration needed.
+constexpr int kFormatVersion = 2;
 // ReadWholeFile's read buffer.
 constexpr std::size_t kReadChunkBytes = 4096;
 // WriteField's longest formatted number, well over what a double needs.
@@ -249,6 +254,10 @@ std::string SerializeCalibrationProfile(const CalibrationProfile& profile) {
   WriteField(text, "resting.yaw", profile.resting.yaw_degrees);
   WriteField(text, "resting.pitch", profile.resting.pitch_degrees);
   WriteField(text, "resting.roll", profile.resting.roll_degrees);
+  WriteField(text, "resting_eye.horizontal", profile.resting_eye.horizontal);
+  WriteField(text, "resting_eye.vertical", profile.resting_eye.vertical);
+  WriteField(text, "gains.horizontal", profile.gains.horizontal);
+  WriteField(text, "gains.vertical", profile.gains.vertical);
   text += "screens = " + std::to_string(profile.screens.size()) + "\n";
   for (std::size_t screen = 0; screen < profile.screens.size(); ++screen) {
     for (const CalibrationPoint point : kCalibrationPoints) {
@@ -282,6 +291,26 @@ std::optional<CalibrationProfile> ParseCalibrationProfile(std::string_view text,
   }
   profile.resting = {
       .yaw_degrees = *yaw, .pitch_degrees = *pitch, .roll_degrees = *roll};
+  const std::optional<double> resting_eye_horizontal =
+      ReadField<double>(text, "resting_eye.horizontal", error);
+  const std::optional<double> resting_eye_vertical =
+      resting_eye_horizontal
+          ? ReadField<double>(text, "resting_eye.vertical", error)
+          : std::nullopt;
+  if (!resting_eye_vertical) {
+    return std::nullopt;
+  }
+  profile.resting_eye = {.horizontal = *resting_eye_horizontal,
+                         .vertical = *resting_eye_vertical};
+  const std::optional<double> gains_horizontal =
+      ReadField<double>(text, "gains.horizontal", error);
+  const std::optional<double> gains_vertical =
+      gains_horizontal ? ReadField<double>(text, "gains.vertical", error)
+                       : std::nullopt;
+  if (!gains_vertical) {
+    return std::nullopt;
+  }
+  profile.gains = {.horizontal = *gains_horizontal, .vertical = *gains_vertical};
   const std::optional<int> screens = ReadField<int>(text, "screens", error);
   if (!screens) {
     return std::nullopt;

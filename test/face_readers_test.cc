@@ -13,6 +13,7 @@
 #include "src/config.h"
 #include "src/expression_reader.h"
 #include "src/expressions.h"
+#include "src/eye_gaze.h"
 #include "src/face_model.h"
 #include "src/gesture_reader.h"
 #include "src/head_pose.h"
@@ -37,7 +38,8 @@ class MockCalibrationController : public CalibrationController {
   MOCK_METHOD(std::optional<Status>, Start, (int, std::string&), (override));
   MOCK_METHOD(std::optional<Status>, Next, (std::string&), (override));
   MOCK_METHOD(bool, Cancel, (std::string&), (override));
-  MOCK_METHOD(void, Update, (const HeadRotation&), (override));
+  MOCK_METHOD(void, Update, (const HeadRotation&, const EyeSignal&),
+              (override));
   MOCK_METHOD(void, OnCameraLost, (), (override));
   MOCK_METHOD(void, OnCameraUp, (), (override));
 };
@@ -66,7 +68,7 @@ TEST(FaceReadersTest, NoReaderTheConfigTurnsOff) {
 // a real face through the last reader is enough to show the given
 // ScreenContextReader is the one fed.
 TEST(FaceReadersTest, ScreenContextReaderIsAppendedWhenGiven) {
-  ScreenContextReader reader{ExpressionTracker::Settings{}};
+  ScreenContextReader reader{ExpressionTracker::Settings{}, EyeGazeTracker::Settings{}};
   const std::vector<std::unique_ptr<FaceReader>> readers =
       MakeFaceReaders(Config{}, &reader);
 
@@ -96,7 +98,7 @@ TEST(FaceReadersTest, NoScreenContextReaderGivenIsNoReader) {
 TEST(FaceReadersTest, ScreenContextDisabledSkipsItEvenWhenGiven) {
   Config config;
   config.screen_context_enabled = false;
-  ScreenContextReader reader{ExpressionTracker::Settings{}};
+  ScreenContextReader reader{ExpressionTracker::Settings{}, EyeGazeTracker::Settings{}};
 
   EXPECT_THAT(MakeFaceReaders(config, &reader), SizeIs(3));
 }
@@ -115,7 +117,7 @@ TEST(FaceReadersTest, CalibrationReaderIsAppendedWhenGiven) {
   face.pose_column_major[10] = 1;
   face.pose_column_major[15] = 1;
   std::vector<Reaction> reactions;
-  EXPECT_CALL(calibration, Update(_)).Times(1);
+  EXPECT_CALL(calibration, Update).Times(1);
   readers[3]->OnFace(face, /*width=*/640, /*height=*/480, /*timestamp_ms=*/0,
                      reactions);
 
@@ -131,7 +133,7 @@ TEST(FaceReadersTest, NoCalibrationControllerGivenIsNoReader) {
 }
 
 TEST(FaceReadersTest, ScreenContextAndCalibrationBothAppendedWhenGiven) {
-  ScreenContextReader reader{ExpressionTracker::Settings{}};
+  ScreenContextReader reader{ExpressionTracker::Settings{}, EyeGazeTracker::Settings{}};
   MockCalibrationController calibration;
 
   EXPECT_THAT(MakeFaceReaders(Config{}, &reader, &calibration), SizeIs(5));

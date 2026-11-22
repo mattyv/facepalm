@@ -89,9 +89,11 @@ std::string DeliveryJson(const Feed::Delivery& delivery);
 std::string ErrorJson(std::string_view message);
 
 // {"ok":true,"calibration":{"state":"running","index":i,"total":n,
-// "step":"resting"}}, or with "step":"screen","screen":s,"point":".." for a
-// screen's point; {"ok":true,"calibration":{"state":"done"}} once the last
-// step is finished and saved.
+// "step":"resting"}}, "step":"gains" for #137's fixate-and-turn step, or
+// "step":"screen","screen":s,"point":".." for a screen's point;
+// {"ok":true,"calibration":{"state":"done","screens":n}} once the last
+// step is finished and saved, naming the screens just calibrated (#135,
+// #137).
 std::string CalibrationStatusJson(const CalibrationController::Status& status);
 
 // {"ok":true,"cameras":[{"id":"..","name":"..","built_in":true}]} (item 10
