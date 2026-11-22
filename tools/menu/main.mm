@@ -20,6 +20,10 @@ namespace {
 // How often the menu rereads the camera-in-use file (#37 item 8):
 // comfortably under the two seconds the indicator is asked to settle in.
 constexpr NSTimeInterval kCameraStatusInterval = 1.0;
+// How often the preview window rereads the daemon's latest frame (#37
+// item 8, #108): a plain poll, like the camera status file's own, not a
+// frame rate the preview promises to keep up with.
+constexpr NSTimeInterval kPreviewRefreshInterval = 0.5;
 
 NSURL* SettingsURL() {
   const char* xdg = std::getenv("XDG_CONFIG_HOME");
@@ -51,6 +55,15 @@ BOOL CameraInUse() {
   const std::optional<facepalm::UserPaths> paths =
       facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
   return paths && facepalm::ReadCameraStatus(paths->status) ? YES : NO;
+}
+
+// The camera preview's own paths (#37 item 8, #108): creating
+// `preview_request` is the menu's own ask (specs/PreviewLease.tla's
+// StartPreview), removing it asks the daemon to stop; `preview_frame`
+// is the latest frame, rewritten atomically, so a half-written file is
+// never read. nil when the home folder could not be found.
+std::optional<facepalm::UserPaths> PreviewPaths() {
+  return facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
 }
 
 NSString* ErrorMessage(const std::string& error) {
@@ -183,12 +196,16 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
 }
 }  // namespace
 
-@interface FacepalmApp : NSObject <NSApplicationDelegate, NSMenuDelegate>
+@interface FacepalmApp : NSObject <NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate>
 @property(nonatomic) BOOL openSettingsOnLaunch;
 @property(nonatomic, strong) NSStatusItem* statusItem;
 @property(nonatomic, strong) NSMenuItem* power;
 @property(nonatomic, strong) NSMenuItem* cameraStatus;
 @property(nonatomic, strong) NSTimer* cameraStatusTimer;
+@property(nonatomic, strong) NSMenuItem* preview;
+@property(nonatomic, strong) NSWindow* previewWindow;
+@property(nonatomic, strong) NSImageView* previewImageView;
+@property(nonatomic, strong) NSTimer* previewTimer;
 @property(nonatomic, strong) NSWindow* settingsWindow;
 @property(nonatomic, strong) NSTextField* frameRate;
 @property(nonatomic, strong) NSPopUpButton* camera;
@@ -229,6 +246,13 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
                                              keyEquivalent:@","];
   settings.target = self;
   [menu addItem:settings];
+  // The camera preview (#37 item 8, #108): user-started, local-only, with
+  // the open preview window itself the indicator while it runs.
+  self.preview = [[NSMenuItem alloc] initWithTitle:@"Show Camera Preview"
+                                            action:@selector(togglePreview:)
+                                     keyEquivalent:@""];
+  self.preview.target = self;
+  [menu addItem:self.preview];
   NSMenuItem* quit = [[NSMenuItem alloc] initWithTitle:@"Quit Facepalm Menu"
                                                 action:@selector(terminate:)
                                          keyEquivalent:@"q"];
@@ -254,6 +278,113 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
   const BOOL on = CameraInUse();
   self.cameraStatus.title = on ? @"Camera on" : @"Camera off";
   self.statusItem.button.toolTip = on ? @"Facepalm — camera on" : @"Facepalm";
+}
+
+- (void)togglePreview:(id)sender {
+  (void)sender;
+  if (self.previewWindow.visible) {
+    [self stopPreview];
+    return;
+  }
+  [self startPreview];
+}
+
+// PreviewLease!StartPreview (#37 item 8, #108): creating the request file
+// is the only signal the daemon needs; it notices it on the next
+// captured frame, so no new timer of this method's own beyond the
+// refresh below.
+- (void)startPreview {
+  const std::optional<facepalm::UserPaths> paths = PreviewPaths();
+  if (!paths) {
+    [self showError:@"Your home folder could not be found."
+              title:@"Camera preview could not start"];
+    return;
+  }
+  NSString* requestPath = [NSString stringWithUTF8String:paths->preview_request.c_str()];
+  NSError* error = nil;
+  if (![[NSFileManager defaultManager]
+                createDirectoryAtPath:requestPath.stringByDeletingLastPathComponent
+          withIntermediateDirectories:YES
+                           attributes:@{NSFilePosixPermissions : @0700}
+                                error:&error] ||
+      ![[NSData data] writeToFile:requestPath options:NSDataWritingAtomic error:&error]) {
+    [self showError:(error.localizedDescription != nil ? error.localizedDescription
+                                                       : @"The preview could not be started.")
+              title:@"Camera preview could not start"];
+    return;
+  }
+  if (self.previewWindow == nil) [self createPreviewWindow];
+  self.preview.title = @"Hide Camera Preview";
+  [NSApp activateIgnoringOtherApps:YES];
+  [self.previewWindow center];
+  [self.previewWindow makeKeyAndOrderFront:nil];
+  [self refreshPreviewFrame];
+  self.previewTimer = [NSTimer scheduledTimerWithTimeInterval:kPreviewRefreshInterval
+                                                       target:self
+                                                     selector:@selector(refreshPreviewFrame)
+                                                     userInfo:nil
+                                                      repeats:YES];
+}
+
+// PreviewLease!StopPreview: removing the request file is the only
+// signal the daemon needs to stop publishing; a frame it already wrote
+// is left on disk, harmless, and overwritten the next time the preview
+// starts. orderOut:, not close:, so this never re-enters windowWillClose:
+// when called from togglePreview: rather than from the window's own
+// close button.
+- (void)stopPreview {
+  [self.previewTimer invalidate];
+  self.previewTimer = nil;
+  const std::optional<facepalm::UserPaths> paths = PreviewPaths();
+  if (paths) {
+    [[NSFileManager defaultManager]
+        removeItemAtPath:[NSString stringWithUTF8String:paths->preview_request.c_str()]
+                   error:nil];
+  }
+  [self.previewWindow orderOut:nil];
+  self.preview.title = @"Show Camera Preview";
+}
+
+- (void)createPreviewWindow {
+  constexpr CGFloat kPreviewSide = 480;
+  self.previewWindow =
+      [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, kPreviewSide, kPreviewSide)
+                                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                    backing:NSBackingStoreBuffered
+                                      defer:NO];
+  self.previewWindow.title = @"Camera Preview";
+  self.previewWindow.releasedWhenClosed = NO;
+  self.previewWindow.delegate = self;
+  self.previewImageView = [[NSImageView alloc] initWithFrame:self.previewWindow.contentView.bounds];
+  self.previewImageView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  self.previewImageView.imageScaling = NSImageScaleProportionallyUpOrDown;
+  [self.previewWindow.contentView addSubview:self.previewImageView];
+}
+
+// PreviewLease!Poll, on the preview window's own timer (#37 item 8,
+// #108): rereads the daemon's latest frame, rewritten atomically, so a
+// half-written file is never shown. Also stops the preview once the
+// camera itself goes off (the acceptance bar's "stops with the
+// camera"): PreviewLease already stops publishing then, but without
+// this check the window would otherwise go on showing the last frame
+// forever rather than closing.
+- (void)refreshPreviewFrame {
+  if (!CameraInUse()) {
+    [self stopPreview];
+    return;
+  }
+  const std::optional<facepalm::UserPaths> paths = PreviewPaths();
+  if (!paths) return;
+  NSImage* image = [[NSImage alloc]
+      initWithContentsOfFile:[NSString stringWithUTF8String:paths->preview_frame.c_str()]];
+  if (image != nil) self.previewImageView.image = image;
+}
+
+// Closing the preview window by its own close button stops the preview
+// the same way toggling the menu item does (#108): no frame keeps being
+// written once nothing shows it.
+- (void)windowWillClose:(NSNotification*)notification {
+  if (notification.object == self.previewWindow) [self stopPreview];
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)application

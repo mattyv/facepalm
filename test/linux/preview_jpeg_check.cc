@@ -1,10 +1,10 @@
-#include "src/linux/preview_jpeg.h"
-
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
+
+#include "src/linux/preview_jpeg.h"
 
 extern "C" {
 #include <jpeglib.h>
@@ -27,7 +27,8 @@ Frame SmallFrame(std::array<std::uint8_t, 16>& pixels) {
             0,   255, 0,   0,  // Green.
             255, 0,   0,   0,  // Red.
             128, 128, 128, 0};
-  return Frame{.width = 2, .height = 2, .bytes_per_row = 8, .bgra = pixels.data()};
+  return Frame{
+      .width = 2, .height = 2, .bytes_per_row = 8, .bgra = pixels.data()};
 }
 
 TEST(PreviewJpegTest, EncodesARealDecodableJpeg) {
@@ -43,7 +44,7 @@ TEST(PreviewJpegTest, EncodesARealDecodableJpeg) {
   dinfo.err = jpeg_std_error(&error);
   jpeg_create_decompress(&dinfo);
   jpeg_mem_src(&dinfo, reinterpret_cast<const unsigned char*>(encoded->data()),
-              static_cast<unsigned long>(encoded->size()));
+               static_cast<unsigned long>(encoded->size()));
   ASSERT_EQ(jpeg_read_header(&dinfo, TRUE), JPEG_HEADER_OK);
   EXPECT_EQ(dinfo.image_width, 2U);
   EXPECT_EQ(dinfo.image_height, 2U);
@@ -80,7 +81,8 @@ TEST(PreviewJpegTest, ANonFiniteQualityStillEncodes) {
 }
 
 TEST(PreviewJpegTest, FailsOnAZeroSizedFrame) {
-  const Frame frame{.width = 0, .height = 0, .bytes_per_row = 0, .bgra = nullptr};
+  const Frame frame{
+      .width = 0, .height = 0, .bytes_per_row = 0, .bgra = nullptr};
 
   EXPECT_FALSE(EncodePreviewJpeg(frame, 0.6F).has_value());
 }

@@ -78,18 +78,21 @@ made since, each with its reason, are in the
     (below), which adds a `calibrated_screen` field from
     `NearestCalibratedScreen` alongside the uncalibrated `gaze` it already
     reads.
--   `src/preview_lease`, `src/preview_publisher`, `src/macos/preview_jpeg`:
-    the camera preview (#36, #37, #61 item 8), gated so a frame is ever
-    encoded only while the camera is open and the menu has asked for it
-    by creating `UserPaths::preview_request` (removed to stop).
-    `PreviewLease`, following `specs/PreviewLease.tla`, is the gate: a
-    grant never carries over a camera close. `PreviewPublisher` polls the
-    request file on the frame-capture path already running, and while
-    granted, encodes each frame to JPEG (`src/macos/preview_jpeg`,
-    through ImageIO; Linux has no encoder yet) and writes it to the
-    private `UserPaths::preview_frame`, never to the approved-token
-    service every other client reaches. The menu has no window for this
-    yet (#108).
+-   `src/preview_lease`, `src/preview_publisher`, `src/macos/preview_jpeg`,
+    `src/linux/preview_jpeg`: the camera preview (#36, #37, #61 item 8,
+    #108), gated so a frame is ever encoded only while the camera is
+    open and the menu has asked for it by creating
+    `UserPaths::preview_request` (removed to stop). `PreviewLease`,
+    following `specs/PreviewLease.tla`, is the gate: a grant never
+    carries over a camera close. `PreviewPublisher` polls the request
+    file on the frame-capture path already running, and while granted,
+    encodes each frame to JPEG (ImageIO on macOS, libjpeg on Linux) and
+    writes it to the private `UserPaths::preview_frame`, never to the
+    approved-token service every other client reaches. The menu's own
+    "Show Camera Preview" window (`tools/menu/main.mm`,
+    `tools/menu/main_linux.cc`) rereads that file on its own timer, and
+    stops the preview, removing the request file, when its own close
+    button is used or the camera itself goes off.
 -   `src/screen_context`, `src/screen_context_reporter`,
     `src/screen_context_reader`, `src/screen_source`: the screen context a
     reading's `context` carries (#36 item 11 of #61): the frontmost app,
@@ -268,7 +271,10 @@ local camera service readiness, offline replay availability, and a
 subscription within a couple of seconds (#61 item 8). Only one tray
 runs at a time: choosing **Facepalm** again, which runs
 `facepalm-menu --settings`, while one is already running reopens its
-Settings form instead of opening a second tray icon (#98).
+Settings form instead of opening a second tray icon (#98). **Show
+Camera Preview** opens a window of the camera, started only by hand and
+stopped from the same item, by the window's own close button, or when
+the camera goes off (#108).
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 

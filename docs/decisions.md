@@ -5,6 +5,48 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: The preview window and the Linux encoder close #108, no new spec
+
+-   **Decision:** the menu's own window for the camera preview (#108, the
+    gap the 2026-11-21 preview decision below filed): a "Show Camera
+    Preview"/"Hide Camera Preview" menu item on both platforms that
+    creates `UserPaths::preview_request` on showing and removes it on
+    hiding (`PreviewLease.tla`'s `StartPreview`/`StopPreview`, the
+    "menu's own ask" that spec already treats as given), then polls
+    `UserPaths::preview_frame` on its own short timer (0.5 s) to show the
+    latest frame: an `NSImageView` in a plain `NSWindow`
+    (`tools/menu/main.mm`), a `QLabel` in a plain `QDialog`
+    (`tools/menu/main_linux.cc`, needing no subclass of its own, since a
+    `QDialog` shown without `exec()` already emits `rejected()` on its
+    own close button). Either platform's poll also stops the preview
+    once the camera itself goes off, reading the same status file
+    `CameraStatus.tla` already models, so the window does not go on
+    showing a stale last frame once `PreviewLease` itself has stopped
+    publishing: this is the acceptance bar's own "stops with the
+    camera", not a new guarantee the daemon side did not already make.
+    Closing the window, by its own close button or by toggling the menu
+    item, always removes the request file the same way, so an interrupted
+    preview never leaves the daemon publishing to nobody.
+-   **Also decided:** the Linux JPEG encoder the same gap named,
+    `src/linux/preview_jpeg.{h,cc}`, through libjpeg (`find_package(JPEG
+    REQUIRED)`; `libjpeg-dev` added to the three CI jobs that build the
+    full Linux daemon), not Qt's `QImageWriter`: `facepalm-daemon`, unlike
+    `facepalm-menu`, does not link Qt, and the encoder runs in the
+    daemon, not the menu. `test/linux/preview_jpeg_check.cc` follows
+    `src/macos/preview_jpeg.mm`'s own `preview_jpeg_checks` convention: a
+    real encode-decode round trip through libjpeg itself, exempt from the
+    coverage gate the way `menu_store_checks` already is, not from being
+    tested; verified standalone against Homebrew's jpeg-turbo on this Mac
+    before ever touching CI, since no Linux build is possible here.
+-   **No new spec:** the window and the encoder both implement an action
+    or a value `PreviewLease.tla` and `CameraStatus.tla` already model
+    (the human's ask, the camera's own status), not a new piece of
+    lifecycle; the same reasoning #112's `V4l2InotifyMonitor` decision
+    below gives for needing no change to `CameraLifecycle.tla`.
+-   **Evidence:** [#108](https://github.com/mattyv/facepalm/issues/108),
+    [#61 item 8](https://github.com/mattyv/facepalm/issues/61),
+    [#37](https://github.com/mattyv/facepalm/issues/37).
+
 ## 2026-11-21: The camera preview stays in, to the menu alone, started by hand
 
 -   **Decision:** the camera preview ships (#61's 2026-11-21 decision log

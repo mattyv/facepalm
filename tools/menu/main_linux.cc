@@ -18,6 +18,7 @@
 #include <QLockFile>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPixmap>
 #include <QProcess>
 #include <QPushButton>
 #include <QSaveFile>
@@ -85,6 +86,23 @@ QString StatusPath() {
   const std::optional<facepalm::UserPaths> paths = facepalm::PathsFor(
       QDir::homePath().toStdString(), facepalm::Platform::kLinux);
   return paths ? QString::fromStdString(paths->status) : QString();
+}
+
+// The camera preview's own paths (#37 item 8, #108): creating
+// `preview_request` is the menu's own ask (specs/PreviewLease.tla's
+// StartPreview), removing it asks the daemon to stop; `preview_frame`
+// is the latest frame, rewritten atomically, so a half-written file is
+// never read.
+QString PreviewRequestPath() {
+  const std::optional<facepalm::UserPaths> paths = facepalm::PathsFor(
+      QDir::homePath().toStdString(), facepalm::Platform::kLinux);
+  return paths ? QString::fromStdString(paths->preview_request) : QString();
+}
+
+QString PreviewFramePath() {
+  const std::optional<facepalm::UserPaths> paths = facepalm::PathsFor(
+      QDir::homePath().toStdString(), facepalm::Platform::kLinux);
+  return paths ? QString::fromStdString(paths->preview_frame) : QString();
 }
 
 // The single-instance guard's own state, next to the daemon's socket
@@ -640,6 +658,20 @@ int main(int argc, char* argv[]) {
   QApplication::setWindowIcon(icon);
   SettingsDialog window;
 
+  // The camera preview (#37 item 8, #108): user-started, local-only,
+  // with the open window itself the indicator while it runs. A plain
+  // QDialog with one QLabel needs no subclass of its own; closing it by
+  // its own close button emits QDialog::rejected, which stop_preview
+  // (below) is connected to, so both paths end the preview the same way.
+  constexpr int kPreviewSide = 480;
+  QDialog preview_window(&window);
+  preview_window.setWindowTitle(QStringLiteral("Camera Preview"));
+  preview_window.resize(kPreviewSide, kPreviewSide);
+  auto* preview_layout = new QVBoxLayout(&preview_window);
+  auto* preview_label = new QLabel(&preview_window);
+  preview_label->setAlignment(Qt::AlignCenter);
+  preview_layout->addWidget(preview_label);
+
   QMenu menu;
   QAction* camera_status = menu.addAction(QString());
   camera_status->setEnabled(false);
@@ -681,6 +713,75 @@ int main(int argc, char* argv[]) {
   const QAction* show = menu.addAction(QStringLiteral("Settings…"));
   const auto show_window = [&window] { window.Open(); };
   QObject::connect(show, &QAction::triggered, &window, show_window);
+
+  QAction* preview_action =
+      menu.addAction(QStringLiteral("Show Camera Preview"));
+  const QString preview_request_path = PreviewRequestPath();
+  const QString preview_frame_path = PreviewFramePath();
+  const auto refresh_preview_frame = [&preview_window, preview_label,
+                                      preview_frame_path] {
+    // PreviewLease!Poll, on the preview window's own timer: also stops
+    // the preview once the camera itself goes off (the acceptance
+    // bar's "stops with the camera"), since PreviewLease already stops
+    // publishing then but would otherwise leave the window showing the
+    // last frame forever.
+    if (!facepalm::ReadCameraStatus(StatusPath().toStdString())) {
+      preview_window.reject();
+      return;
+    }
+    const QPixmap pixmap(preview_frame_path);
+    if (!pixmap.isNull()) {
+      preview_label->setPixmap(pixmap.scaled(preview_label->size(),
+                                             Qt::KeepAspectRatio,
+                                             Qt::SmoothTransformation));
+    }
+  };
+  QTimer preview_timer;
+  QObject::connect(&preview_timer, &QTimer::timeout, &window,
+                   refresh_preview_frame);
+  // PreviewLease!StopPreview: removing the request file is the only
+  // signal the daemon needs; a frame it already wrote is left behind,
+  // harmless, and overwritten the next time the preview starts.
+  const auto stop_preview = [&preview_timer, &preview_window, preview_action,
+                             preview_request_path] {
+    preview_timer.stop();
+    QFile::remove(preview_request_path);
+    preview_window.hide();
+    preview_action->setText(QStringLiteral("Show Camera Preview"));
+  };
+  QObject::connect(&preview_window, &QDialog::rejected, &window, stop_preview);
+  QObject::connect(
+      preview_action, &QAction::triggered, &window,
+      [&window, &preview_window, &preview_timer, preview_action,
+       preview_request_path, refresh_preview_frame, stop_preview] {
+        if (preview_window.isVisible()) {
+          stop_preview();
+          return;
+        }
+        // PreviewLease!StartPreview: creating the request file is the
+        // only signal the daemon needs; it notices it on the next
+        // captured frame.
+        if (!QDir().mkpath(QFileInfo(preview_request_path).absolutePath())) {
+          QMessageBox::warning(
+              &window, QStringLiteral("Camera preview could not start"),
+              QStringLiteral("Could not create the preview folder."));
+          return;
+        }
+        QFile request(preview_request_path);
+        if (!request.open(QIODevice::WriteOnly)) {
+          QMessageBox::warning(&window,
+                               QStringLiteral("Camera preview could not start"),
+                               request.errorString());
+          return;
+        }
+        refresh_preview_frame();
+        preview_window.show();
+        preview_window.raise();
+        preview_action->setText(QStringLiteral("Hide Camera Preview"));
+        constexpr int kPreviewRefreshMs = 500;
+        preview_timer.start(kPreviewRefreshMs);
+      });
+
   const QAction* quit_action = menu.addAction(QStringLiteral("Quit"));
   QObject::connect(quit_action, &QAction::triggered, &app, &QApplication::quit);
 

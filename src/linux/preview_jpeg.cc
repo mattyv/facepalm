@@ -34,7 +34,8 @@ void OnJpegError(j_common_ptr cinfo) {
 
 }  // namespace
 
-std::optional<std::string> EncodePreviewJpeg(const Frame& frame, float quality) {
+std::optional<std::string> EncodePreviewJpeg(const Frame& frame,
+                                             float quality) {
   if (frame.width <= 0 || frame.height <= 0 || frame.bgra == nullptr) {
     return std::nullopt;
   }
@@ -75,12 +76,16 @@ std::optional<std::string> EncodePreviewJpeg(const Frame& frame, float quality) 
   jpeg_start_compress(&cinfo, TRUE);
   while (cinfo.next_scanline < cinfo.image_height) {
     const std::uint8_t* source =
-        frame.bgra + static_cast<std::size_t>(cinfo.next_scanline) * frame.bytes_per_row;
+        frame.bgra +
+        static_cast<std::size_t>(cinfo.next_scanline) * frame.bytes_per_row;
     for (int x = 0; x < frame.width; ++x) {
       // BGRA to RGB: libjpeg's JCS_RGB has no alpha channel of its own.
-      row[static_cast<std::size_t>(x) * 3 + 0] = source[static_cast<std::size_t>(x) * 4 + 2];
-      row[static_cast<std::size_t>(x) * 3 + 1] = source[static_cast<std::size_t>(x) * 4 + 1];
-      row[static_cast<std::size_t>(x) * 3 + 2] = source[static_cast<std::size_t>(x) * 4 + 0];
+      row[static_cast<std::size_t>(x) * 3 + 0] =
+          source[static_cast<std::size_t>(x) * 4 + 2];
+      row[static_cast<std::size_t>(x) * 3 + 1] =
+          source[static_cast<std::size_t>(x) * 4 + 1];
+      row[static_cast<std::size_t>(x) * 3 + 2] =
+          source[static_cast<std::size_t>(x) * 4 + 0];
     }
     JSAMPROW rows[1] = {row.data()};
     jpeg_write_scanlines(&cinfo, rows, 1);
