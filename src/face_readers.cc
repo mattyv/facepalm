@@ -49,7 +49,9 @@ std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
       .pose_range = config.expressions_pose_range,
       .settle_ms = config.expressions_settle_ms,
       .spreads = config.expressions_spreads,
-      .hold_ms = config.expressions_hold_ms};
+      .hold_ms = config.expressions_hold_ms,
+      .eye_look_down_threshold = config.expressions_eye_look_down_threshold,
+      .eye_blink_threshold = config.expressions_eye_blink_threshold};
   std::vector<std::unique_ptr<FaceReader>> readers;
   if (config.gestures_enabled) {
     readers.push_back(
