@@ -5,6 +5,71 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: A menu entry for calibration, with its own small spec, closing #118
+
+-   **Decision:** `tools/menu/main.mm` and `tools/menu/main_linux.cc` each
+    gain a **Calibrate…** entry that opens a small window: a plain
+    explanation that calibration is optional, then the session's steps
+    (the resting pose, each screen's centre and four corners) with Next and
+    Cancel, following `src/calibrate_cli.h`'s protocol and item 12 of #61's
+    `specs/Calibration.tla` session. The decision logic that drives it --
+    what to send, how to read the daemon's reply, what the window shows --
+    lives in `src/calibration_flow.h`'s `CalibrationFlow`, a new unit
+    (`test/calibration_flow_test.cc`, 100 percent, mocking
+    `CalibrateClientIo`) kept out of `main.mm`/`main_linux.cc` (#64): both
+    menus' own additions are thin AppKit/Qt classes
+    (`CalibrationWindowController`, `CalibrationWindow`), each its own file,
+    the way `CameraPreview` is kept apart from `main_linux.cc`'s `main()`.
+-   **Spec:** `CalibrationFlow` has a lifecycle `specs/Calibration.tla` does
+    not model -- it is the *client's* own view, which only learns the
+    daemon's session has ended when its own next request answers that way,
+    and the window closing has to do something about a session still
+    running before the socket goes away. A small new spec,
+    `specs/CalibrationMenu.tla`, models it: `CalibrationMenu.cfg` holds (7
+    states), and each of its two guards was proved to bite --
+    `GuardFailOnDisconnect = FALSE` breaks `NoStalePrompt` (the window kept
+    showing a step once it knew, from a failed or hung-up `calibrate next`,
+    that the session was gone), and `GuardCancelOnClose = FALSE` breaks
+    `NoOrphanOnClose` (the window's own close button tore it down without
+    ever sending `calibrate cancel`, leaving the daemon's session running
+    with nobody left to answer for it) -- plus a liveness property,
+    `ClosingCompletes`, whose mutation (no fairness on completing a cancel)
+    shows a flow stuck forever in `"closing"`. `CalibrationFlow::Cancel`
+    and `WindowClosed` are the same call (`WindowClosed` is `Cancel` under
+    its own name, so main.mm/main_linux.cc's call sites show which
+    happened), which is what makes `NoOrphanOnClose` hold in the code with
+    one guard rather than two call sites to keep in sync.
+-   **Socket client:** the menu had none before this (`calibrate_cli`'s own
+    `PosixCalibrateClientIo` was the only one, specific to that one tool).
+    It is pulled out to `tools/posix_calibrate_client_io.h`, shared by
+    `calibrate_cli` and the macOS menu; the Linux tray gets its own
+    `QtCalibrateClientIo` (`tools/menu/calibration_window_linux.cc`), a
+    `QLocalSocket` behind the same `CalibrateClientIo` interface. Both are
+    untested POSIX/Qt glue by this repo's own convention (the same as
+    `tools/gesture_replay/main.cc`'s and `QtSingleInstanceIo`'s).
+-   **Approval:** the menu approves the already-existing `calibrate` client
+    name (`ClientApprovals::Approve`, the same mechanism `SwitchService`
+    uses to approve its own client for Turn On, #93) rather than a `menu`
+    client of its own, since `calibrate_cli` already established that name
+    and nothing distinguishes one caller of this protocol from another.
+    Approval happens the first time **Calibrate…** is chosen, not when the
+    menu starts, so running the tray or the menu bar app never approves a
+    client the person has not asked to use yet.
+-   **Rejected:** a screen-count picker in the wizard. `calibrate start`
+    takes an optional screen count, but the window always asks for one
+    (`CalibrationFlow::Start(1)`), calibrate_cli's own default when none is
+    given; nothing in #118 asked for a picker, and multi-monitor selection
+    is its own small design, better left for whoever actually needs it to
+    file.
+-   **Evidence:** #118's own comments and #96's and #119's PR bodies, read
+    before designing this; `specs/CalibrationMenu.tla`'s mutations, run
+    locally with TLC 1.7.4 (`CalibrationMenu.cfg`: 7 distinct states, holds,
+    each guard's mutation produces the counterexample named above);
+    `calibration_flow_test` (25 cases) and the full `ctest` suite (782
+    tests) passing with every unit, including `src/calibration_flow.cc`,
+    at its coverage floor; `clang-tidy --warnings-as-errors=*` clean on
+    every touched file.
+
 ## 2026-11-22: A preview request must be fresh, and must be a menu's own, closing #114
 
 -   **Decision:** `specs/PreviewLease.tla` now also models the request

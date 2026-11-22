@@ -46,6 +46,7 @@
 #include "src/single_instance.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
+#include "tools/menu/calibration_window_linux.h"
 
 namespace {
 
@@ -247,6 +248,39 @@ QString SwitchService(bool on) {
   }
   return service.TurnOn(*program, error) ? QString()
                                          : QString::fromStdString(error);
+}
+
+// Opens the calibration wizard (#118, item 12 of #61): approves the
+// "calibrate" client the same way SwitchService approves its own,
+// through ClientApprovals (which calibrate_cli already drives this way),
+// fresh on each open rather than once at launch, then hands
+// CalibrationWindow the token it resolved to open with.
+void OpenCalibration(facepalm_menu::CalibrationWindow& calibration,
+                     QWidget* parent) {
+  const std::optional<facepalm::UserPaths> paths = facepalm::PathsFor(
+      QDir::homePath().toStdString(), facepalm::Platform::kLinux);
+  if (!paths) {
+    QMessageBox::warning(
+        parent, QStringLiteral("Calibration could not start"),
+        QStringLiteral("Your home folder could not be found."));
+    return;
+  }
+  const std::unique_ptr<facepalm::ApprovalsIo> approvals_io =
+      facepalm::PosixApprovalsIo();
+  facepalm::ClientApprovals approvals(
+      paths->clients,
+      [](const std::string& path) { return facepalm::LoadClientToken(path); },
+      *approvals_io);
+  std::string error;
+  const std::optional<std::string> token_path =
+      approvals.Approve("calibrate", error);
+  if (!token_path) {
+    QMessageBox::warning(parent, QStringLiteral("Calibration could not start"),
+                         QString::fromStdString(error));
+    return;
+  }
+  calibration.Open(
+      facepalm::LoadClientToken(*token_path).value_or(std::string()));
 }
 
 bool ServiceIsOn() {
@@ -844,6 +878,15 @@ int main(int argc, char* argv[]) {
   preview.RemoveRequest();
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &window,
                    [&preview] { preview.RemoveRequest(); });
+
+  // The calibration wizard (#118, item 12 of #61): optional, so it is a
+  // menu entry a person chooses, never run on their behalf.
+  QAction* calibrate_action = menu.addAction(QStringLiteral("Calibrate…"));
+  facepalm_menu::CalibrationWindow calibration(&window,
+                                               SocketPath().toStdString());
+  QObject::connect(
+      calibrate_action, &QAction::triggered, &window,
+      [&calibration, &window] { OpenCalibration(calibration, &window); });
 
   const QAction* quit_action = menu.addAction(QStringLiteral("Quit"));
   QObject::connect(quit_action, &QAction::triggered, &app, &QApplication::quit);

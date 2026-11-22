@@ -28,6 +28,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
 | `Calibration.cfg` | six steps, one camera outage | holds | 30 |
+| `CalibrationMenu.cfg` | one menu flow against one daemon session, every guard on | holds, with `ClosingCompletes` | 7 |
 | `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,864 |
 | `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
@@ -1215,3 +1216,50 @@ saved profile maps a pose to the right screen; that is
 `ACalibratedProfileLocatesAScreenAnUncalibratedGuessMisses`, which replays
 fixture head poses through a full start-capture-next-finish-save-load-locate
 cycle on a real file.
+
+## `CalibrationMenu`: the menu wizard's own view of a calibration session
+
+Models the client-side lifecycle `src/calibration_flow.h`'s `CalibrationFlow`
+adds for #118 (item 12 of #61, #36, #35): the menu's "Calibrate..." wizard
+(`tools/menu/main.mm`, `tools/menu/main_linux.cc`) is a different thing from
+the session `specs/Calibration.tla` already models in the daemon, since
+`CalibrationFlow` only ever learns what the daemon's reply to its own last
+request said -- it gets no push when the daemon's session ends on its own
+(a camera loss, say). `state` is the flow's own view: `"closed"` (no window,
+or a previous outcome dismissed), `"prompting"` (a step is shown),
+`"closing"` (Cancel or the window's own close button sent `calibrate cancel`
+and is waiting for its reply), `"done"` or `"failed"`. `sessionLive`
+abstracts whether the daemon still has a session this flow owns.
+`CalibrationMenu.cfg` checks one flow against one daemon session, every
+guard on: 7 distinct states, every property holds.
+
+| Property | What it says | Test |
+|---|---|---|
+| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
+| `NoStalePrompt` | Whatever the wizard shows as "prompting" is backed by a session the daemon still has. | `CalibrationFlowTest.NextTransitionsToFailedOnAnErrorReply`, `...OnAHangUp` |
+| `NoOrphanOnClose` | Closing the window never leaves a session running with nobody left to answer for it. | `CalibrationFlowTest.WindowClosedSendsCancelWhilePrompting`, `...IsANoOpOutsidePrompting` |
+| `ClosingCompletes` | Something must happen: once Cancel or the window's close button has asked the daemon to end the session, that always finishes. | Every `CalibrationFlowTest` case that calls `Cancel()` or `WindowClosed()` observes a terminal `View()` before returning, since `CalibrateClientIo::ReadLine` is synchronous in the real POSIX and Qt glue (`tools/posix_calibrate_client_io.h`, `tools/menu/main_linux.cc`'s `QtCalibrateClientIo`) and in every mock |
+
+Each mutation, and what TLC found:
+
+| Mutation | Broke |
+|---|---|
+| `GuardFailOnDisconnect = FALSE`: a failed or hung-up `calibrate next` leaves the wizard showing the step that is no longer real | `NoStalePrompt`, 5 states |
+| `GuardCancelOnClose = FALSE`: the window's close button tears the window down without ever sending `calibrate cancel` | `NoOrphanOnClose`, 8 states |
+| No fairness on `CancelSucceeds`/`CancelFails` | `ClosingCompletes`: a flow stuck in `"closing"` forever, stuttering once its own cancel request is on the wire |
+
+`CalibrationFlow::Start` is `OpenSucceeds`/`OpenFails`, `Next` is
+`NextContinues`/`NextFinishes`/`NextFails`, `Cancel` is `UserCancel` and
+`WindowClosed` is `WindowClosed`, each followed eventually by
+`CancelSucceeds` or `CancelFails`; `CalibrationFlow`'s own synchronous
+`ReadLine` call (not an async callback) is exactly what makes
+`ClosingCompletes` true in the code without needing the model's fairness
+assumption to be a real one: a call that blocks until the daemon answers,
+or the socket ends, can never be stuck in `"closing"` with nothing further
+enabled, unlike a design that fired the cancel and returned immediately.
+The model does not cover the socket, hello or approval mechanics
+themselves (`src/calibrate_cli.h`'s `CalibrateClientIo`, already modeled
+by nothing more than "succeeds or fails", is the seam `calibrate_cli_test.cc`
+and `calibration_flow_test.cc` both mock), nor the daemon's own session,
+which `specs/Calibration.tla` already proves; only a hand check on a real
+Mac and Ubuntu, against a live daemon, shows the window itself.

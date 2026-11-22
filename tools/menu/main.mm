@@ -15,6 +15,7 @@
 #include "src/settings_document.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
+#import "tools/menu/calibration_window_macos.h"
 
 namespace {
 // How often the menu rereads the camera-in-use file (#37 item 8):
@@ -204,6 +205,10 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
 @property(nonatomic, strong) NSTimer* cameraStatusTimer;
 @property(nonatomic, strong) NSMenuItem* preview;
 @property(nonatomic, strong) NSWindow* previewWindow;
+// The calibration wizard (#118, item 12 of #61): nil whenever no window is
+// open, the way previewWindow starts out, except this controller is
+// created and dropped on each open rather than kept around closed.
+@property(nonatomic, strong) CalibrationWindowController* calibrationController;
 @property(nonatomic, strong) NSImageView* previewImageView;
 @property(nonatomic, strong) NSTimer* previewTimer;
 @property(nonatomic, strong) NSWindow* settingsWindow;
@@ -259,6 +264,13 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
                                      keyEquivalent:@""];
   self.preview.target = self;
   [menu addItem:self.preview];
+  // The calibration wizard (#118, item 12 of #61): optional, so it is a
+  // menu entry a person chooses, never run on their behalf.
+  NSMenuItem* calibrate = [[NSMenuItem alloc] initWithTitle:@"Calibrate…"
+                                                     action:@selector(calibrate:)
+                                              keyEquivalent:@""];
+  calibrate.target = self;
+  [menu addItem:calibrate];
   NSMenuItem* quit = [[NSMenuItem alloc] initWithTitle:@"Quit Facepalm Menu"
                                                 action:@selector(terminate:)
                                          keyEquivalent:@"q"];
@@ -375,6 +387,44 @@ NSArray<NSArray<NSString*>*>* ListCameras() {
   [self removePreviewRequest];
   [self.previewWindow orderOut:nil];
   self.preview.title = @"Show Camera Preview";
+}
+
+// Opens the calibration wizard (#118, item 12 of #61): approves the
+// "calibrate" client the same way switchPower approves its own client
+// through UserService (ClientApprovals::Approve, which calibrate_cli
+// already drives this way), then hands CalibrationWindowController the
+// socket path and that client's token so it can speak
+// src/calibrate_cli.h's protocol over tools/posix_calibrate_client_io.h.
+- (void)calibrate:(id)sender {
+  (void)sender;
+  if (self.calibrationController != nil) {
+    [NSApp activateIgnoringOtherApps:YES];
+    return;
+  }
+  const std::optional<facepalm::UserPaths> paths =
+      facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
+  if (!paths) {
+    [self showError:@"Your home folder could not be found." title:@"Calibration could not start"];
+    return;
+  }
+  const std::unique_ptr<facepalm::ApprovalsIo> approvals_io = facepalm::PosixApprovalsIo();
+  facepalm::ClientApprovals approvals(
+      paths->clients, [](const std::string& path) { return facepalm::LoadClientToken(path); },
+      *approvals_io);
+  std::string error;
+  const std::optional<std::string> tokenPath = approvals.Approve("calibrate", error);
+  if (!tokenPath) {
+    [self showError:ErrorMessage(error) title:@"Calibration could not start"];
+    return;
+  }
+  const std::string token = facepalm::LoadClientToken(*tokenPath).value_or(std::string());
+  self.calibrationController = [[CalibrationWindowController alloc] initWithSocketPath:paths->socket
+                                                                                 token:token];
+  __weak FacepalmApp* weakSelf = self;
+  self.calibrationController.onClosed = ^{
+    weakSelf.calibrationController = nil;
+  };
+  [self.calibrationController show];
 }
 
 // The menu quits -- by its own Quit item, Cmd-Q, or the system logging

@@ -147,6 +147,11 @@ target_link_libraries(calibration_reader PUBLIC calibration head_pose)
 facepalm_unit(daemon_calibration)
 target_link_libraries(daemon_calibration PUBLIC calibration)
 facepalm_unit(calibrate_cli)
+# A menu's own wizard, driving one session over CalibrateClientIo (#118,
+# #64): the one tested place that decides what to send and how to read the
+# daemon's reply, so tools/menu/main.mm and main_linux.cc stay thin glue.
+facepalm_unit(calibration_flow)
+target_link_libraries(calibration_flow PUBLIC calibration)
 facepalm_unit(session_camera)
 # The daemon's readers are pure computation, so their factory's tests make
 # them for real. screen_context_reader (#61 item 11) is the one exception:
@@ -190,11 +195,12 @@ if(FACEPALM_LINUX_TRAY)
     message(FATAL_ERROR "FACEPALM_LINUX_TRAY requires Linux")
   endif()
   find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
-  add_executable(facepalm_menu tools/menu/main_linux.cc)
+  add_executable(facepalm_menu tools/menu/main_linux.cc tools/menu/calibration_window_linux.cc)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths daemon_status single_instance Qt6::Widgets Qt6::Network)
+    client_token user_paths daemon_status single_instance calibration_flow calibration
+    Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -248,16 +254,17 @@ endif()
 # SessionCamera, the logic around them, is unit-tested.
 if(APPLE)
   enable_language(OBJCXX)
-  add_executable(facepalm_menu tools/menu/main.mm)
+  add_executable(facepalm_menu tools/menu/main.mm tools/menu/calibration_window_macos.mm)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths daemon_status "-framework AppKit")
+    client_token user_paths daemon_status calibration_flow calibration "-framework AppKit")
   if(BUILD_TESTING)
-    add_executable(menu_store_checks test/menu_store_check.mm)
+    add_executable(menu_store_checks test/menu_store_check.mm tools/menu/calibration_window_macos.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
-      client_approvals client_token user_paths daemon_status GTest::gtest_main "-framework AppKit")
+      client_approvals client_token user_paths daemon_status calibration_flow calibration
+      GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 
@@ -422,8 +429,9 @@ file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
   ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.cc ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.h
-  ${PROJECT_SOURCE_DIR}/tools/calibrate_cli/*.cc
+  ${PROJECT_SOURCE_DIR}/tools/calibrate_cli/*.cc ${PROJECT_SOURCE_DIR}/tools/*.h
   ${PROJECT_SOURCE_DIR}/tools/menu/*.cc ${PROJECT_SOURCE_DIR}/tools/menu/*.mm
+  ${PROJECT_SOURCE_DIR}/tools/menu/*.h
   ${PROJECT_SOURCE_DIR}/tools/daemon/*.cc
   ${PROJECT_SOURCE_DIR}/tools/camera_probe/*.cc
   ${PROJECT_SOURCE_DIR}/tools/face_model_check/*.cc
