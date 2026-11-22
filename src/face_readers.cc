@@ -42,8 +42,7 @@ class ScreenContextReaderForwarder : public FaceReader {
 // given (#141): outlives this, owned by the daemon.
 class LookAwayReaderForwarder : public FaceReader {
  public:
-  explicit LookAwayReaderForwarder(LookAwayReader& target)
-      : target_(target) {}
+  explicit LookAwayReaderForwarder(LookAwayReader& target) : target_(target) {}
   void OnFace(const Face& face, int width, int height,
               std::int64_t timestamp_ms,
               std::vector<Reaction>& reactions) override {
@@ -96,7 +95,7 @@ std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
               .other_screen_margin_degrees =
                   config.looking_away_other_screen_margin_degrees},
           EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
-                  .vertical = config.eye_gaze_vertical_gain},
+                   .vertical = config.eye_gaze_vertical_gain},
           config.eye_gaze_head_only_yaw_degrees));
     }
   }

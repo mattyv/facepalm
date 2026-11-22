@@ -147,13 +147,12 @@ TEST(FaceReadersTest, ScreenContextAndCalibrationBothAppendedWhenGiven) {
 // and kGone kinds themselves; here it is only wiring, so a real face
 // through the last reader is enough to show the given one is fed).
 TEST(FaceReadersTest, LookAwayReaderIsAppendedWhenGiven) {
-  LookAwayReader reader{ExpressionTracker::Settings{},
-                       EyeGazeTracker::Settings{},
-                       LookAwayDetector::Settings{.degrees = 1000,
-                                                  .hold_ms = 0,
-                                                  .averted_ms = 0,
-                                                  .other_screen_margin_degrees =
-                                                      0}};
+  LookAwayReader reader{
+      ExpressionTracker::Settings{}, EyeGazeTracker::Settings{},
+      LookAwayDetector::Settings{.degrees = 1000,
+                                 .hold_ms = 0,
+                                 .averted_ms = 0,
+                                 .other_screen_margin_degrees = 0}};
   const std::vector<std::unique_ptr<FaceReader>> readers =
       MakeFaceReaders(Config{}, /*screen_context_reader=*/nullptr,
                       /*calibration=*/nullptr, &reader);
@@ -176,12 +175,12 @@ TEST(FaceReadersTest, LookAwayDisabledSkipsItEvenWhenGiven) {
   Config config;
   config.looking_away_enabled = false;
   LookAwayReader reader{ExpressionTracker::Settings{},
-                       EyeGazeTracker::Settings{},
-                       LookAwayDetector::Settings{}};
+                        EyeGazeTracker::Settings{},
+                        LookAwayDetector::Settings{}};
 
   EXPECT_THAT(MakeFaceReaders(config, /*screen_context_reader=*/nullptr,
                               /*calibration=*/nullptr, &reader),
-             SizeIs(2));
+              SizeIs(2));
 }
 
 TEST(FaceReadersTest, NoLookAwayReaderGivenBuildsOneFromConfig) {

@@ -374,7 +374,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                 .other_screen_margin_degrees =
                     config.looking_away_other_screen_margin_degrees},
             EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
-                    .vertical = config.eye_gaze_vertical_gain},
+                     .vertical = config.eye_gaze_vertical_gain},
             config.eye_gaze_head_only_yaw_degrees, calibration_profile),
         // std::in_place, not a temporary moved in: ScreenContextReporter
         // holds a mutex (SetProfile's own, #137), so it is neither

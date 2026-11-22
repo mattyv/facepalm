@@ -3,8 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 
 #include "src/calibration.h"
@@ -22,7 +22,9 @@ using ::testing::Eq;
 // honoured, not Config's own defaults (which #139's recordings have not
 // yet tuned).
 constexpr LookAwayDetector::Settings kSettings = {
-    .degrees = 15, .hold_ms = 1000, .averted_ms = 6000,
+    .degrees = 15,
+    .hold_ms = 1000,
+    .averted_ms = 6000,
     .other_screen_margin_degrees = 3};
 constexpr HeadRotation kRest = {};
 
@@ -38,14 +40,14 @@ CalibrationProfile ProfileWithScreen(double left, double right, double top,
                                      double bottom) {
   // NOLINTEND(bugprone-easily-swappable-parameters)
   ScreenCalibration screen;
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopLeft)] =
-      {.yaw_degrees = left, .pitch_degrees = top};
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopRight)] =
-      {.yaw_degrees = right, .pitch_degrees = top};
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomLeft)] =
-      {.yaw_degrees = left, .pitch_degrees = bottom};
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomRight)] =
-      {.yaw_degrees = right, .pitch_degrees = bottom};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopLeft)] = {
+      .yaw_degrees = left, .pitch_degrees = top};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopRight)] = {
+      .yaw_degrees = right, .pitch_degrees = top};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomLeft)] = {
+      .yaw_degrees = left, .pitch_degrees = bottom};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomRight)] = {
+      .yaw_degrees = right, .pitch_degrees = bottom};
   CalibrationProfile profile;
   profile.screens = {screen};
   return profile;
@@ -97,13 +99,13 @@ TEST(LookReportedTest, AwayIsMeasuredFromTheRestingPose) {
   // 20 degrees of yaw is 10 from this resting pose: not away.
   EXPECT_EQ(detector.Update(Yawed(20), resting, nullptr, 0), std::nullopt);
   // 10 degrees of pitch is 20 from it: away.
-  EXPECT_EQ(detector.Update(
-                HeadRotation{.yaw_degrees = 30, .pitch_degrees = 10}, resting,
-                nullptr, 1000),
-           std::nullopt);
-  const std::optional<LookAwayReport> report = detector.Update(
-      HeadRotation{.yaw_degrees = 30, .pitch_degrees = -10}, resting, nullptr,
-      2000);
+  EXPECT_EQ(
+      detector.Update(HeadRotation{.yaw_degrees = 30, .pitch_degrees = 10},
+                      resting, nullptr, 1000),
+      std::nullopt);
+  const std::optional<LookAwayReport> report =
+      detector.Update(HeadRotation{.yaw_degrees = 30, .pitch_degrees = -10},
+                      resting, nullptr, 2000);
   ASSERT_TRUE(report.has_value());
   EXPECT_EQ(report->duration_ms, 1000);
 }
@@ -132,20 +134,19 @@ TEST(NoReportBeforeHoldTest, AGlanceThatReturnsBeforeTheHoldTimeIsNotReported) {
   // A big nod: 20 degrees down for 500 ms, then back, again and again.
   for (std::int64_t start = 0; start < 5000; start += 1000) {
     EXPECT_EQ(detector.Update(Pitched(20), kRest, nullptr, start),
-             std::nullopt);
+              std::nullopt);
     EXPECT_EQ(detector.Update(Pitched(20), kRest, nullptr, start + 500),
-             std::nullopt);
+              std::nullopt);
     EXPECT_EQ(detector.Update(Pitched(0), kRest, nullptr, start + 600),
-             std::nullopt);
+              std::nullopt);
   }
 }
 
 TEST(NoReportWhileLearningTest, NothingIsReportedWithoutARestingPose) {
   LookAwayDetector detector(kSettings);
-  EXPECT_EQ(detector.Update(Yawed(30), std::nullopt, nullptr, 0),
-           std::nullopt);
+  EXPECT_EQ(detector.Update(Yawed(30), std::nullopt, nullptr, 0), std::nullopt);
   EXPECT_EQ(detector.Update(Yawed(30), std::nullopt, nullptr, 2000),
-           std::nullopt);
+            std::nullopt);
   // Nor does a hold that began while learning carry over.
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 2500), std::nullopt);
   const std::optional<LookAwayReport> report =
@@ -163,7 +164,7 @@ TEST(NoReportWhileLearningTest, AGapClearsALookSoItIsNotYetHeldJustAfter) {
   LookAwayDetector detector(kSettings);
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 0), std::nullopt);
   EXPECT_EQ(detector.Update(Yawed(30), std::nullopt, nullptr, 500),
-           std::nullopt);  // The gap.
+            std::nullopt);  // The gap.
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 600), std::nullopt);
   // Were the look not cleared by the gap, 1,599 - 0 would already be past
   // hold_ms; measured from 600 (the gap's own end), it is not.
@@ -174,7 +175,7 @@ TEST(NoReportWhileLearningTest, AGapClearsALookSoDurationStartsAfterIt) {
   LookAwayDetector detector(kSettings);
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 0), std::nullopt);
   EXPECT_EQ(detector.Update(Yawed(30), std::nullopt, nullptr, 500),
-           std::nullopt);  // The gap.
+            std::nullopt);  // The gap.
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 600), std::nullopt);
   const std::optional<LookAwayReport> report =
       detector.Update(Yawed(0), kRest, nullptr, 1600);
@@ -318,8 +319,7 @@ TEST(GoneKindTest, GoneWinsOverOtherScreenAndDuration) {
   // Looks at the other screen first, then the face is lost, then found
   // again, back at rest.
   EXPECT_EQ(detector.Update(Yawed(30), kRest, &profile, 0), std::nullopt);
-  EXPECT_EQ(detector.Update(std::nullopt, kRest, &profile, 1000),
-           std::nullopt);
+  EXPECT_EQ(detector.Update(std::nullopt, kRest, &profile, 1000), std::nullopt);
   const std::optional<LookAwayReport> report =
       detector.Update(Yawed(0), kRest, &profile, 7000);
   ASSERT_TRUE(report.has_value());

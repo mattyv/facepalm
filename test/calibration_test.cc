@@ -711,7 +711,8 @@ ScreenCalibration ScreenSpanning(double left, double right, double top,
 }
 
 TEST_F(CalibratedScreenBoxContainingTest, NoScreensIsNoAnswer) {
-  EXPECT_THAT(CalibratedScreenBoxContaining({}, Pose(0, 0), 3), Eq(std::nullopt));
+  EXPECT_THAT(CalibratedScreenBoxContaining({}, Pose(0, 0), 3),
+              Eq(std::nullopt));
 }
 
 TEST_F(CalibratedScreenBoxContainingTest, InsideTheSpanOfItsFourCorners) {
@@ -726,14 +727,15 @@ TEST_F(CalibratedScreenBoxContainingTest, OutsideEveryBoxEvenWithTheMargin) {
   profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
 
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-10, 0), 3),
-             Eq(std::nullopt));
+              Eq(std::nullopt));
   // Past the box's own left edge too, not only its right: both of yaw's
   // own bounds are read, not just the one the test above already covers.
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-50, 0), 3),
-             Eq(std::nullopt));
+              Eq(std::nullopt));
 }
 
-TEST_F(CalibratedScreenBoxContainingTest, TheMarginWidensEveryBoxBySomeDegrees) {
+TEST_F(CalibratedScreenBoxContainingTest,
+       TheMarginWidensEveryBoxBySomeDegrees) {
   CalibrationProfile profile;
   profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
 
@@ -741,7 +743,7 @@ TEST_F(CalibratedScreenBoxContainingTest, TheMarginWidensEveryBoxBySomeDegrees) 
   // of margin past it.
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-18, 0), 3), Eq(0U));
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-16, 0), 3),
-             Eq(std::nullopt));
+              Eq(std::nullopt));
 }
 
 TEST_F(CalibratedScreenBoxContainingTest, PitchOutsideTheBoxIsNoMatchEither) {
@@ -749,10 +751,10 @@ TEST_F(CalibratedScreenBoxContainingTest, PitchOutsideTheBoxIsNoMatchEither) {
   profile.screens = {ScreenSpanning(-40, -20, -5, 5)};
 
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 20), 0),
-             Eq(std::nullopt));
+              Eq(std::nullopt));
   // Past the box's own top edge too, not only its bottom.
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, -20), 0),
-             Eq(std::nullopt));
+              Eq(std::nullopt));
 }
 
 TEST_F(CalibratedScreenBoxContainingTest, PicksTheFirstBoxThatMatches) {
@@ -763,7 +765,7 @@ TEST_F(CalibratedScreenBoxContainingTest, PicksTheFirstBoxThatMatches) {
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(-30, 0), 0), Eq(0U));
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(30, 0), 0), Eq(1U));
   EXPECT_THAT(CalibratedScreenBoxContaining(profile, Pose(0, 0), 0),
-             Eq(std::nullopt));
+              Eq(std::nullopt));
 }
 
 }  // namespace

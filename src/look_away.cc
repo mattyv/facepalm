@@ -34,9 +34,8 @@ double OffFrom(const HeadRotation& gaze, const HeadRotation& resting) {
 
 std::string_view Name(LookAwayKind kind) {
   // In LookAwayKind's own order.
-  constexpr std::array<std::string_view, 4> kNames = {"averted",
-                                                       "other_screen", "away",
-                                                       "gone"};
+  constexpr std::array<std::string_view, 4> kNames = {"averted", "other_screen",
+                                                      "away", "gone"};
   return kNames.at(static_cast<std::size_t>(kind));
 }
 

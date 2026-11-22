@@ -69,11 +69,11 @@ bool ReplayLookingAway(std::istream& input, std::ostream& output) {
     tracker.Update(Scores{}, pose, timestamp);
     const HeadRotation gaze =
         ComposeGaze(pose, std::nullopt, std::nullopt, EyeGains{},
-                   CalibrationSettings::kDefaultHeadOnlyYawDegrees);
+                    CalibrationSettings::kDefaultHeadOnlyYawDegrees);
     if (const std::optional<LookAwayReport> report =
             detector.Update(gaze, resting, nullptr, timestamp)) {
-      output << "looked_away " << timestamp << ' ' << Name(report->kind)
-             << ' ' << report->duration_ms << '\n';
+      output << "looked_away " << timestamp << ' ' << Name(report->kind) << ' '
+             << report->duration_ms << '\n';
     }
   }
   return !input.bad() && output.good();

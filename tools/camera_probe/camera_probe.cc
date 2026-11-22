@@ -540,7 +540,7 @@ class Probe : public CameraReports {
               .other_screen_margin_degrees =
                   config_.looking_away_other_screen_margin_degrees},
           EyeGains{.horizontal = config_.eye_gaze_horizontal_gain,
-                  .vertical = config_.eye_gaze_vertical_gain},
+                   .vertical = config_.eye_gaze_vertical_gain},
           config_.eye_gaze_head_only_yaw_degrees));
     }
     readers.push_back(std::make_unique<GestureProbeReader>());

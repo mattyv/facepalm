@@ -66,7 +66,7 @@ Face FaceAt(Pose pose) {
 // out): test/look_away_test.cc is where duration is covered exactly.
 ::testing::Matcher<const Reaction&> LookedAway(std::string_view kind) {
   return AllOf(HasSubstr(R"("gesture":"looked_away")"),
-              HasSubstr(R"("kind":")" + std::string(kind) + R"(")"));
+               HasSubstr(R"("kind":")" + std::string(kind) + R"(")"));
 }
 
 // Feeds a LookAwayReader frames at 15 per second and collects every
@@ -88,32 +88,32 @@ class LookAwayReaderTest : public ::testing::Test {
 
   static LookAwayDetector::Settings DetectorSettings() {
     return {.degrees = 15,
-           .hold_ms = 1000,
-           .averted_ms = 6000,
-           .other_screen_margin_degrees = 3};
+            .hold_ms = 1000,
+            .averted_ms = 6000,
+            .other_screen_margin_degrees = 3};
   }
 
   static ExpressionTracker::Settings TrackerSettings() {
     return {.rise = 0.06,
-           .pose_degrees = 10,
-           .pose_range = 3,
-           .settle_ms = 600,
-           .spreads = 3,
-           .hold_ms = 200,
-           .eye_look_down_threshold = 0.3,
-           .eye_blink_threshold = 0.5};
+            .pose_degrees = 10,
+            .pose_range = 3,
+            .settle_ms = 600,
+            .spreads = 3,
+            .hold_ms = 200,
+            .eye_look_down_threshold = 0.3,
+            .eye_blink_threshold = 0.5};
   }
 
   static EyeGazeTracker::Settings EyeTrackerSettings() {
     return {.blink_threshold = 0.5,
-           .median_ms = 0,
-           .resting_ms = 0,
-           .gap_ms = 2000};
+            .median_ms = 0,
+            .resting_ms = 0,
+            .gap_ms = 2000};
   }
 
   std::int64_t now_ms_ = 1000;
   LookAwayReader reader_{TrackerSettings(), EyeTrackerSettings(),
-                        DetectorSettings()};
+                         DetectorSettings()};
   std::vector<Reaction> reactions_;
 };
 
@@ -218,14 +218,14 @@ TEST_F(LookAwayReaderTest, OnNoFaceBeforeAnyFaceIsLearningNotGone) {
 // test into the detector this reader owns.
 TEST_F(LookAwayReaderTest, SetProfileWiresInTheOtherScreenBoxTest) {
   ScreenCalibration screen;
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopLeft)] =
-      {.yaw_degrees = 20, .pitch_degrees = -5};
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopRight)] =
-      {.yaw_degrees = 40, .pitch_degrees = -5};
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomLeft)] =
-      {.yaw_degrees = 20, .pitch_degrees = 5};
-  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomRight)] =
-      {.yaw_degrees = 40, .pitch_degrees = 5};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopLeft)] = {
+      .yaw_degrees = 20, .pitch_degrees = -5};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kTopRight)] = {
+      .yaw_degrees = 40, .pitch_degrees = -5};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomLeft)] = {
+      .yaw_degrees = 20, .pitch_degrees = 5};
+  screen.points[static_cast<std::size_t>(CalibrationPoint::kBottomRight)] = {
+      .yaw_degrees = 40, .pitch_degrees = 5};
   CalibrationProfile profile;
   profile.screens = {screen};
   reader_.SetProfile(&profile);

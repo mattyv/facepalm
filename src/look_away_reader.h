@@ -26,11 +26,11 @@ namespace facepalm {
 class LookAwayReader : public FaceReader {
  public:
   LookAwayReader(ExpressionTracker::Settings tracker,
-                EyeGazeTracker::Settings eye_tracker,
-                LookAwayDetector::Settings detector, EyeGains gains = {},
-                double head_only_yaw_degrees =
-                    CalibrationSettings::kDefaultHeadOnlyYawDegrees,
-                const CalibrationProfile* profile = nullptr);
+                 EyeGazeTracker::Settings eye_tracker,
+                 LookAwayDetector::Settings detector, EyeGains gains = {},
+                 double head_only_yaw_degrees =
+                     CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+                 const CalibrationProfile* profile = nullptr);
 
   void OnFace(const Face& face, int width, int height,
               std::int64_t timestamp_ms,

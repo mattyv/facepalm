@@ -36,8 +36,7 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_THAT(config.looking_away_degrees, FloatEq(15.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1000));
   EXPECT_THAT(config.looking_away_averted_ms, Eq(6500));
-  EXPECT_THAT(config.looking_away_other_screen_margin_degrees,
-             FloatEq(3.0F));
+  EXPECT_THAT(config.looking_away_other_screen_margin_degrees, FloatEq(3.0F));
   EXPECT_TRUE(config.screen_context_enabled);
   EXPECT_FALSE(config.screen_context_window_titles_enabled);
   EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(7.5F));
@@ -110,8 +109,7 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_THAT(config.looking_away_degrees, FloatEq(20.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1500));
   EXPECT_THAT(config.looking_away_averted_ms, Eq(7000));
-  EXPECT_THAT(config.looking_away_other_screen_margin_degrees,
-             FloatEq(4.0F));
+  EXPECT_THAT(config.looking_away_other_screen_margin_degrees, FloatEq(4.0F));
   EXPECT_FALSE(config.screen_context_enabled);
   EXPECT_TRUE(config.screen_context_window_titles_enabled);
   EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(5.0F));

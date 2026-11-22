@@ -35,8 +35,8 @@ std::optional<HeadRotation> PoseOf(const Face& face) {
 // {"gesture":"looked_away","kind":"...","duration_ms":n} (#141).
 std::string JsonFor(const LookAwayReport& report) {
   return R"({"gesture":"looked_away","kind":)" +
-        protocol::Quoted(Name(report.kind)) + R"(,"duration_ms":)" +
-        std::to_string(report.duration_ms) + "}";
+         protocol::Quoted(Name(report.kind)) + R"(,"duration_ms":)" +
+         std::to_string(report.duration_ms) + "}";
 }
 
 }  // namespace
@@ -75,8 +75,8 @@ void LookAwayReader::OnFace(const Face& face, int /*width*/, int /*height*/,
   tracker_.Update(scores, *pose, timestamp_ms);
   const std::optional<EyeSignal> eye = eye_tracker_.Signal();
   const std::optional<EyeSignal> eye_resting = eye_tracker_.Resting();
-  const HeadRotation gaze = ComposeGaze(*pose, eye, eye_resting, gains_,
-                                       head_only_yaw_degrees_);
+  const HeadRotation gaze =
+      ComposeGaze(*pose, eye, eye_resting, gains_, head_only_yaw_degrees_);
   const CalibrationProfile* profile = profile_.load();
   if (const std::optional<LookAwayReport> report =
           detector_.Update(gaze, resting, profile, timestamp_ms)) {
