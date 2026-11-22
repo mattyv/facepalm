@@ -5,6 +5,49 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: The MCP session reconnects, with a bounded backoff, instead of dying (#117)
+
+-   **Decision:** `mcp/session.js`'s `SocketSession` no longer treats a lost
+    link as terminal: a new `disconnect()` tears down the socket without
+    ending the session, and a later request reconnects once this
+    session's own backoff (1 s, doubling to a 30 s cap, reset on a
+    successful connection) has run out. Closing the session for good
+    (`close()`), and cancelling a request already in flight, are still
+    terminal, exactly as before: a new `OfflineError`, exported from
+    `session.js`, is what `request()` rejects with for every other
+    reason a request did not reach the wire, so `mcp/server.js` and
+    `mcp/feeling-elicitation.js` can tell "Facepalm is off; turn it on
+    from its menu" apart from every other failure without matching error
+    text across files. That phrase, and the session's own retrying,
+    replace the old generic failure message that told the person to
+    restart the MCP server, which no longer applies.
+-   **Also decided:** `mcp/main.js` no longer exits when its token file is
+    simply not there yet (`ENOENT`): it starts anyway, and
+    `SocketSession`'s own token, given as a function, reads that path
+    fresh on every connection attempt, so approving this adapter later,
+    from the daemon's menu, needs no restart. Every other way reading the
+    token file can fail (bad permissions, a symlink, the wrong length or
+    format) still exits immediately, unchanged: those are
+    misconfigurations retrying cannot fix.
+-   **Also decided:** `mcp/server.js`'s zod `delivery` schema gets a
+    `context` key, with the same shape `src/screen_context_reporter.cc`'s
+    `Json` sends (active_app, window_title only when the daemon has one to
+    report, mouse, gaze, calibrated_screen), so it is no longer silently
+    dropped before an MCP client ever sees it. #36's design already has
+    both channels (the native service and MCP) report screen context;
+    this was the one case where zod, parsing what crosses that boundary,
+    dropped a field the daemon already sent.
+-   **Spec:** `specs/McpSocket.tla` is changed, not written fresh, to add
+    `link`, `backoff` and the reconnect actions, keeping `state`'s own
+    terminal "closed" exactly as it was. `NoSendAfterClose` and
+    `OneRequest` still hold; a new `BackoffBounded` and a new liveness
+    property, `LinkRecovers` (something must happen: a lost link always
+    comes back, or the session closes first), both hold too, each proved
+    to bite by a guard mutation or by removing fairness.
+-   **Evidence:** [#117](https://github.com/mattyv/facepalm/issues/117),
+    [#93](https://github.com/mattyv/facepalm/issues/93),
+    [#36](https://github.com/mattyv/facepalm/issues/36).
+
 ## 2026-11-22: The preview window and the Linux encoder close #108, no new spec
 
 -   **Decision:** the menu's own window for the camera preview (#108, the

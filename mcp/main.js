@@ -25,6 +25,15 @@ function readClientToken(path) {
   }
 }
 
+// Whether `error` is readClientToken's own ENOENT, from a token path that
+// simply has nothing there yet: Facepalm has not approved this adapter,
+// which is not a reason to exit (#117), unlike every other way reading a
+// token file can fail (bad permissions, a symlink, the wrong length or
+// format), which still is.
+function tokenFileMissing(error) {
+  return error?.code === 'ENOENT';
+}
+
 // Where facepalm keeps its per-user files, as src/user_paths.cc has it.
 function userDirectory() {
   return process.platform === 'darwin'
@@ -41,18 +50,22 @@ if (args.length !== 0 && args.length !== 1 && !(args.length === 3 && args[1] ===
 // are in their fixed per-user places (#37).
 const socketPath = args[0] ?? path.join(userDirectory(), 'service.sock');
 const tokenPath = args.length === 0 ? path.join(userDirectory(), 'clients', 'mcp') : args[2];
-let token;
 if (tokenPath !== undefined) {
   try {
-    token = readClientToken(tokenPath);
-  } catch {
-    console.error(args.length === 0
-      ? 'Facepalm has not approved this adapter: turn Facepalm on from its menu, or run facepalm-daemon approve mcp.'
-      : 'Could not read a valid private client token file.');
-    process.exit(1);
+    readClientToken(tokenPath);
+  } catch (error) {
+    if (!tokenFileMissing(error)) {
+      console.error(args.length === 0
+        ? 'Facepalm has not approved this adapter: turn Facepalm on from its menu, or run facepalm-daemon approve mcp.'
+        : 'Could not read a valid private client token file.');
+      process.exit(1);
+    }
+    // No token file yet (#117): starts anyway. SocketSession re-reads
+    // this path on every connection attempt, so approving this adapter
+    // later, with no restart, is enough.
   }
 }
-const session = new SocketSession(socketPath, token);
+const session = new SocketSession(socketPath, tokenPath === undefined ? undefined : () => readClientToken(tokenPath));
 let broker;
 if (process.env.FACEPALM_HOOK_SOCKET) {
   try { broker = await startHookBroker({ path: process.env.FACEPALM_HOOK_SOCKET, session }); }
