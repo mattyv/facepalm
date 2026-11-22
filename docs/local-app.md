@@ -134,9 +134,16 @@ anything but that window.
 A short guided session improves on the coarse, uncalibrated gaze of item 11
 (#36, #35): it records the resting pose and, for each screen, the head pose
 at its centre and four corners, then saves them to a private file the daemon
-owns. `calibrate_cli` drives one against a running daemon, for testing and as
-a model for the eventual menu entry (item 8). Approve it once, as any other
-client:
+owns. Choosing **Calibrate…** from the 🤦 menu or the tray (#118) opens a
+small window with a plain explanation that it is optional, then steps
+through the resting pose and each screen's centre and four corners with
+Next and Cancel; closing the window at any point, whether by Cancel or its
+own close control, asks the daemon to cancel cleanly, so the old profile is
+always what is left in place unless every step finished. `calibrate_cli`
+drives the same session from a terminal, for testing and as the model
+`src/calibration_flow.h`'s `CalibrationFlow` follows for the menu's own
+socket client. Approve it once by hand, as any other client, only if
+driving it this way rather than through the menu:
 
 ```shell
 facepalm-daemon approve calibrate
@@ -155,6 +162,7 @@ the coarse gaze item 11's `context` reports (#92): a daemon run that starts
 after a profile exists locates the nearest screen from its calibrated
 points instead of guessing from the screen's edges alone. That profile is
 loaded once, at startup, so finishing a session only changes coarse gaze
-from the daemon's next run, not the one the session ran against. No menu
-entry starts a session yet; that is tracked on its own
-([#118](https://github.com/mattyv/facepalm/issues/118)).
+from the daemon's next run, not the one the session ran against. The menu
+approves its own "calibrate" client the first time **Calibrate…** is
+chosen, the same way **Turn On Facepalm…** approves its own client, rather
+than when the menu itself starts.
