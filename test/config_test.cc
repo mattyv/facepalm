@@ -403,11 +403,11 @@ TEST(ParseConfigTest, RefusesADegreesSettingOutsideZeroToOneEighty) {
               Eq("line 1: expected a number from 0 to 180"));
   EXPECT_THAT(ErrorFor("calibration.min_axis_degrees = far"),
               Eq("line 1: expected a number from 0 to 180"));
-  EXPECT_THAT(ErrorFor("calibration.min_spread_degrees = 180.1"),
+  // from_chars reads "nan", and NaN passes a < 0 || > 180 check.
+  EXPECT_THAT(ErrorFor("calibration.min_spread_degrees = nan"),
               Eq("line 1: expected a number from 0 to 180"));
   EXPECT_THAT(ErrorFor("looking_away.other_screen_margin_degrees = far"),
               Eq("line 1: expected a number from 0 to 180"));
-  // from_chars reads "nan", and NaN passes a < 0 || > 180 check.
   EXPECT_THAT(ErrorFor("looking_away.other_screen_margin_degrees = nan"),
               Eq("line 1: expected a number from 0 to 180"));
 }
