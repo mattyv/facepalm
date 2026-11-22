@@ -70,6 +70,148 @@ a line saying which entry replaced it.
     at its coverage floor; `clang-tidy --warnings-as-errors=*` clean on
     every touched file.
 
+## 2026-11-22: FuzzTest alone, fuzzing the parsers and property-testing the rules, closes #120
+
+-   **Decision:** Google FuzzTest, and no other property-testing library
+    (RapidCheck was considered and rejected): FuzzTest's domains cover
+    property-based testing with shrinking on their own, and it keeps one
+    dependency, in GoogleTest's own style, rather than two different ones
+    doing overlapping jobs. `CMakeLists.txt` fetches it with `FetchContent`
+    behind a new `FACEPALM_FUZZTEST` option (default off), pinned past the
+    `2026-06-29` release to commit `39e5d587af63` (2026-10-21; no tagged
+    release carries it yet — see the real bug below) by a SHA-256 checksum
+    on its source archive, not a bare `GIT_TAG` (which carries no checksum
+    of its own). Every fuzz or property test is a GoogleTest executable
+    FuzzTest also drives, `test/fuzz/<name>_fuzz_test.cc` built as
+    `<name>_fuzz`, registered through `facepalm_fuzz_test` in
+    `CMakeLists.txt`.
+-   **The fuzz targets, in #120's order:** `src/protocol.cc`'s `Parse`
+    (the hello line, reaching unauthenticated local processes before any
+    approval); `src/config.cc`'s `ParseConfig` and
+    `src/settings_document.cc`'s `UpdateSettingsDocument`; the feelings
+    counts file, through `src/tuning.cc`'s `Tuning::Parse` (the pure entry
+    point behind `src/feeling_store.cc`'s own file I/O); `src/frame_times.cc`'s
+    `FrameTimes`; the calibration profile, through
+    `src/calibration_store.cc`'s `ParseCalibrationProfile`; and the
+    `cameras` listing the Settings windows parse, through a new pure
+    function extracted for it, `ParseCamerasListing` in new files
+    `src/cameras_listing.{h,cc}`, with its own 100 percent unit test
+    (`test/cameras_listing_test.cc`): `tools/menu/main.mm` and
+    `tools/menu/main_linux.cc` each parsed facepalm-daemon's tab-separated
+    `cameras` stdout by hand, with no pure entry point of their own; both
+    now call the extracted function instead of parsing it twice.
+-   **The property tests, each following #120's own wording:** `Interpret`
+    (`src/feelings.cc`) is independent of cue order, cues of different
+    feelings give unknown, and an incomplete window always gives unknown;
+    `Tuning::Read` (`src/tuning.cc`) never replaces the generic read on
+    fewer than three agreeing picks (`Tuning::kLeastPicks` is 2, but the
+    held-out check `Read` runs needs one of those picks spare, so a
+    feeling needs 3 before it can out-vote the generic read — found while
+    writing the test, confirmed by reading `Tuning::Read`, not a bug),
+    and a reset restores it; the frame-rate choice (#43) always lies
+    within one of the camera's own supported ranges, through
+    `NearestSupportedRate`, exposed from `src/session_camera.cc`'s
+    anonymous namespace into `src/session_camera.h` so the test can call
+    it directly; the settings document keeps every unrelated line and
+    comment; a finite rotation gives finite angles
+    (`src/head_pose.cc`'s `HeadRotationFrom`); and protocol's hello line
+    round-trips through `Parse`.
+-   **Not fuzzed as asked, with a reason:** the frame-rate and head-pose
+    properties and `src/feelings.cc`'s `Interpret` are pure, already-public
+    functions a property test calls directly, not new fuzz targets of
+    their own; #120 lists them under property tests, not the six fuzz
+    targets, and they need no file format fuzzed, only arguments.
+-   **How fuzz targets run:** GoogleTest's own brief, uninstrumented
+    replay (a handful of random inputs, around a second) in every job that
+    builds with `FACEPALM_FUZZTEST=ON`, including the existing `macos`
+    job's coverage step; real, continuous, coverage-guided fuzzing only
+    under `-DFUZZTEST_FUZZING_MODE=on`, which needs Clang's sanitizer
+    coverage instrumentation, in the new Linux-only `fuzzing` CI job,
+    under AddressSanitizer and UndefinedBehaviorSanitizer, each target run
+    with `--fuzz_for=45s`. Verified locally in GoogleTest's brief mode only
+    (macOS, AppleClang): the task notes FuzzTest's fuzzing mode may not
+    work on macOS, so the continuous mode is verified by the Linux job
+    alone.
+-   **Cost on the `macos` job:** measured locally (macOS, AppleClang,
+    `-j4`): a cold `bash scripts/coverage.sh` is about 59 seconds; with
+    `-DFACEPALM_FUZZTEST=ON` added, about 3 minutes 4 seconds, a FuzzTest,
+    Abseil, RE2 and ANTLR build away from the floor. That crossed the "a
+    few minutes" line, so both this job and the new `fuzzing` job cache
+    `build-coverage/_deps` and `build-fuzzing/_deps`, keyed on
+    `CMakeLists.txt` (which holds the pin), the way
+    `scripts/fetch_mediapipe_c.sh`'s own fetch already is: a warm run only
+    compiles facepalm's own sources and the fuzz targets, not FuzzTest's
+    dependency tree over again.
+-   **A real bug the new `fuzzing` CI job found, on its first real run,
+    in FuzzTest itself, not facepalm's code:** every target crashed
+    `--fuzz_for`'s first input with an AddressSanitizer stack-overflow, a
+    few thousand frames deep, entirely inside
+    `fuzztest::internal::ExecutionCoverage::IsTracing` and
+    `std::atomic<bool>::load`, never reaching any facepalm frame. Read:
+    `IsTracing`'s `std::atomic<bool>::load(std::memory_order_relaxed)`
+    (added 2026-01-29 to fix a ThreadSanitizer warning) compiles, under
+    `-fsanitize-coverage=trace-cmp`, to a libstdc++ branch on the memory
+    order that is itself instrumented, calling back into `IsTracing`
+    through `TraceCmp` — the exact bootstrapping problem sanitizer
+    coverage runtimes exist to avoid in their own code. GoogleTest's own
+    brief replay mode (every other job) never reaches
+    `FUZZTEST_FUZZING_MODE`'s instrumented build, so this was invisible
+    until the `fuzzing` job's own first real run; verified by reading
+    `fuzztest/internal/coverage.h` at the pinned commit against the
+    crash's stack trace. Fixed by moving the pin to `39e5d587af63`
+    (2026-10-21), where FuzzTest replaces that `std::atomic<bool>` with
+    the raw `__atomic_load_n`/`__atomic_store_n` builtins, which compile
+    to no instrumentable branch; confirmed against that commit's own diff.
+    No facepalm regression test applies — the bug is in FuzzTest's own
+    source, fixed by moving to the commit that already fixes it there.
+-   **A real bug in facepalm's own code, found once the fuzzing job got
+    past the problem above:** `SessionCameraFuzz.ChosenRateWithinSupportedRange`
+    found a genuine UndefinedBehaviorSanitizer signed-integer-overflow in
+    `src/session_camera.cc`'s `NearestSupportedRate`, on its very next
+    fuzzed input after the fix above: `Nearest`'s candidate-to-`wanted`
+    distance, `std::abs(candidate - wanted)`, overflows `int` once
+    `wanted` is far enough from a candidate (its counterexample: `wanted
+    = -2147483647`, a candidate of `60`). GoogleTest's own brief replay
+    mode never generates so extreme a value, so this was invisible until
+    the fuzzing job's own run. Fixed by widening the subtraction to
+    `int64_t` before taking the absolute value (a new `Distance`
+    function), which cannot overflow for any `int` pair. Verified the bug
+    and the fix directly: a standalone `-fsanitize=undefined
+    -fno-sanitize-recover=all` build of the old `std::abs(candidate -
+    wanted)` aborts on the counterexample's inputs; the widened version
+    does not, and computes the same (correct) distance. Regression test:
+    `SessionCameraFrameRateTest.DoesNotOverflowOnARateNearIntMin`
+    (`test/session_camera_test.cc`), the exact counterexample.
+-   **Two build-integration problems found and fixed, not FuzzTest's own
+    bugs:** Abseil, FuzzTest's own dependency, defines a raw CMake target
+    literally named `config`, colliding with facepalm's own `config` unit;
+    `facepalm_unit` gained a `TARGET` option, used once, to build that
+    unit's library as `facepalm_config` while its test executable stays
+    `config_test` (`CMakeLists.txt`, every `target_link_libraries` that
+    named `config` updated to `facepalm_config`). FuzzTest's own
+    `CMakeLists.txt` also fetches GoogleTest itself unless `GTest::gtest`
+    already names a target when it configures; moving this project's own
+    `find_package(GTest REQUIRED)` ahead of FuzzTest's `FetchContent`
+    (previously below it) makes every test in the project, not only the
+    fuzz tests, link the same GoogleTest FuzzTest's own fetch would
+    otherwise silently replace it with — the fetched copy's Abseil
+    integration made an existing GoogleTest printer emit a
+    deprecated-declaration warning `-Werror` turned fatal, across every
+    test executable in the build, not only the new ones.
+-   **Coverage:** fuzz and property test executables are exempt from the
+    per-file coverage gate the way the fixture tool is: `CLAUDE.md`'s Tests
+    section and this entry record it. Named `<name>_fuzz`, not
+    `<name>_test`, so `scripts/coverage.sh`'s own `*_test` glob, which
+    measures each unit's floor from its own tests alone, already skips
+    them without a change to that script, the same way it already skips
+    `menu_store_checks`, `preview_jpeg_checks` and
+    `linux_tray_integration`. No existing floor in `coverage_thresholds.json`
+    was lowered or removed; `src/cameras_listing.cc`'s new floor is 100
+    percent, lines, branches and functions, met by its own unit test.
+-   **Evidence:** [#120](https://github.com/mattyv/facepalm/issues/120),
+    [#61](https://github.com/mattyv/facepalm/issues/61),
+    [#43](https://github.com/mattyv/facepalm/issues/43).
+
 ## 2026-11-22: AvFoundationSession's device-change observers wait for StartWatching too (#121)
 
 -   **Decision:** `AvFoundationSession`'s constructor no longer registers
