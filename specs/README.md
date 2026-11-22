@@ -525,7 +525,7 @@ clears it. `CameraLifecycle.cfg` chooses the default device; the symmetric
 | `NoEventToStranger` | A reaction reaches only a subscribed client. | `NoEventToStrangerTest` |
 | `DeadHelperHoldsNoCamera` | A dead helper holds no camera. | `DeadHelperHoldsNoCameraTest`: a restarted helper is a new controller, which starts closed |
 | `CapturesOnlyChosenDevice` | The device captures only while the device the person chose is attached (#13). | `SessionCameraTest.IgnoresAnotherCameraDisconnecting`, `IgnoresAnotherCameraConnecting`; held to the spec by reading for `AvFoundationSession::Configure` and `V4l2Session::Configure`'s own identity match, which `V4l2SessionTest.ConfigureMatchesTheChosenDeviceAmongSeveral` and `ConfigureGivesNothingWhenNoNodeMatchesTheChoice` exercise directly |
-| `DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack` on Linux | A camera connecting or disconnecting while the daemon runs reaches `SessionCamera` on Linux too, the way AVFoundation's own notifications already do on macOS (#111). | `V4l2SessionTest.WiresHotplugCallbacksToTheGivenOnes` holds `V4l2Session` to asking the given `HotplugMonitor` to watch with exactly the callbacks it was given; `V4l2HotplugTest`'s `ANewCameraFiresOnConnected`, `AKnownCameraDisconnects` and the rest hold `V4l2InotifyMonitor`, the real watch over inotify, to finding and reporting a node's id the same way `Configure`/`List` do |
+| `DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack` on Linux | A camera connecting or disconnecting while the daemon runs reaches `SessionCamera` on Linux too, the way AVFoundation's own notifications already do on macOS (#111). | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` holds `V4l2Session` to asking the given `HotplugMonitor` to watch with exactly the callbacks it was given, once asked to (`ConstructingDoesNotStartWatchingUntilToldTo`, #115); `V4l2HotplugTest`'s `ANewCameraFiresOnConnected`, `AKnownCameraDisconnects` and the rest hold `V4l2InotifyMonitor`, the real watch over inotify, to finding and reporting a node's id the same way `Configure`/`List` do, with a node `IN_CREATE` could not yet open retried on `IN_ATTRIB` (`AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects`, #115) |
 | `CanOpen` | Something must happen: a wanted, closed camera can start opening, once neither the device nor a denied permission or failed start (#52) stands in the way. | `WantedOpensTest`, `RetriesTest` |
 | `RevokingCloses` | Revoking consent leads to the camera being closed. | `RevokingClosesTest` |
 | `LastLeaveCloses` | No subscribers leads to the camera being closed. | `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` |
@@ -603,14 +603,29 @@ themselves had no Linux implementation at all until #111:
 `AvFoundationSession`'s already did, so a camera connecting or
 disconnecting while the daemon ran went unnoticed on Linux. It now takes
 the same two callbacks, and a `HotplugMonitor&` (`src/linux/v4l2_hotplug.h`)
-it asks, once, to call them; `V4l2InotifyMonitor`, the real one, watches
+it asks to call them; `V4l2InotifyMonitor`, the real one, watches
 `/dev` with inotify for the same four nodes `Configure`/`List` already
 probe (docs/decisions.md), reusing their own open-and-query to find a
-node's id. `WiresHotplugCallbacksToTheGivenOnes` in
+node's id. `StartWatchingWiresHotplugCallbacksToTheGivenOnes` in
 `test/linux/v4l2_session_test.cc` holds `V4l2Session` to asking a fake
 `HotplugMonitor` correctly; `test/linux/v4l2_hotplug_test.cc` holds
 `V4l2InotifyMonitor` itself to the interface, with inotify faked at link
 time the same way libv4l2 already is.
+
+The watch itself starts on `StartWatching`, not the constructor (#115):
+`hotplug.Start()` begins a thread that can call `on_connected`/
+`on_disconnected` as soon as it runs, and those callbacks are Engine's own
+(`tools/daemon/main.cc`), closing over sibling members, `camera_` among
+them, that Engine's constructor may not have reached yet when `capture_`'s
+own constructor would have started that thread. `Engine::Start()` calls
+`StartWatching()` once every member is built. The model does not cover
+this ordering, only the device states `DeviceLost`/`DeviceBack` and the
+rest name; `ConstructingDoesNotStartWatchingUntilToldTo` in
+`test/linux/v4l2_session_test.cc` is the regression test, read for by this
+table's own `V4l2Session` constructor row below. `V4l2InotifyMonitor` also
+now watches `IN_ATTRIB`, retrying a probed node `IN_CREATE` found it could
+not open: udev applies a node's permissions some moments after creating
+it, so the node may not have been readable yet (#115).
 
 | Mutation to `SessionCamera`, `FramePipeline` or `V4l2Session` | Fails |
 |---|---|
@@ -620,9 +635,12 @@ time the same way libv4l2 already is.
 | `SessionCamera::Start` clamps into one collapsed range instead of the nearest of several | `SessionCameraFrameRateTest.AsksForTheNearerOfTwoSeparateRanges`, `HandlesARangeRoundedOutwardFromAFixedRate`, `PicksTheClosestAmongSeveralRanges` (#43) |
 | `V4l2Session::Configure` matches any node instead of the chosen device's id | `V4l2SessionTest.ConfigureGivesNothingWhenNoNodeMatchesTheChoice`, `ConfigureMatchesTheChosenDeviceAmongSeveral` (#13) |
 | `V4l2Session::Configure`/`List` do not skip a node that does not query | `V4l2SessionTest.ConfigureSkipsANodeThatDoesNotQuery`, `ListSkipsANodeThatDoesNotQuery` |
-| `V4l2Session` does not ask the given `HotplugMonitor` to watch, or not with the callbacks it was given | `V4l2SessionTest.WiresHotplugCallbacksToTheGivenOnes` (#111) |
+| `V4l2Session` does not ask the given `HotplugMonitor` to watch, or not with the callbacks it was given | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` (#111) |
+| `V4l2Session`'s constructor starts the watch itself | `V4l2SessionTest.ConstructingDoesNotStartWatchingUntilToldTo` (#115) |
 | `V4l2InotifyMonitor` fires `on_connected` for a node already attached when the watch starts | `V4l2HotplugTest.InitialScanProbesAllFourNodesWithoutFiringAnyCallback` (#111) |
 | `V4l2InotifyMonitor` does not filter by the four probed node names, firing for an unrelated entry under /dev | `V4l2HotplugTest.AnUnrelatedNameIsIgnored` (#111) |
+| `V4l2InotifyMonitor` does not retry a node `IN_CREATE` could not open, on `IN_ATTRIB` | `V4l2HotplugTest.AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects` (#115) |
+| `V4l2InotifyMonitor` reopens or refires an already-known node on `IN_ATTRIB` | `V4l2HotplugTest.AnAttribOnAnAlreadyKnownNodeDoesNotReopenOrRefire` (#115) |
 
 ## `FramePipeline`: how a frame reaches the face model
 
@@ -970,10 +988,10 @@ that stopping ends one. The model itself is unchanged.
 
 | Property | What it says | Test |
 |---|---|---|
-| `UniqueNames` | No two connections speak for the same client. | `UniqueNamesTest` in `test/service_test.cc`; `ConnectingANameAlreadyConnectedIsRefused` in `test/reaction_feed_test.cc` |
+| `UniqueNames` | No two connections speak for the same client. | `UniqueNamesTest` in `test/service_test.cc`; `ConnectingANameAlreadyConnectedIsRefused` in `test/reaction_feed_test.cc`; `HangUpEndsTest.AHangUpDuringAWaitDisconnectsTheClientOnlyOnce`, `AHangUpDuringABeatDisconnectsTheClientOnlyOnce` (#115) |
 | `ApprovedOnly` | Every named connection showed an approved token. | `ApprovedOnlyTest` in `test/service_test.cc` and `test/client_approvals_test.cc`; `approval.test.mjs` |
 | `ApprovedAdmitted` | Something must happen: an approved token with a new name is let in, even while another connection shows the same token. | `ApprovedAdmittedTest.TwoConnectionsShowingOneTokenAreTwoClients`; `ApprovedAdmittedTest.ATokenAClientHoldsIsApproved` in `test/client_approvals_test.cc`; `approval.test.mjs` |
-| `FeedMatchesConns` | The feed's clients are exactly the named connections still open. | `FeedMatchesConnsTest` |
+| `FeedMatchesConns` | The feed's clients are exactly the named connections still open. | `FeedMatchesConnsTest`; `HangUpEndsTest.AHangUpDuringAWaitDisconnectsTheClientOnlyOnce`, `AHangUpDuringABeatDisconnectsTheClientOnlyOnce` (#115) |
 | `StopWakesWaiters` | Once stopping, no thread is left blocked in a wait. | `StopWakesWaitersTest` |
 | `NothingAfterStop` | Once stopped, every connection is closed. | `NothingAfterStopTest`, `NothingAfterStopLateTest` |
 | `CanAccept` | Something must happen: a running service can accept a connection into a free slot. | `CanAcceptTest` |
@@ -997,6 +1015,7 @@ Each mutation, and what TLC found:
 | No fairness on `Noticed` | `HangUpEnds` |
 | No fairness on `Closed` | `StopEnds` |
 | No fairness on `Stopped` | `StopEnds` |
+| `Noticed` also removes the name from `feed`, as the code did before #115 | `FeedMatchesConns`, 6 states; `UniqueNames`, 8 states |
 
 `src/service.cc` implements the spec, and each of its methods names the
 action it implements. `src/unix_socket.cc` gives it a Unix domain socket,
@@ -1015,6 +1034,7 @@ properties they break:
 | The watcher does not disconnect a client that hung up | `HangUpEndsTest.AHangUpDuringAWaitDisconnectsTheClient`, `AHangUpDuringABeatDisconnectsTheClient` |
 | A line arriving counts as a hang-up (`UnixStream`) | `UnixSocketTest.ALineArrivingEndsAnAwaitAndIsStillRead` |
 | Nothing is ever accepted | Twelve tests, every one that connects |
+| `Leave` disconnects a connection's name a second time once another caller already has (#115) | `HangUpEndsTest.AHangUpDuringAWaitDisconnectsTheClientOnlyOnce`, `AHangUpDuringABeatDisconnectsTheClientOnlyOnce` |
 
 Each test that waits on another thread gives up after 5 seconds, so a
 mutation fails it rather than hanging it.

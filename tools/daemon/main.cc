@@ -336,6 +336,13 @@ class Engine : public DaemonController, public DaemonPipeline {
   // crash does not linger once this one takes over.
   void Start() {
     PublishStatus(false);
+#ifdef __linux__
+    // #115: every member capture_'s hotplug callbacks can reach, camera_
+    // among them, is constructed by now; starting any earlier, from
+    // capture_'s own constructor, let the watcher thread call back into
+    // one that was not.
+    capture_.StartWatching();
+#endif
     service_.Start();
   }
   void Stop() { control_.Stop(); }
@@ -403,9 +410,11 @@ class Engine : public DaemonController, public DaemonPipeline {
   Service service_;
   DaemonControl control_;
 #ifdef __linux__
-  // Declared before capture_, which asks it to start watching in its own
-  // constructor (#111): a member's constructor runs in declaration order,
-  // never initializer-list order.
+  // Declared before capture_, whose constructor keeps a reference to it
+  // (#111): a member's constructor runs in declaration order, never
+  // initializer-list order, so hotplug_monitor_ must already exist. Its
+  // own watch is not started until Start calls capture_.StartWatching,
+  // once camera_ below exists too (#115).
   V4l2InotifyMonitor hotplug_monitor_;
   V4l2Session capture_;
 #else
