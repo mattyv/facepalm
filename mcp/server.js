@@ -2,13 +2,23 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { registerFeelingCard } from './feeling-widget.js';
 import { registerFeelingElicitation } from './feeling-elicitation.js';
-import { OfflineError } from './session.js';
+import { OfflineError, UnapprovedError } from './session.js';
 
 // What a tool says when session.request() rejects because this session is
 // not connected right now (#117): the session itself keeps retrying with
 // a bounded backoff, so this no longer tells anyone to restart the MCP
 // server, unlike the message this replaced.
 const offlineText = 'Facepalm is off; turn it on from its menu.';
+// What a tool says when the daemon's hello refused this client's own
+// token (#129), told apart from offlineText so the person is pointed at
+// Facepalm Settings, not at turning Facepalm on, which may already be on.
+const unapprovedText = "Facepalm hasn't approved this client; approve it from Facepalm Settings.";
+// What tell_feeling and ask_feeling say for an interpretation id this
+// session no longer remembers (#129): forgotten on its last reconnect,
+// since src/reaction_feed.cc's own interpretation ids restart at 1 on
+// every daemon run, so an id from before one could now mean an entirely
+// different beat.
+const unknownInterpretationText = 'Facepalm no longer recognizes that interpretation; it may be from before Facepalm last restarted.';
 
 // A feeling's name. The names come from the service's one list
 // (src/feelings.h), sent with each interpretation; the adapter checks only
@@ -76,9 +86,13 @@ export function createServer(session, options = {}) {
       const parsed = delivery.safeParse(response);
       if (!parsed.success || (beat !== undefined) !== (parsed.data.interpretation !== undefined)) { session.close?.(); throw new Error('invalid delivery'); }
       const result = parsed.data;
+      // #129: remembered so tell_feeling/ask_feeling can tell this id
+      // apart from a stale one once this session reconnects.
+      if (result.interpretation) session.noteInterpretation?.(result.interpretation.id);
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     } catch (error) {
-      const text = error instanceof OfflineError ? offlineText : 'Reaction service unavailable.';
+      const text = error instanceof UnapprovedError ? unapprovedText
+        : error instanceof OfflineError ? offlineText : 'Reaction service unavailable.';
       return { isError: true, content: [{ type: 'text', text }] };
     }
   });
@@ -88,14 +102,20 @@ export function createServer(session, options = {}) {
       + 'Send only a feeling the person chose, never a guess. Facepalm takes one feeling per interpretation, within five minutes of the beat.',
     inputSchema: { id: z.number().int().positive().safe(), feeling: feelingName },
   }, async ({ id, feeling }, { signal }) => {
+    // #129: refused locally, never sent, for an id this session no
+    // longer remembers giving out.
+    if (session.knowsInterpretation?.(id) === false) {
+      return { isError: true, content: [{ type: 'text', text: unknownInterpretationText }] };
+    }
     try {
       const result = await session.request(`feel ${id} ${feeling}`, signal, 5000);
       if (result?.ok !== true) throw new Error('feeling refused');
       return { content: [{ type: 'text', text: 'Feeling taken.' }] };
     } catch (error) {
-      const text = error instanceof OfflineError
-        ? offlineText
-        : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
+      const text = error instanceof UnapprovedError ? unapprovedText
+        : error instanceof OfflineError
+          ? offlineText
+          : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
       return { isError: true, content: [{ type: 'text', text }] };
     }
   });

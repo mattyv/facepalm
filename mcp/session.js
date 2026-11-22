@@ -12,6 +12,14 @@ const maxBackoffMs = 30000;
 // failure, without matching error text across files.
 export class OfflineError extends Error {}
 
+// What session.request() rejects with when the daemon's own hello reply
+// refused this client's token, rather than the daemon being off or
+// unreachable (#129): the daemon says "client not approved"
+// (src/service.cc's Greet) for this and nothing else, so a tool can tell
+// "turn Facepalm on" apart from "approve this client in Facepalm
+// Settings" without matching that wire text itself.
+export class UnapprovedError extends Error {}
+
 // One session owns one socket (specs/McpSocket.tla). Losing the link is
 // not the same as closing the session (#117): a lost link is retried
 // later, with a backoff bounded by maxBackoffMs, reset once a connection
@@ -42,6 +50,21 @@ export class SocketSession {
     this.closed = false;
     this.backoffMs = minBackoffMs;
     this.retryAt = 0;
+    // The interpretation ids a delivery has told the caller about since
+    // the last time the link came up (#129): wait_for_reaction records
+    // one with noteInterpretation(), and tell_feeling/ask_feeling check
+    // knowsInterpretation() before ever sending `feel <id> ...`.
+    // Forgotten on every disconnect, since src/reaction_feed.cc's own
+    // next_interpretation_ restarts at 1 on every daemon run: an id this
+    // session was given before a lost link could be reissued, after
+    // reconnecting, for an entirely different beat, and neither this
+    // session nor the daemon has any way to tell the two apart by the
+    // number alone. Forgetting every one of them on a disconnect, rather
+    // than keeping them across a reconnect that might be a fresh daemon
+    // run, is the side of that mistake this session can afford: a feeling
+    // refused that would have been fine is a retry away, one taken for
+    // the wrong beat is not.
+    this.knownInterpretations = new Set();
   }
 
   // Closes this session for good (specs/McpSocket.tla's Cancel): no later
@@ -64,6 +87,7 @@ export class SocketSession {
     this.buffer = '';
     this.pending?.reject(new Error('disconnected'));
     this.pending = undefined;
+    this.knownInterpretations.clear();
     if (wasConnected) {
       this.retryAt = this.now() + this.backoffMs;
       this.backoffMs = Math.min(this.backoffMs * 2, maxBackoffMs);
@@ -73,6 +97,17 @@ export class SocketSession {
   currentToken() {
     if (typeof this.token !== 'function') return this.token;
     try { return this.token(); } catch { return undefined; }
+  }
+
+  // wait_for_reaction calls this for an interpretation a delivery just
+  // gave the caller (#129); knowsInterpretation() is what tell_feeling
+  // and ask_feeling check before sending a feeling back for it.
+  noteInterpretation(id) {
+    this.knownInterpretations.add(id);
+  }
+
+  knowsInterpretation(id) {
+    return this.knownInterpretations.has(id);
   }
 
   // specs/McpSocket.tla's ReconnectSucceeds or ReconnectFails: dials once
@@ -94,11 +129,25 @@ export class SocketSession {
       this.pending = undefined;
       pending.resolve(line);
     });
-    socket.on('error', () => this.disconnect());
-    socket.on('close', () => this.disconnect());
+    // A socket already replaced by a later reconnect must not have its
+    // own stale 'error' or 'close' tear the replacement down too (#129):
+    // destroy() does not retire a socket's own events synchronously, so
+    // one emitted after disconnect() has already moved this.socket on
+    // still reaches this closure, over `socket`, the one it was bound to.
+    socket.on('error', () => { if (this.socket === socket) this.disconnect(); });
+    socket.on('close', () => { if (this.socket === socket) this.disconnect(); });
     const token = this.currentToken();
     const hello = await this.exchange(token ? `hello ${this.name} ${token}` : `hello ${this.name}`, signal, 5000);
-    if (hello?.ok !== true) { this.disconnect(); throw new Error('hello failed'); }
+    if (hello?.ok !== true) {
+      this.disconnect();
+      // #129: an unapproved client is not the same failure as the
+      // daemon being off or unreachable (src/service.cc's Greet is the
+      // only place that sends this exact text); every other hello
+      // rejection stays the generic failure request() turns into
+      // OfflineError.
+      if (hello?.error === 'client not approved') throw new UnapprovedError('unapproved');
+      throw new Error('hello failed');
+    }
   }
 
   // Connects if not already connected: specs/McpSocket.tla's state="open"
@@ -143,10 +192,13 @@ export class SocketSession {
         return await this.exchange(command, signal, timeout);
       } catch (error) {
         // 'cancelled' and 'closed' are this session's own terminal
-        // outcomes; every other reason this did not reach the wire is
-        // reported as OfflineError, whether it is this attempt's own
-        // dial failing or an earlier one still backing off (#117).
+        // outcomes; an UnapprovedError (#129) already names the one
+        // other failure a caller needs told apart. Every other reason
+        // this did not reach the wire is reported as OfflineError,
+        // whether it is this attempt's own dial failing or an earlier
+        // one still backing off (#117).
         if (error.message === 'cancelled' || error.message === 'closed') throw error;
+        if (error instanceof UnapprovedError) throw error;
         throw new OfflineError('offline');
       }
     });

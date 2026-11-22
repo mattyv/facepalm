@@ -5,6 +5,96 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: A publish in flight can no longer outlive the preview, and the MCP adapter now agrees with its own spec, closing #129
+
+-   **Decision (preview frame, #123's own review):** `specs/PreviewLease.tla`
+    now models the frame file itself, not only the lease that gates it:
+    `frame_exists` and `pending_publish` split
+    `PreviewPublisher::OnFrame`'s own check-encode-publish into the
+    decision (`Frame`, which now commits to a pending publish rather than
+    assuming one) and the publish itself (`Publish`, its own action, so
+    `CameraOpens`, `CameraCloses`, `StopPreview` and a later `Frame`'s own
+    revoke can land in between the way the real control queue can during a
+    real encode). The finding was real: a camera close landing mid-encode
+    already cleared the frame through `PreviewLease`'s own
+    `streaming_changed` hook, but the same call's publish, once the encode
+    finished, still wrote it back regardless. The fix is
+    `PreviewLease::Publish`, a new method that takes `mutex_` itself and
+    re-checks `streaming_` at the moment of the write, the same lock every
+    transition to not-streaming already takes before its own clear:
+    `src/preview_publisher.cc`'s `OnFrame` now calls it instead of
+    `publish_` directly. `GuardPublishChecksStreaming` is that re-check;
+    `GuardStartClearsFrame` is `Engine::Start` now also removing any frame
+    a previous crash left behind, before the daemon can stream again, the
+    same way `CameraStatus!Restart` already republishes the camera
+    indicator off. Both prove `NeverFrameWithoutStreaming` bites.
+-   **Also decided:** three nits from the same review, fixed in the same
+    branch. `tools/daemon/main.cc`'s `WriteFileAtomically` now `fchmod()`s
+    the temporary file explicitly, every call: `open()`'s own mode
+    argument only applies the first time `O_CREAT` actually creates it, so
+    an existing `.tmp` left by an earlier failed write kept whatever mode
+    it already had through `O_TRUNC`. `tools/menu/main.mm` and
+    `tools/menu/main_linux.cc`'s own comments on `stopPreview`/`Stop`, which
+    still called a frame left on disk "harmless," are corrected to say what
+    `PreviewLease`'s own hook has done since #114: remove it, synchronously,
+    the next time the daemon notices the request is gone.
+-   **Decision (MCP reconnect, also #61 item 8's review, same cycle):**
+    `specs/McpSocket.tla`'s `LinkDown` is corrected on two points found by
+    matching it against `mcp/session.js`'s own `disconnect()`: `backoff' =
+    0` let a reconnect redial immediately, which `disconnect()` never
+    allows (it always bumps backoff, by the time `LinkDown` can even fire,
+    always to its own minimum, so the fix is a plain `backoff' = 1`, not a
+    new guard -- there was only one correct value); and `remoteWaiting' =
+    FALSE` asserted the remote side's own wait ends the instant the local
+    link drops, which nothing in `session.js` has any way to tell it, so
+    `LinkDown` now leaves `remoteWaiting` unchanged, the same as `Cancel`
+    already does for the same reason.
+-   **Also decided:** `mcp/session.js`'s two 'error'/'close' handlers,
+    registered once per `dial()`, now check the socket they were bound to
+    is still `this.socket` before calling `disconnect()`: a socket already
+    replaced by a later reconnect does not retire its own events
+    synchronously, so a stale one landing after the replacement could tear
+    the replacement down too. An unapproved hello (`src/service.cc`'s own
+    `"client not approved"`) now rejects with a new `UnapprovedError`,
+    exported from `session.js` the same way `OfflineError` is, so
+    `mcp/server.js` and `mcp/feeling-elicitation.js` can say "Facepalm
+    hasn't approved this client" rather than "Facepalm is off," which told
+    the person to do the wrong thing when Facepalm was already on.
+-   **Decision (interpretation ids, the same review):** a late
+    `tell_feeling`/`ask_feeling` for an interpretation given before a lost
+    link could train a different beat after a reconnect, since
+    `src/reaction_feed.cc`'s own `next_interpretation_` restarts at 1 on
+    every daemon run and the daemon has no way to tell the two apart by the
+    id alone. Of the two fixes the review offered, the adapter forgetting
+    ids on its own link loss is the one taken, over giving ids a daemon run
+    id: it needs no protocol or daemon change, stays entirely in
+    `mcp/session.js`, and the two sides of getting it wrong are not even:
+    refusing a feeling that would have been fine is a retry away; taking
+    one for the wrong beat is not undoable at all. `SocketSession` gets
+    `noteInterpretation()` (called by `wait_for_reaction` for each
+    interpretation a delivery gives the caller) and `knowsInterpretation()`
+    (checked by `tell_feeling` and `ask_feeling` before ever sending `feel
+    <id> ...`), backed by a set `disconnect()` now clears on every link
+    lost. `specs/McpSocket.tla` models this with `knownId`,
+    `generation`, `learnedGeneration` and a ghost `stale`: `generation` is
+    bumped by every real `LinkDown` regardless of the guard, so a mutation
+    that stops `LinkDown` from forgetting (`GuardForgetsIdsOnLinkDown =
+    FALSE`) is caught by the ghost's own bookkeeping, not by the thing it
+    is meant to guard, the same lesson `specs/PreviewLease.tla`'s own
+    `menu_alive` already taught for #114.
+-   **Rejected:** ids carrying a daemon run id, the review's other option --
+    would touch `src/protocol.{h,cc}`, `src/reaction_feed.{h,cc}` and every
+    caller of `feel <id> <feeling>`, for a problem the adapter's own,
+    purely local, forgetting already closes without any of that.
+-   **TLC:** `PreviewLease.cfg`, now 37 distinct states, holds (adds
+    `NeverFrameWithoutStreaming` to the four properties already there).
+    `McpSocket.cfg`, now 65 distinct states, holds (adds `NoStaleTell`).
+    Full suite, `specs/check.sh`: all 20 configs pass.
+-   **Evidence:** [#129](https://github.com/mattyv/facepalm/issues/129),
+    [#61 item 8](https://github.com/mattyv/facepalm/issues/61),
+    [#114](https://github.com/mattyv/facepalm/issues/114),
+    [#117](https://github.com/mattyv/facepalm/issues/117).
+
 ## 2026-11-22: A menu entry for calibration, with its own small spec, closing #118
 
 -   **Decision:** `tools/menu/main.mm` and `tools/menu/main_linux.cc` each

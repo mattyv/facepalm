@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { registerFeelingElicitation } from '../feeling-elicitation.js';
-import { OfflineError } from '../session.js';
+import { OfflineError, UnapprovedError } from '../session.js';
 
 const feelings = ['agreement', 'disagreement', 'engagement', 'annoyance', 'confused', 'unknown'];
 
@@ -107,6 +107,37 @@ test('a session that is not connected right now says Facepalm is off (#117)', as
     const result = await client.callTool({ name: 'ask_feeling', arguments: { id: 1, feeling: 'confused', feelings } });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /Facepalm is off/);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('an unapproved session says so, not that Facepalm is off (#129)', async () => {
+  const session = { request: async () => { throw new UnapprovedError('unapproved'); } };
+  const { server, client } = await connected(session, () => ({ action: 'accept', content: { feeling: 'confused' } }));
+  try {
+    const result = await client.callTool({ name: 'ask_feeling', arguments: { id: 1, feeling: 'confused', feelings } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /hasn't approved this client/);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('refuses an interpretation this session no longer remembers, before asking (#129)', async () => {
+  const session = { request: () => assert.fail('must not send a pick'), knowsInterpretation: () => false };
+  let askedAtAll = false;
+  const { server, client } = await connected(session, () => { askedAtAll = true; return { action: 'accept', content: { feeling: 'confused' } }; });
+  try {
+    const result = await client.callTool({ name: 'ask_feeling', arguments: { id: 1, feeling: 'confused', feelings } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /no longer recognizes/);
+    assert.equal(askedAtAll, false);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('asks and sends a pick when the session does not implement knowsInterpretation at all', async () => {
+  const session = { request: async () => ({ ok: true }) };
+  const { server, client } = await connected(session, () => ({ action: 'accept', content: { feeling: 'confused' } }));
+  try {
+    const result = await client.callTool({ name: 'ask_feeling', arguments: { id: 1, feeling: 'confused', feelings } });
+    assert.notEqual(result.isError, true);
   } finally { await client.close(); await server.close(); }
 });
 

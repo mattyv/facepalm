@@ -1,9 +1,13 @@
 import { z } from 'zod';
-import { OfflineError } from './session.js';
+import { OfflineError, UnapprovedError } from './session.js';
 
 // A feeling's name, as server.js checks it: the names come from the
 // service's one list (src/feelings.h), sent with each interpretation.
 const feelingName = z.string().regex(/^[a-z]{1,32}$/);
+// What this tool says for an interpretation id this session no longer
+// remembers (#129): server.js's own unknownInterpretationText, duplicated
+// here rather than shared, the way offlineText's own text already is.
+const unknownInterpretationText = 'Facepalm no longer recognizes that interpretation; it may be from before Facepalm last restarted.';
 
 // The same plain-word labels feeling-view.js (the MCP Apps card) uses, so
 // the question reads the same whichever way a host answers it.
@@ -38,6 +42,11 @@ export function registerFeelingElicitation(server, session, options = {}) {
     if (!feelings.includes(feeling)) {
       return { isError: true, content: [{ type: 'text', text: 'feeling must be one of feelings.' }] };
     }
+    // #129: refused locally, before even asking the person, for an id
+    // this session no longer remembers giving out.
+    if (session.knowsInterpretation?.(id) === false) {
+      return { isError: true, content: [{ type: 'text', text: unknownInterpretationText }] };
+    }
     let result;
     try {
       result = await elicitInput({
@@ -69,10 +78,13 @@ export function registerFeelingElicitation(server, session, options = {}) {
       return { content: [{ type: 'text', text: 'Feeling taken.' }] };
     } catch (error) {
       // #117: the session itself keeps retrying with a bounded backoff,
-      // so this no longer tells anyone to restart the MCP server.
-      const text = error instanceof OfflineError
-        ? 'Facepalm is off; turn it on from its menu.'
-        : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
+      // so this no longer tells anyone to restart the MCP server. #129:
+      // an unapproved client gets its own, more actionable, message.
+      const text = error instanceof UnapprovedError
+        ? "Facepalm hasn't approved this client; approve it from Facepalm Settings."
+        : error instanceof OfflineError
+          ? 'Facepalm is off; turn it on from its menu.'
+          : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
       return { isError: true, content: [{ type: 'text', text }] };
     }
   });

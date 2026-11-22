@@ -739,8 +739,10 @@ class CameraPreview {
   }
 
   // PreviewLease!StopPreview: removing the request file is the only
-  // signal the daemon needs; a frame it already wrote is left behind,
-  // harmless, and overwritten the next time the preview starts.
+  // signal the daemon needs; any frame it already wrote is removed in
+  // turn, through PreviewLease's own streaming_changed hook (#129), by
+  // the daemon's very next per-frame check, not left behind for the
+  // next preview to overwrite.
   void Stop() {
     timer_.stop();
     RemoveRequest();

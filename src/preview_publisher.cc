@@ -28,7 +28,12 @@ void PreviewPublisher::OnFrame(const Frame& frame) {
   if (!encoded) {
     return;
   }
-  publish_(*encoded);
+  // #129: goes through the lease's own Publish, not publish_ directly,
+  // so a camera close or Stop landing during the encode above -- on a
+  // different queue, already clearing any frame through
+  // PreviewLease's own streaming_changed hook -- can never have that
+  // clear undone by this call writing the frame back afterward.
+  lease_.Publish([this, &encoded] { return publish_(*encoded); });
 }
 
 }  // namespace facepalm

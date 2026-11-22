@@ -53,6 +53,20 @@ class PreviewLease {
 
   [[nodiscard]] bool IsStreaming() const;
 
+  // PreviewLease!Publish (#129): PreviewPublisher::OnFrame's own publish
+  // step, once it has encoded a frame. Calls `write` only while still
+  // streaming, and -- unlike a plain IsStreaming() check before the
+  // call -- does so under the same mutex_ every transition to not
+  // streaming already takes before clearing the frame file through
+  // streaming_changed_, so a CameraOpened, CameraClosed or Stop that
+  // lands while an encode that began on a different queue was still
+  // running can never have its clear undone by that call's own write
+  // landing afterward: whichever runs first under the lock, the other
+  // sees the result it left, not the one it started from. Returns
+  // FALSE, without calling `write`, when not streaming; otherwise
+  // `write`'s own result.
+  bool Publish(const std::function<bool()>& write);
+
  private:
   // Call with mutex_ held; returns whether the value changed.
   bool SetStreaming(bool streaming);

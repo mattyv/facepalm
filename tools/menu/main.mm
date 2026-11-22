@@ -374,11 +374,12 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 }
 
 // PreviewLease!StopPreview: removing the request file is the only
-// signal the daemon needs to stop publishing; a frame it already wrote
-// is left on disk, harmless, and overwritten the next time the preview
-// starts. orderOut:, not close:, so this never re-enters windowWillClose:
-// when called from togglePreview: rather than from the window's own
-// close button.
+// signal the daemon needs to stop publishing; any frame it already
+// wrote is removed in turn, through PreviewLease's own streaming_changed
+// hook (#129), by the daemon's very next per-frame check, not left on
+// disk for the next preview to overwrite. orderOut:, not close:, so this
+// never re-enters windowWillClose: when called from togglePreview:
+// rather than from the window's own close button.
 - (void)stopPreview {
   [self.previewTimer invalidate];
   self.previewTimer = nil;

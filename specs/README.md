@@ -38,8 +38,8 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
-| `McpSocket.cfg` | one session, up to two requests, backoff bounded to two ticks | holds, with `LinkRecovers` | 7 |
-| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 19 |
+| `McpSocket.cfg` | one session, up to two requests, backoff bounded to two ticks | holds, with `LinkRecovers` | 65 |
+| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 37 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
@@ -57,7 +57,41 @@ connection is up right now (`LinkDown`), which comes and goes on its own and
 is retried, unlike `state`. A lost link's retry waits out `backoff`, bounded
 by `MaxBackoff` and counted down a tick at a time by `BackoffTick`, before
 `ReconnectSucceeds` or `ReconnectFails` may run. `McpSocket.cfg` checks
-`MaxBackoff = 2`: 7 distinct states, every property holds.
+`MaxBackoff = 2`: 65 distinct states, every property holds.
+
+Issue #129 corrects two things about `LinkDown` found by matching it
+against `mcp/session.js`'s own `disconnect()`, and adds a third, new piece:
+
+-   `backoff' = 0` let `ReconnectSucceeds`/`ReconnectFails` fire on the very
+    next step, an immediate redial code never allows: `disconnect()` always
+    bumps this session's own backoff on every disconnect, not only a
+    reconnect attempt that goes on to fail. By the time `LinkDown` can fire
+    at all, `backoff` is always exactly `disconnect()`'s own minimum (`link
+    = "up"` only comes from `ReconnectSucceeds`, which always resets it
+    first), so `backoff' = 1` is a plain correction, not a guarded design
+    choice the way `GuardBackoffBounded` is -- no mutation row needed for
+    something that is not a choice.
+-   `remoteWaiting' = FALSE` asserted the remote side's own wait ends the
+    instant the local link drops; nothing in `session.js` tells the remote
+    side anything when a link merely drops (`disconnect()` only ever tears
+    down the local socket), so this was never true. `LinkDown` now leaves
+    `remoteWaiting` unchanged, the same as `Cancel` already does, for the
+    reason `RemoteRetires`'s own comment already gives: the remote side's
+    "native wait... is still running" and "eventually retires on its own,"
+    regardless of which of the two is what ended the local side.
+-   `knownId`, `generation`, `learnedGeneration` and `stale` model
+    `session.js`'s own `noteInterpretation()`/`knowsInterpretation()`: the
+    adapter's own gate against sending a feeling back for an id it no
+    longer remembers, since `src/reaction_feed.cc`'s own
+    `next_interpretation_` restarts at 1 on every daemon run, so an id
+    learned before a lost link could mean an entirely different beat once
+    reconnected. `Learn` is `noteInterpretation()`, `Tell` is
+    `knowsInterpretation()`'s own gate on `tell_feeling`/`ask_feeling`
+    sending `feel <id> ...` at all. `GuardForgetsIdsOnLinkDown` is
+    `disconnect()`'s own `knownInterpretations.clear()`; `generation`,
+    bumped by every real `LinkDown` regardless of the guard, is the ghost
+    that holds it accountable, the same way `menu_alive` holds
+    `specs/PreviewLease.tla`'s own freshness check accountable.
 
 | Property | What it says | Test (`mcp/test/session.test.js`) |
 |---|---|---|
@@ -65,6 +99,7 @@ by `MaxBackoff` and counted down a tick at a time by `BackoffTick`, before
 | `OneRequest` | At most one request is on the wire at a time. | `'bounds pending requests and recovers after they settle'` |
 | `BackoffBounded` | The wait before a retry never grows past `MaxBackoff`. | `'offline never bounds beyond its own cap'` |
 | `LinkRecovers` | Something must happen: a lost link, on a session never itself closed, always comes back up (or the session closes first, giving up the right to retry at all). | `'reconnects once its backoff has run out, without the caller doing anything (#117)'`, `'backoff grows on each failure in a row, and resets once a connection succeeds (#117)'` |
+| `NoStaleTell` (#129) | A feeling is never sent back for an interpretation id learned before the link last dropped, so one daemon run's beat can never train on another's. | `'an interpretation id is forgotten once the link is lost, and known again once relearned (#129)'` in `mcp/test/session.test.js`; `'tell_feeling refuses an interpretation this session no longer remembers, unsent (#129)'` in `mcp/test/server.test.js` |
 
 Each mutation, and what TLC found:
 
@@ -74,6 +109,7 @@ Each mutation, and what TLC found:
 | `GuardSingle = FALSE`: a second request can reach the wire while one is already there | `OneRequest`, 10 states |
 | `GuardBackoffBounded = FALSE`: a failed reconnect can set a backoff past `MaxBackoff` | `BackoffBounded`, 9 states |
 | No fairness on `BackoffTick` and `ReconnectSucceeds` | `LinkRecovers`: a link down forever, stuttering once its own backoff is set |
+| `GuardForgetsIdsOnLinkDown = FALSE` (#129): `knownId` is never cleared by `LinkDown` | `NoStaleTell`, 5 states |
 
 `src/daemon_calibration.h`'s own `OnCameraLost`/`OnCameraUp`
 (specs/Calibration.tla's `CameraLost`/`CameraBack`) are a close cousin: a
@@ -83,7 +119,10 @@ remote service has retired, that a host displayed a delivery, or anything
 about the token a reconnect sends (`mcp/session.js`'s `currentToken`, read
 fresh on every attempt so an approval that lands after this session
 started reaches it with no restart, is outside the model, a single opaque
-`hello`).
+`hello`). It also does not model `tell_feeling`'s/`ask_feeling`'s own
+message for an unapproved client (`mcp/session.js`'s `UnapprovedError`,
+issue #129): that is a plain lookup against one wire string
+(`src/service.cc`'s `Greet`), with no lifecycle of its own to check.
 
 ## `DaemonAdmission`: the daemon's clients, camera and stop
 
@@ -356,6 +395,7 @@ table, is gone: its concern is now `NeverStreamsOnAStaleRequest`'s alone.
 | `NeverStreamsOnAStaleRequest` (#114) | Streaming needs the request both there and fresh. | `NeverStreamsOnAStaleRequestTest.AReopenedCameraNeedsANewStart` |
 | `MenuDeathEndsStreaming` (#114) | Liveness: once the menu that made a request is gone, streaming always eventually stops, and -- since only a live menu's own `StartPreview` can turn it back on -- stops for good. This is the acceptance bar's "nothing streams without a live menu window", phrased as a leads-to rather than an instant cutoff: the daemon can only learn of the menu's death indirectly, on its own per-frame check, within the couple of seconds `GuardRequestFresh`'s own grace period already allows for. | `IsFreshPreviewRequestTest.AbandonedLongAgoIsStale` in `test/preview_request_test.cc`; hand-checked against `tools/menu/main.mm`'s `applicationWillTerminate:` and `tools/menu/main_linux.cc`'s `QCoreApplication::aboutToQuit`, which remove a clean quit's own request outright rather than waiting on this grace period at all |
 | `PreviewStreamsWhenWanted` (#114) | Liveness, and something must happen: the camera, the request and the menu behind it, all held from some point on, lead to the preview actually streaming. `[](<>[]Wanted => <>streaming)`, as `specs/DaemonAdmission.tla`'s own `JoinOpens` uses the shape, rather than a plain `~>` a momentary ask could satisfy only by chance. | `OnFrameTest.GrantsAndPublishesOnceTheCameraIsOpenAndItIsRequested` in `test/preview_publisher_test.cc` |
+| `NeverFrameWithoutStreaming` (#129) | The frame file on disk never outlives the preview: not a crash's leftover at startup, and not a publish still in flight once something else has already stopped streaming. | `OnFrameTest.SkipsPublishingAFrameEncodedBeforeTheCameraClosedMidEncode` in `test/preview_publisher_test.cc`, `PublishTest.SkipsTheWriteOnceStreamingHasStopped` in `test/preview_lease_test.cc` |
 
 Each mutation, and what TLC found:
 
@@ -366,6 +406,32 @@ Each mutation, and what TLC found:
 | `CameraOpens` never enabled (its guard replaced by `FALSE`) | `EventuallyOpens`, 4 states |
 | `GuardRequestFresh = FALSE` (#114): streaming never checks the request's age | `MenuDeathEndsStreaming`: a request a dead menu left behind streams forever once granted |
 | No fairness on `Frame` (#114): the daemon's own per-frame check is never required to run | `PreviewStreamsWhenWanted` (nothing is ever forced to grant) and `MenuDeathEndsStreaming` (nothing is ever forced to age a stale one away) |
+| `GuardPublishChecksStreaming = FALSE` (#129): `Publish` writes the frame unconditionally | `NeverFrameWithoutStreaming`, 6 states |
+| `GuardStartClearsFrame = FALSE` (#129): a crash's leftover frame is never cleared at startup | `NeverFrameWithoutStreaming`, violated by the initial state itself |
+| No fairness on `Publish` (#129): a frame once committed to is never required to actually publish | `PreviewStreamsWhenWanted` and `MenuDeathEndsStreaming`, the same way missing `Frame` fairness does: `Frame` cannot run again, by its own `~pending_publish` guard, while a publish stays forever outstanding |
+
+Issue #129 adds a third gate: whether the frame file itself, on disk, is
+ever left behind once the preview is not streaming. `frame_exists` and
+`pending_publish` model `PreviewPublisher::OnFrame`'s own two steps --
+deciding to encode a frame (`Frame`, which now also carries
+`pending_publish' = streaming'`) and then publishing it (`Publish`,
+its own action so `CameraOpens`, `CameraCloses`, `StopPreview` and a
+later `Frame`'s own revoke can land in between, the way the control
+queue really can during a real encode). The #129 Fable review found
+the two were not serialized at all: `OnFrame` checked `IsStreaming()`,
+encoded, and only then published, so a camera close landing during the
+encode -- which already clears the frame through `PreviewLease`'s own
+`streaming_changed` hook -- could still be undone by that same call's
+publish going on to write it back once the encode finished.
+`PreviewLease::Publish` now re-checks `streaming` itself, under the
+same mutex every transition to not-streaming already takes, at the
+moment of the write rather than trusting the decision `OnFrame` made
+when the encode began; `GuardPublishChecksStreaming` is that re-check.
+`GuardStartClearsFrame` is the fix's other half: `Engine::Start` now
+removes any frame a previous crash left behind before the daemon can
+stream again, matching `CameraStatus!Restart` already doing the same
+for the camera-in-use indicator; without it, `Init` is free to start
+with one already sitting there.
 
 `StreamingMatchesFormula`, an earlier draft's exact `streaming = ...`
 state invariant checked at every step rather than only eventually, is
@@ -398,11 +464,13 @@ against the same broken piece it is meant to guard proves nothing.
 
 `src/preview_publisher.cc` implements `PreviewLease`'s caller, following
 no spec of its own (it has no lifecycle beyond the lease's): it polls the
-menu's request file, drives `CameraOpened`/`Start`/`Stop`, and encodes
-and publishes a frame exactly while `IsStreaming()`, tested directly in
-`test/preview_publisher_test.cc` with `PreviewLease` run for real (as
-`tuning_test.cc` runs the feelings rule for real), since it is already
-proved above and has no I/O of its own to mock. `src/preview_request.cc`
+menu's request file, drives `CameraOpened`/`Start`/`Stop`, and encodes a
+frame while `IsStreaming()`, then hands its own write to
+`PreviewLease::Publish` (#129) rather than calling it directly, so the
+lease itself is what decides whether the write actually happens. Tested
+directly in `test/preview_publisher_test.cc` with `PreviewLease` run for
+real (as `tuning_test.cc` runs the feelings rule for real), since it is
+already proved above and has no I/O of its own to mock. `src/preview_request.cc`
 implements the request's own freshness check (`IsFreshPreviewRequest`,
 specs/PreviewLease.tla's `Fresh`), which `tools/daemon/main.cc` wires as
 the `requested` callback `PreviewPublisher` polls every frame, in place of
