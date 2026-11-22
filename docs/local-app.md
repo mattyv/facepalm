@@ -123,7 +123,11 @@ daemon to revoke consent for that run.
 
 The local bundle verification covers startup refusal without consent, rejection
 of an unapproved socket client, and clean shutdown. The new bundle has not
-been tested with live capture. Live preview is pending.
+been tested with live capture. Choosing **Show Camera Preview** from the 🤦
+menu opens a window of the camera while it is on, started only by hand
+(#37 item 8, #108): it stops the same way it started, from the menu item, the
+window's own close button, or the camera going off, and no frame reaches
+anything but that window.
 
 ## Calibration (optional)
 
