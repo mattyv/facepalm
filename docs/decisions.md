@@ -5,6 +5,18 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: Publish the eye recordings trimmed to the lines the tests read
+
+The eye fixtures for #139 are the user's own recordings, published with only
+the eye lines, head pose, reactions and summary lines; the full expression
+scores, the landmark coordinates and the gesture probabilities are dropped,
+and the recording script drops them when it saves. Numbers only, never
+images. Why: the repository is public, and the tests and tuning need no more.
+Rejected: publishing the logs as recorded (more facial data than any test
+reads), and keeping them local only (CI could not replay them). Decided by
+the user on 2026-11-22. Evidence:
+[#139](https://github.com/mattyv/facepalm/issues/139).
+
 ## 2026-11-22: eyes_narrowed is gated on the raw eyeLookDown and eyeBlink scores, not #137's composed gaze
 
 -   **Decision (what gates it):** `ExpressionTracker`'s `eyes_narrowed`
