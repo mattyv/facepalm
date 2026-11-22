@@ -4,12 +4,15 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "src/eye_gaze.h"
 #include "src/head_pose.h"
 
 namespace facepalm {
@@ -23,6 +26,14 @@ double YawDifference(const HeadRotation& pose, const HeadRotation& other) {
   return std::remainder(pose.yaw_degrees - other.yaw_degrees, kFullTurnDegrees);
 }
 
+// How far apart `gaze` and `other` read, by yaw and pitch (#137's spread
+// check): the larger axis's own distance alone would undercount a corner
+// that moved diagonally, so this is their combined, Euclidean distance.
+double GazeDistance(const HeadRotation& gaze, const HeadRotation& other) {
+  return std::hypot(YawDifference(gaze, other),
+                    gaze.pitch_degrees - other.pitch_degrees);
+}
+
 // Adds `pose` into the running mean of `sample_count` poses already
 // averaged into `sample`.
 void Accumulate(HeadRotation& sample, int& sample_count,
@@ -32,6 +43,16 @@ void Accumulate(HeadRotation& sample, int& sample_count,
   sample.yaw_degrees += (pose.yaw_degrees - sample.yaw_degrees) * weight;
   sample.pitch_degrees += (pose.pitch_degrees - sample.pitch_degrees) * weight;
   sample.roll_degrees += (pose.roll_degrees - sample.roll_degrees) * weight;
+}
+
+// As Accumulate, for the running mean of a step's eye signal (#137):
+// blink frames never reach this, so sample_count here is the count of
+// non-blink frames alone.
+void AccumulateEye(EyeSignal& sample, int& sample_count, const EyeSignal& eye) {
+  ++sample_count;
+  const double weight = 1.0 / sample_count;
+  sample.horizontal += (eye.horizontal - sample.horizontal) * weight;
+  sample.vertical += (eye.vertical - sample.vertical) * weight;
 }
 
 }  // namespace
@@ -52,17 +73,39 @@ std::optional<CalibrationPoint> CalibrationPointNamed(std::string_view name) {
   return std::nullopt;
 }
 
-CalibrationSession::CalibrationSession(CalibrationStore& store)
-    : store_(store) {}
+CalibrationSession::CalibrationSession(
+    CalibrationStore& store, CalibrationSettings settings,
+    std::function<void(const CalibrationProfile&)> on_finished)
+    : store_(store),
+      settings_(settings),
+      on_finished_(std::move(on_finished)) {}
+
+void CalibrationSession::ResetStep() {
+  captured_ = false;
+  sample_count_ = 0;
+  sample_ = HeadRotation{};
+  eye_sample_count_ = 0;
+  eye_sample_ = EyeSignal{};
+  gains_samples_.clear();
+}
+
+void CalibrationSession::ResetSession() {
+  step_ = 0;
+  ResetStep();
+  resting_ = HeadRotation{};
+  resting_eye_ = EyeSignal{};
+  gains_ = EyeGains{};
+}
 
 CalibrationSession::Status CalibrationSession::CurrentStatus() const {
   Status status;
   status.running = true;
   status.index = step_;
   status.total = Total();
-  status.resting_step = step_ == 0;
-  if (!status.resting_step) {
-    const int target = step_ - 1;
+  status.resting_step = RestingStep();
+  status.gains_step = GainsStep();
+  if (!status.resting_step && !status.gains_step) {
+    const int target = step_ - kFixedSteps;
     status.screen = target / static_cast<int>(kPointsPerScreen);
     status.point =
         kCalibrationPoints[static_cast<std::size_t>(target) % kPointsPerScreen];
@@ -87,22 +130,29 @@ std::optional<CalibrationSession::Status> CalibrationSession::Start(
   }
   running_ = true;
   screens_ = screens;
-  step_ = 0;
-  captured_ = false;
-  sample_count_ = 0;
-  sample_ = HeadRotation{};
-  resting_ = HeadRotation{};
   points_.assign(static_cast<std::size_t>(screens), ScreenCalibration{});
+  ResetSession();
   return CurrentStatus();
 }
 
-void CalibrationSession::Update(const HeadRotation& pose) {
+void CalibrationSession::Update(const HeadRotation& pose,
+                                const EyeSignal& eye) {
   const std::scoped_lock lock(mutex_);
   if (!running_) {
     return;
   }
   Accumulate(sample_, sample_count_, pose);
   captured_ = true;
+  if (eye.blink) {
+    return;
+  }
+  if (GainsStep()) {
+    if (gains_samples_.size() < kMaxGainsSamples) {
+      gains_samples_.push_back({.head = pose, .eye = eye});
+    }
+  } else {
+    AccumulateEye(eye_sample_, eye_sample_count_, eye);
+  }
 }
 
 std::optional<CalibrationSession::Status> CalibrationSession::Next(
@@ -116,17 +166,51 @@ std::optional<CalibrationSession::Status> CalibrationSession::Next(
     error = "no pose captured yet for this step";
     return std::nullopt;
   }
-  if (step_ == 0) {
+  return AdvanceOrRefuse(error);
+}
+
+std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
+    std::string& error) {
+  if (RestingStep()) {
     resting_ = sample_;
+    resting_eye_ = eye_sample_count_ > 0 ? eye_sample_ : EyeSignal{};
+  } else if (GainsStep()) {
+    const std::optional<EstimatedGains> estimated =
+        EstimateGains(gains_samples_, settings_.min_head_travel_degrees,
+                      settings_.min_axis_degrees);
+    if (!estimated) {
+      error = "turn your head further while you keep looking at the dot";
+      ResetStep();
+      return std::nullopt;
+    }
+    gains_.horizontal =
+        estimated->horizontal.value_or(settings_.default_gains.horizontal);
+    gains_.vertical =
+        estimated->vertical.value_or(settings_.default_gains.vertical);
   } else {
-    const int target = step_ - 1;
+    const int target = step_ - kFixedSteps;
     const auto screen =
         static_cast<std::size_t>(target / static_cast<int>(kPointsPerScreen));
     const auto point = static_cast<std::size_t>(target) % kPointsPerScreen;
-    points_[screen].points[point] = sample_;
+    const std::optional<EyeSignal> eye =
+        eye_sample_count_ > 0 ? std::make_optional(eye_sample_) : std::nullopt;
+    const HeadRotation gaze = ComposeGaze(sample_, eye, resting_eye_, gains_,
+                                          settings_.head_only_yaw_degrees);
+    if (point != static_cast<std::size_t>(CalibrationPoint::kCentre) &&
+        GazeDistance(gaze, points_[screen].points[static_cast<std::size_t>(
+                               CalibrationPoint::kCentre)]) <
+            settings_.min_spread_degrees) {
+      error = "look further toward that corner, away from the centre";
+      ResetStep();
+      return std::nullopt;
+    }
+    points_[screen].points[point] = gaze;
   }
   if (step_ + 1 >= Total()) {
-    const CalibrationProfile profile{.resting = resting_, .screens = points_};
+    const CalibrationProfile profile{.resting = resting_,
+                                     .resting_eye = resting_eye_,
+                                     .gains = gains_,
+                                     .screens = points_};
     std::string save_error;
     if (!store_.Save(profile, save_error)) {
       // The capture stays, so the step can be finished again (the save is
@@ -135,16 +219,19 @@ std::optional<CalibrationSession::Status> CalibrationSession::Next(
       error = save_error;
       return std::nullopt;
     }
+    const int screens_calibrated = screens_;
     running_ = false;
+    if (on_finished_) {
+      on_finished_(profile);
+    }
     Status status;
     status.running = false;
     status.done = true;
+    status.screens = screens_calibrated;
     return status;
   }
   ++step_;
-  captured_ = false;
-  sample_count_ = 0;
-  sample_ = HeadRotation{};
+  ResetStep();
   return CurrentStatus();
 }
 
@@ -155,10 +242,7 @@ bool CalibrationSession::Cancel(std::string& error) {
     return false;
   }
   running_ = false;
-  step_ = 0;
-  captured_ = false;
-  sample_count_ = 0;
-  sample_ = HeadRotation{};
+  ResetSession();
   return true;
 }
 
@@ -169,10 +253,7 @@ void CalibrationSession::OnCameraLost() {
     // As Cancel, since there is nothing left to capture; the saved profile
     // is untouched either way.
     running_ = false;
-    step_ = 0;
-    captured_ = false;
-    sample_count_ = 0;
-    sample_ = HeadRotation{};
+    ResetSession();
   }
 }
 
@@ -182,7 +263,7 @@ void CalibrationSession::OnCameraUp() {
 }
 
 std::optional<std::size_t> NearestCalibratedScreen(
-    const CalibrationProfile& profile, const HeadRotation& pose) {
+    const CalibrationProfile& profile, const HeadRotation& gaze) {
   if (profile.screens.empty()) {
     return std::nullopt;
   }
@@ -192,9 +273,7 @@ std::optional<std::size_t> NearestCalibratedScreen(
     const HeadRotation& centre =
         profile.screens[index]
             .points[static_cast<std::size_t>(CalibrationPoint::kCentre)];
-    const double yaw_off = YawDifference(pose, centre);
-    const double pitch_off = pose.pitch_degrees - centre.pitch_degrees;
-    const double distance = std::hypot(yaw_off, pitch_off);
+    const double distance = GazeDistance(gaze, centre);
     if (!nearest || distance < nearest_distance) {
       nearest = index;
       nearest_distance = distance;

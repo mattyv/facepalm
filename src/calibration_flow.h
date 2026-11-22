@@ -36,10 +36,14 @@ class CalibrationFlow {
     State state = State::kClosed;
     // Set only while state == kPrompting.
     bool resting_step = false;
+    bool gains_step = false;  // #137's fixate-and-turn step.
     int screen = 0;
     CalibrationPoint point = CalibrationPoint::kCentre;
     int index = 0;
     int total = 0;
+    // Set only while state == kDone (#135, #137): the result line the
+    // wizard ends on, "Calibrated N screens."
+    int screens = 0;
     // Set only while state == kFailed.
     std::string error;
   };

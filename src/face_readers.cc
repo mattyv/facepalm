@@ -71,7 +71,8 @@ std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
         std::make_unique<ScreenContextReaderForwarder>(*screen_context_reader));
   }
   if (calibration != nullptr) {
-    readers.push_back(std::make_unique<CalibrationReader>(*calibration));
+    readers.push_back(std::make_unique<CalibrationReader>(
+        *calibration, config.eye_gaze_blink_threshold));
   }
   return readers;
 }

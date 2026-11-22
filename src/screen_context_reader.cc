@@ -8,6 +8,7 @@
 
 #include "src/camera_controller.h"
 #include "src/expressions.h"
+#include "src/eye_gaze.h"
 #include "src/face_model.h"
 #include "src/head_pose.h"
 
@@ -29,8 +30,9 @@ std::optional<HeadRotation> PoseOf(const Face& face) {
 
 }  // namespace
 
-ScreenContextReader::ScreenContextReader(ExpressionTracker::Settings tracker)
-    : tracker_(tracker) {}
+ScreenContextReader::ScreenContextReader(ExpressionTracker::Settings tracker,
+                                         EyeGazeTracker::Settings eye_tracker)
+    : tracker_(tracker), eye_tracker_(eye_tracker) {}
 
 void ScreenContextReader::OnFace(const Face& face, int /*width*/,
                                  int /*height*/, std::int64_t timestamp_ms,
@@ -44,13 +46,17 @@ void ScreenContextReader::OnFace(const Face& face, int /*width*/,
   std::ranges::copy(face.blendshapes, scores.begin());
   const std::scoped_lock lock(mutex_);
   tracker_.Update(scores, *pose, timestamp_ms);
+  eye_tracker_.Update(face, timestamp_ms);
   pose_ = pose;
   resting_ = tracker_.RestingPose();
+  eye_ = eye_tracker_.Signal();
+  eye_resting_ = eye_tracker_.Resting();
 }
 
 void ScreenContextReader::OnNoFace() {
   const std::scoped_lock lock(mutex_);
   pose_ = std::nullopt;
+  eye_ = std::nullopt;
 }
 
 std::optional<HeadRotation> ScreenContextReader::Pose() const {
@@ -61,6 +67,16 @@ std::optional<HeadRotation> ScreenContextReader::Pose() const {
 std::optional<HeadRotation> ScreenContextReader::RestingPose() const {
   const std::scoped_lock lock(mutex_);
   return resting_;
+}
+
+std::optional<EyeSignal> ScreenContextReader::EyeReading() const {
+  const std::scoped_lock lock(mutex_);
+  return eye_;
+}
+
+std::optional<EyeSignal> ScreenContextReader::EyeResting() const {
+  const std::scoped_lock lock(mutex_);
+  return eye_resting_;
 }
 
 }  // namespace facepalm

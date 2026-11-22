@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "src/camera_controller.h"
+#include "src/eye_gaze.h"
 #include "src/face_model.h"
 #include "src/head_pose.h"
 
@@ -30,15 +31,16 @@ std::optional<HeadRotation> PoseOf(const Face& face) {
 
 }  // namespace
 
-CalibrationReader::CalibrationReader(CalibrationController& controller)
-    : controller_(controller) {}
+CalibrationReader::CalibrationReader(CalibrationController& controller,
+                                     double blink_threshold)
+    : controller_(controller), blink_threshold_(blink_threshold) {}
 
 void CalibrationReader::OnFace(const Face& face, int /*width*/, int /*height*/,
                                std::int64_t /*timestamp_ms*/,
                                std::vector<Reaction>& /*reactions*/) {
   const std::optional<HeadRotation> pose = PoseOf(face);
   if (pose) {
-    controller_.Update(*pose);
+    controller_.Update(*pose, EyeSignalFrom(face, blink_threshold_));
   }
 }
 

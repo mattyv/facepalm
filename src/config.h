@@ -43,6 +43,24 @@ struct Config {
   // looking_away.degrees, the same halving LookAwayDetector's own
   // hysteresis uses for a middle ground.
   static constexpr float kDefaultScreenContextOtherScreenDegrees = 7.5F;
+  // src/eye_gaze.h's defaults (#137): given from memory, like the eyes
+  // line's own field order (#139), not yet tuned on a real recording --
+  // every one of these needs checking against #139's fixtures once they
+  // exist (see this issue's PR).
+  static constexpr float kDefaultEyeGazeHorizontalGain = 30.0F;
+  static constexpr float kDefaultEyeGazeVerticalGain = 30.0F;
+  static constexpr float kDefaultEyeGazeBlinkThreshold = 0.5F;
+  static constexpr int kDefaultEyeGazeMedianMs = 250;
+  // Matches ExpressionTracker's own first-three-seconds and after-a-gap
+  // design (#46), which this follows for the same reason: give the
+  // resting level time to settle before anything is read relative to it.
+  static constexpr int kDefaultEyeGazeRestingMs = 3000;
+  static constexpr int kDefaultEyeGazeGapMs = 2000;
+  static constexpr float kDefaultEyeGazeHeadOnlyYawDegrees = 35.0F;
+  // CalibrationSettings's defaults (#137), also unproven on a recording.
+  static constexpr float kDefaultCalibrationMinHeadTravelDegrees = 10.0F;
+  static constexpr float kDefaultCalibrationMinAxisDegrees = 4.0F;
+  static constexpr float kDefaultCalibrationMinSpreadDegrees = 3.0F;
 
   int frames_per_second = kDefaultFramesPerSecond;
   // The chosen camera's stable ID (CameraDevice::id), or empty for the
@@ -72,6 +90,20 @@ struct Config {
   bool screen_context_window_titles_enabled = false;
   float screen_context_other_screen_degrees =
       kDefaultScreenContextOtherScreenDegrees;
+  // src/eye_gaze.h's own settings (#137): the eye-in-head signal composed
+  // with head pose into coarse gaze, and the calibration session's gains
+  // step and spread check.
+  float eye_gaze_horizontal_gain = kDefaultEyeGazeHorizontalGain;
+  float eye_gaze_vertical_gain = kDefaultEyeGazeVerticalGain;
+  float eye_gaze_blink_threshold = kDefaultEyeGazeBlinkThreshold;
+  int eye_gaze_median_ms = kDefaultEyeGazeMedianMs;
+  int eye_gaze_resting_ms = kDefaultEyeGazeRestingMs;
+  int eye_gaze_gap_ms = kDefaultEyeGazeGapMs;
+  float eye_gaze_head_only_yaw_degrees = kDefaultEyeGazeHeadOnlyYawDegrees;
+  float calibration_min_head_travel_degrees =
+      kDefaultCalibrationMinHeadTravelDegrees;
+  float calibration_min_axis_degrees = kDefaultCalibrationMinAxisDegrees;
+  float calibration_min_spread_degrees = kDefaultCalibrationMinSpreadDegrees;
 };
 
 // Reads a config file's text: one `name = value` a line, blank lines, and
@@ -87,9 +119,15 @@ struct Config {
 // expressions.eye_blink_threshold (0 to 1), looking_away.degrees (0 to
 // 180), looking_away.hold_ms (a whole number from 0 to 10000),
 // screen_context.enabled, screen_context.window_titles_enabled (true or
-// false), and screen_context.other_screen_degrees (0 to 180). Returns the
-// config, or nothing with `error` naming the line, for an unknown name, a
-// bad value, a repeated name or a line with no `=`.
+// false), screen_context.other_screen_degrees (0 to 180),
+// eye_gaze.horizontal_gain and eye_gaze.vertical_gain (0 to 200),
+// eye_gaze.blink_threshold (0 to 1), eye_gaze.median_ms, eye_gaze.resting_ms
+// and eye_gaze.gap_ms (a whole number from 0 to 10000),
+// eye_gaze.head_only_yaw_degrees (0 to 180), and
+// calibration.min_head_travel_degrees, calibration.min_axis_degrees and
+// calibration.min_spread_degrees (0 to 180). Returns the config, or
+// nothing with `error` naming the line, for an unknown name, a bad value, a
+// repeated name or a line with no `=`.
 std::optional<Config> ParseConfig(std::string_view text, std::string& error);
 
 }  // namespace facepalm

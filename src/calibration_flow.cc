@@ -79,6 +79,7 @@ std::optional<CalibrationController::Status> ParseCalibrationReply(
   const std::string state = StringField(line, "state").value_or(std::string());
   if (state == "done") {
     status.done = true;
+    status.screens = IntField(line, "screens").value_or(0);
     return status;
   }
   if (state != "running") {
@@ -91,6 +92,10 @@ std::optional<CalibrationController::Status> ParseCalibrationReply(
   const std::string step = StringField(line, "step").value_or(std::string());
   if (step == "resting") {
     status.resting_step = true;
+    return status;
+  }
+  if (step == "gains") {
+    status.gains_step = true;
     return status;
   }
   status.screen = IntField(line, "screen").value_or(0);
@@ -129,7 +134,7 @@ std::optional<CalibrationController::Status> CalibrationFlow::ReadStatus(
 
 void CalibrationFlow::ApplyStatus(const CalibrationController::Status& status) {
   if (status.done) {
-    view_ = View{.state = State::kDone, .error = {}};
+    view_ = View{.state = State::kDone, .screens = status.screens, .error = {}};
     return;
   }
   if (!status.running) {
@@ -138,6 +143,7 @@ void CalibrationFlow::ApplyStatus(const CalibrationController::Status& status) {
   }
   view_ = View{.state = State::kPrompting,
                .resting_step = status.resting_step,
+               .gains_step = status.gains_step,
                .screen = status.screen,
                .point = status.point,
                .index = status.index,

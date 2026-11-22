@@ -1287,81 +1287,122 @@ on a real Linux desktop, through `test/linux_tray_integration.cc`'s
 
 ## `Calibration`: an optional calibration session
 
-Models the short guided session item 12 of #61 adds (#36, #35): the resting
-pose, then each screen's centre and four corners, saved to a private profile
-only once every target is captured. `step` counts the targets from 0;
-`captured` is whether the running step has a pose yet; `camera` abstracts
-the frame pipeline that feeds poses in (#38), since a session with no frames
-has nothing to capture. `Calibration.cfg` checks `Steps = 3` (the resting
-pose and two points) and `MaxOutages = 1` (one camera loss and its
-recovery): 30 distinct states, every property holds.
+Models the short guided session item 12 of #61 adds (#36, #35), now reading
+eyes and head together (#137, superseding #136): the resting pose, #137's
+gains step (fixate a dot, turn the head slowly), then each screen's centre
+and four corners (read as gaze, not head pose alone), saved to a private
+profile only once every target is captured. `step` counts the targets from
+0; `captured` is whether the running step has a sample yet; `weak`
+abstracts a captured sample too thin to use (the gains step's own too-
+little-head-travel check, or a screen's point too close to its own
+centre -- what #137's spread check and #136's original finding both
+read), read nondeterministically on every capture (split into
+`CaptureGood`/`CaptureWeak` so `SF_vars(CaptureGood)`'s strong fairness
+can require a retried step to eventually get a good sample); `camera`
+abstracts the frame pipeline that
+feeds samples in (#38), since a session with no frames has nothing to
+capture; `applied` and `staleApply` abstract whether the daemon's own
+live reader (`ScreenContextReporter`) is already reading a just-finished
+profile, or still the one from before (#136's "only after Turn Off and
+On"), fixed by `Restart` -- the daemon's composition root swapping in
+whatever `on_finished` last handed it -- modeled as always available, so
+`applied` never lags forever even with `GuardApplyImmediately` off.
+`Calibration.cfg` checks `Steps = 3` (the resting pose and two points,
+abstracting away which of the two distinct kinds of weak step this is --
+the model does not need the real head and eye numbers to prove what
+happens once a step is weak) and `MaxOutages = 1` (one camera loss and its
+recovery), every guard on: 42 distinct states, every property holds.
 
 | Property | What it says | Test |
 |---|---|---|
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
-| `NoAdvanceWithoutCapture` | Every target needs its own pose before the session moves past it. | `NoAdvanceWithoutCaptureTest` in `test/calibration_test.cc` |
+| `NoAdvanceWithoutCapture` | Every target needs its own sample before the session moves past it. | `NoAdvanceWithoutCaptureTest` in `test/calibration_test.cc` |
+| `NoSaveWithWeakStep` | A weak sample -- too little head travel in the gains step, or too little spread from a screen's own centre -- is never advanced past or saved over (#137, #136). | `NoSaveWithWeakStepTest` |
 | `NoSaveOnCancel` | Cancelling never saves the session in progress; the old profile is kept. | `NoSaveOnCancelTest` |
 | `NoRunningWithoutCamera` | A session only runs while the camera is up: starting needs it, and losing it ends the session. | `NoRunningWithoutCameraTest` |
+| `NoStaleApply` | A freshly saved profile is read by the live reader at once, never waiting for a restart (#136, fixed by #137's `ScreenContextReporter::SetProfile` on finish). | `CalibrationWalksEveryTargetTest.OnFinishedIsToldTheSavedProfile` |
 | `SessionEnds` | Something must happen: a running session always finishes or is cancelled. | `CalibrationWalksEveryTargetTest.TheLastStepFinishesTheSession`, `NoSaveOnCancelTest.CancellingNeverSaves` |
+| `ProfileEventuallyApplied` | Something must happen: a freshly saved profile is always eventually read by the live reader, with or without `GuardApplyImmediately`. | Covered by the same promptness the `NoStaleApply` test above shows; nothing exercises the deferred-apply path, since the daemon's own `on_finished` always applies at once |
 
 Each mutation, and what TLC found:
 
 | Mutation | Broke |
 |---|---|
-| `GuardCapture = FALSE`: a step can be finished with no pose captured | `NoAdvanceWithoutCapture`, 27 states |
+| `GuardCapture = FALSE`: a step can be finished with no sample captured | `NoAdvanceWithoutCapture`, 27 states |
+| `GuardWeakStep = FALSE`: a weak gains step or corner is advanced past and saved over anyway | `NoSaveWithWeakStep` |
 | `GuardStartCamera = FALSE`: a session can start with the camera down | `NoRunningWithoutCamera`, 17 states |
 | `GuardCameraLost = FALSE`: losing the camera does not end a running session | `NoRunningWithoutCamera`, 26 states |
 | `GuardCancelDiscards = FALSE`: cancelling saves the session in progress | `NoSaveOnCancel`, 17 states |
+| `GuardApplyImmediately = FALSE`: a finished session's profile is saved but not read by the live reader until a restart | `NoStaleApply`, 44 states generated, finite counterexample |
 | No fairness on `Finish` | `SessionEnds`: a session at its last step, never finished |
 
 `src/calibration.h`'s `CalibrationController::Start`, `Next` and `Cancel`
-implement the spec's `Start`, `Advance`/`Finish` and `Cancel`;
-`CalibrationSession::Update` is `Capture`, and `OnCameraLost` and
-`OnCameraUp` are `CameraLost` and `CameraBack`. Every one of those runs
-under `CalibrationSession`'s own `mutex_` (#128's third finding), taken
-for the whole body of each: `Start`, `Next` and `Cancel` reach it from a
-connection's own thread (`src/service.cc`), `Update` from the inference
-queue, and `OnCameraLost`/`OnCameraUp` from the daemon's control queue
-(`src/daemon_calibration.h`), with no other ordering between any two of
-them otherwise, so this is what makes each one the single indivisible
-step this spec's own actions already assume it is; a two-thread stress test,
+implement the spec's `Start`, `Advance`/`Finish`/`Refuse` and `Cancel`;
+`CalibrationSession::Update` is `CaptureGood`/`CaptureWeak`, and
+`OnCameraLost` and `OnCameraUp` are `CameraLost` and `CameraBack`. Every one
+of those runs under `CalibrationSession`'s own `mutex_` (#128's third
+finding), taken for the whole body of each: `Start`, `Next` and `Cancel`
+reach it from a connection's own thread (`src/service.cc`), `Update` from
+the inference queue, and `OnCameraLost`/`OnCameraUp` from the daemon's
+control queue (`src/daemon_calibration.h`), with no other ordering between
+any two of them otherwise, so this is what makes each one the single
+indivisible step this spec's own actions already assume it is; a
+two-thread stress test,
 `CalibrationSessionTest.UpdateRunsSafelyAlongsideStartAndNextOnAnotherThread`,
-walks a full session while `Update` floods it with poses the whole time,
+walks a full session (every weak-step threshold at 0, so the race itself,
+not the weak-step checks `NoSaveWithWeakStepTest` already covers, is what
+this test is for) while `Update` floods it with samples the whole time,
 caught by ThreadSanitizer (CI's `thread-sanitizer` job) before this fix's
-mutex existed. `src/calibration_store.cc`
-saves the profile atomically (write, sync, rename, sync the directory) to a
-private file (mode 0600), exactly once, on `Finish`; a failed save leaves
-the capture in place so `Next` can be retried, which the model does not
-represent. `OnCameraLost` and `OnCameraUp` are not called by
-`src/calibration_reader.cc` (which only ever sees a pose while the camera is
-already up): they are for whoever owns the camera's lifecycle in the
-daemon's composition root to call, which is `tools/daemon/main.cc`'s
-`Engine`, through `src/daemon_calibration.h`'s `DaemonCalibration` (#116):
-`Engine::Open` calls `OnCameraUp` exactly when the frame pipeline's own
-model is created, and `Engine::Close` calls `OnCameraLost` before it is
-destroyed, with one more call at `Engine::Start` for the camera being
-closed at startup, before either has ever run once (`DaemonCalibrationTest`
-covers the forwarding itself, mocking `CalibrationController`, since
-`Engine` has no test file of its own, #64). `src/service.cc` dispatches a
-`calibrate` request to the controller it is given, or refuses it when it
-is given none: `Engine` gives it `DaemonCalibration::Controller()`, which is
-only ever null when `tools/daemon/main.cc`'s `CalibrationStorePath` found
-no `--home` to save a profile under, the same as the preview paths beside
-it. The model does not prove the
-saved profile maps a pose to the right screen; that is
-`NearestCalibratedScreen`'s job, covered directly by
-`NearestCalibratedScreenTest` and the acceptance test in
-`test/calibration_store_test.cc`,
+mutex existed. `Next`'s own weak-step check (`AdvanceOrRefuse`,
+`src/calibration.cc`) is `Refuse` when it finds the gains step's own
+`EstimateGains` (`src/eye_gaze.h`) refuses outright, or a corner's gaze
+(`ComposeGaze`) too close to its own screen's centre; either way the step's
+capture is reset for a retry, exactly as `Refuse` does. `Restart` is
+`tools/daemon/main.cc`'s `Engine`: `CalibrationSession`'s own `on_finished`
+callback, given at construction, calls `ScreenContextReporter::SetProfile`
+with the freshly saved profile, synchronously, inside the same `Next` call
+that saves it, so the model's separate `Restart` action is in the code one
+indivisible step earlier than the model draws it -- `GuardApplyImmediately`
+is always on in the code, with no deferred path to exercise, which is why
+`ProfileEventuallyApplied`'s own test coverage is `NoStaleApply`'s. `src/
+calibration_store.cc` saves the profile atomically (write, sync, rename,
+sync the directory) to a private file (mode 0600), exactly once, on
+`Finish`; a failed save leaves the capture in place so `Next` can be
+retried, which the model does not represent. `OnCameraLost` and
+`OnCameraUp` are not called by `src/calibration_reader.cc` (which only ever
+sees a sample while the camera is already up): they are for whoever owns
+the camera's lifecycle in the daemon's composition root to call, which is
+`tools/daemon/main.cc`'s `Engine`, through `src/daemon_calibration.h`'s
+`DaemonCalibration` (#116): `Engine::Open` calls `OnCameraUp` exactly when
+the frame pipeline's own model is created, and `Engine::Close` calls
+`OnCameraLost` before it is destroyed, with one more call at
+`Engine::Start` for the camera being closed at startup, before either has
+ever run once (`DaemonCalibrationTest` covers the forwarding itself,
+mocking `CalibrationController`, since `Engine` has no test file of its
+own, #64). `src/service.cc` dispatches a `calibrate` request to the
+controller it is given, or refuses it when it is given none: `Engine`
+gives it `DaemonCalibration::Controller()`, which is only ever null when
+`tools/daemon/main.cc`'s `CalibrationStorePath` found no `--home` to save a
+profile under, the same as the preview paths beside it. The model does not
+prove the saved profile maps a gaze to the right screen, nor the gains
+estimate or the eye composition themselves; those are `NearestCalibratedScreen`'s,
+`EstimateGains`'s and `ComposeGaze`'s own jobs (src/eye_gaze.h, tested
+directly, the same stateless-computation reasoning `specs/README.md`'s
+`screen_context.h` entry already gives for `CoarseGazeFrom`), covered by
+`NearestCalibratedScreenTest`, `EstimateGainsTest`, `ComposeGazeTest` and
+the acceptance test in `test/calibration_store_test.cc`,
 `ACalibratedProfileLocatesAScreenAnUncalibratedGuessMisses`, which replays
-fixture head poses through a full start-capture-next-finish-save-load-locate
-cycle on a real file.
+fixture head poses (and a passing gains step) through a full
+start-capture-next-finish-save-load-locate cycle on a real file.
 
 ## `CalibrationMenu`: the menu wizard's own view of a calibration session
 
 Models the client-side lifecycle `src/calibration_flow.h`'s `CalibrationFlow`
-adds for #118 (item 12 of #61, #36, #35): the menu's "Calibrate..." wizard
-(`tools/menu/main.mm`, `tools/menu/main_linux.cc`) is a different thing from
-the session `specs/Calibration.tla` already models in the daemon, since
+adds for #118 (item 12 of #61, #36, #35), now also covering #135 (every
+screen gets its own window move and prompt) and the result line #137 ends
+on: the menu's "Calibrate..." wizard (`tools/menu/main.mm`,
+`tools/menu/main_linux.cc`) is a different thing from the session
+`specs/Calibration.tla` already models in the daemon, since
 `CalibrationFlow` only ever learns what the daemon's reply to its own last
 request said -- it gets no push when the daemon's session ends on its own
 (a camera loss, say). `state` is the flow's own view: `"closed"` (no window,
@@ -1372,9 +1413,14 @@ or the window's own close button sent `calibrate cancel` and is waiting for
 its reply), `"done"` or `"failed"`. `sessionLive` abstracts whether the
 daemon still has a session this flow owns; `cameraUp` and `cameraWaits`
 (bounded by `MaxCameraWaits`) abstract the daemon's own camera and how many
-retries this flow has already spent waiting for it. `CalibrationMenu.cfg`
-checks one flow against one daemon session, a cold start bounded to 2
-retries, every guard on: 29 distinct states, every property holds.
+retries this flow has already spent waiting for it; `resultShown` and
+`unshownResult` abstract whether the wizard has the count #135/#137 ends on
+("Calibrated N screens."); `windowOnScreen` and `unmovedWindow` abstract
+whether the window has been moved onto the screen the step now showing
+names (#135), earned again for every step shown, not only once per flow.
+`CalibrationMenu.cfg` checks one flow against one daemon session, a cold
+start bounded to 2 retries, every guard on: 78 distinct states, every
+property holds.
 
 | Property | What it says | Test |
 |---|---|---|
@@ -1382,6 +1428,8 @@ retries, every guard on: 29 distinct states, every property holds.
 | `NoStalePrompt` | Whatever the wizard shows as "prompting" is backed by a session the daemon still has. | `CalibrationFlowTest.NextTransitionsToFailedOnAnUnexpectedIdleReply`, `...OnAHangUpWithoutACancel` |
 | `NoOrphanOnClose` | Closing the window never leaves a session running with nobody left to answer for it. | `CalibrationFlowTest.WindowClosedSendsCancelWhilePrompting`, `...IsANoOpOutsidePrompting` |
 | `SessionEndsWithFlow` | A flow that has reported done or failed never still has a session the daemon thinks is running (#128): whatever ended this flow's own view also ended, or already found ended, the one it was responsible for. | `CalibrationFlowTest.NextSendsCancelAndReportsItsOwnErrorOnARefusal`, `...KeepsItsOwnErrorEvenWhenTheCleanupCancelFails` |
+| `ResultShownOnDone` | A finished flow always shows the count it ended on (#135, #137): the wizard never reaches "done" silently (#136's finding). | `CalibrationFlowTest.NextTransitionsToDoneWithTheScreensCalibrated` |
+| `WindowMovedWhilePrompting` | Every step shown while prompting has had the window moved onto the screen it names (#135). | Not unit-testable: `tools/menu/calibration_window_macos.mm`'s `moveToScreenForStep:` and `calibration_window_linux.cc`'s `MoveToScreenForStep` are AppKit/Qt glue, untested by this repo's own convention (the window files carry no test file); a hand check on a real Mac and Ubuntu with two screens shows the window moving |
 | `ClosingCompletes` | Something must happen: once Cancel or the window's close button has asked the daemon to end the session, that always finishes. | Every `CalibrationFlowTest` case that calls `Cancel()` or `WindowClosed()` observes a terminal `View()` before returning, since `CalibrateClientIo::ReadLine` is synchronous in the real POSIX and Qt glue (`tools/posix_calibrate_client_io.h`, `tools/menu/main_linux.cc`'s `QtCalibrateClientIo`) and in every mock |
 | `CameraWaitResolves` | Something must happen: a cold start that keeps the wizard waiting for the camera always resolves, once the camera comes up or the wait is spent (#128). | `CalibrationFlowTest.StartRetriesWhenRefusedOnlyForTheCameraThenReachesPrompting`, `...GivesUpAfterMaxCameraWaitsWithTheCameraStillDown` |
 
@@ -1392,6 +1440,8 @@ Each mutation, and what TLC found:
 | `GuardFailOnDisconnect = FALSE`: a failed or hung-up `calibrate next` leaves the wizard showing the step that is no longer real | `NoStalePrompt`, 5 states |
 | `GuardCancelOnClose = FALSE`: the window's close button tears the window down without ever sending `calibrate cancel` | `NoOrphanOnClose`, 8 states |
 | `GuardCancelOnRefusal = FALSE`: a refused `calibrate next` reports the failure without ever sending `calibrate cancel`, the design `ApplyReply` had before this fix | `SessionEndsWithFlow`, 22 states |
+| `GuardShowResult = FALSE`: a finished flow never sets its own result text | `ResultShownOnDone` |
+| `GuardMoveWindow = FALSE`: a step never moves the window onto the screen it names | `WindowMovedWhilePrompting` |
 | No fairness on `CancelSucceeds`/`CancelFails` | `ClosingCompletes`: a flow stuck in `"closing"` forever, stuttering once its own cancel request is on the wire |
 | No fairness on `RetrySucceeds`/`RetryWaits`/`RetryGivesUp` | `CameraWaitResolves`: a flow stuck in `"opening"` forever, stuttering once the camera comes up |
 
@@ -1416,11 +1466,32 @@ code, one. `NextRefused` is likewise one call: a refused `calibrate next`
 sends `calibrate cancel` and reads its reply before `Next` returns, rather
 than the window ever showing an intermediate state, which is what lets
 `GuardCancelOnRefusal`'s fix set `sessionLive' = FALSE` unconditionally
-within the one action, matching the code exactly. The model does not cover
-the socket, hello or approval mechanics themselves (`src/calibrate_cli.h`'s
-`CalibrateClientIo`, already modeled by nothing more than "succeeds or
-fails", is the seam `calibrate_cli_test.cc` and `calibration_flow_test.cc`
-both mock), nor the daemon's own session, which `specs/Calibration.tla`
-already proves, nor which connection the daemon ties that session to,
-which `specs/Service.tla` does; only a hand check on a real Mac and
-Ubuntu, against a live daemon, shows the window itself.
+within the one action, matching the code exactly; `NextRefused` also
+covers #137's weak-step refusal (`specs/Calibration.tla`'s `Refuse`), since
+`ParseCalibrationReply` (`src/calibration_flow.cc`) reads a weak-step
+refusal exactly the way it reads any other -- a bare `{"error":...}` --
+needing no action of its own. `NextFinishes` is also where `resultShown'`
+is set (`ApplyStatus` reading `Status::screens` into `View::screens`, the
+result both #135 and #137 end on); `OpenSucceeds`, `RetrySucceeds` and
+`NextContinues` are also where `windowOnScreen'` is set, standing for
+`tools/menu/calibration_window_macos.mm`'s `moveToScreenForStep:` and
+`calibration_window_linux.cc`'s `MoveToScreenForStep`, called every time
+`Render` shows a `kPrompting` view, before the label's own text -- both
+compute
+the screen from `View::screen` against `[NSScreen screens]` or
+`QGuiApplication::screens()`, primary/primary screen first then the rest,
+the same order `src/macos/screen_context_macos.mm`'s own
+`MacosScreenSource::Screens()` enumerates in on a Mac, so the daemon's own
+screen index lines up with AppKit's; `StepPrompt` in both names the
+screen (`ScreenDescription`: its position relative to the main one, and
+its display name) the same call builds. `primaryClicked:`/`PrimaryClicked`
+pass `[NSScreen screens].count`/`QGuiApplication::screens().size()` to
+`Start`, the real screen count rather than #136's hardcoded one (#135).
+The model does not cover the socket, hello or approval mechanics
+themselves (`src/calibrate_cli.h`'s `CalibrateClientIo`, already modeled
+by nothing more than "succeeds or fails", is the seam `calibrate_cli_test.cc`
+and `calibration_flow_test.cc` both mock), nor the daemon's own session,
+which `specs/Calibration.tla` already proves, nor which connection the
+daemon ties that session to, which `specs/Service.tla` does; only a hand
+check on a real Mac and Ubuntu, with two screens, against a live daemon,
+shows the window itself moving and naming them.

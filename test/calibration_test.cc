@@ -7,6 +7,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/eye_gaze.h"
 #include "src/head_pose.h"
 
 // Each test but the naming and nearest-screen ones stands for the property
@@ -26,6 +27,10 @@ HeadRotation Pose(double yaw, double pitch) {
   return {.yaw_degrees = yaw, .pitch_degrees = pitch};
 }
 
+EyeSignal Eye(double horizontal, double vertical, bool blink = false) {
+  return {.horizontal = horizontal, .vertical = vertical, .blink = blink};
+}
+
 class MockCalibrationStore : public CalibrationStore {
  public:
   MOCK_METHOD(bool, Save,
@@ -35,6 +40,20 @@ class MockCalibrationStore : public CalibrationStore {
 
 class CalibrationSessionTest : public ::testing::Test {
  protected:
+  // Feeds a gains step that always passes with the default Settings
+  // (min_head_travel_degrees 10, min_axis_degrees 4): a real fixate-and-
+  // turn, 20 degrees of yaw with the eyes compensating at a gain of 20.
+  // Returns the status the daemon would reply with for the first screen's
+  // centre step. ASSERT_* inside a non-void helper needs its caller to
+  // check HasFailure, as every call site here does.
+  std::optional<CalibrationController::Status> PassGainsStep(
+      std::string& error) {
+    for (int step = -10; step <= 10; step += 2) {
+      session_.Update(Pose(step, 0), Eye(-step / 20.0, 0));
+    }
+    return session_.Next(error);
+  }
+
   NiceMock<MockCalibrationStore> store_;
   CalibrationSession session_{store_};
 };
@@ -68,9 +87,24 @@ TEST_F(StartTest, StartsAtTheRestingStep) {
   EXPECT_TRUE(status->running);
   EXPECT_FALSE(status->done);
   EXPECT_THAT(status->index, Eq(0));
-  EXPECT_THAT(status->total, Eq(6));  // The resting pose, plus 5 points.
+  EXPECT_THAT(status->total, Eq(7));  // Resting, gains, plus 5 points.
   EXPECT_TRUE(status->resting_step);
+  EXPECT_FALSE(status->gains_step);
   EXPECT_THAT(error, IsEmpty());
+}
+
+TEST_F(StartTest, MovesToTheGainsStepAfterResting) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+
+  std::string error;
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_FALSE(status->resting_step);
+  EXPECT_TRUE(status->gains_step);
+  EXPECT_THAT(status->index, Eq(1));
 }
 
 TEST_F(StartTest, CountsEveryScreensTargets) {
@@ -79,7 +113,7 @@ TEST_F(StartTest, CountsEveryScreensTargets) {
       session_.Start(2, error);
 
   ASSERT_TRUE(status.has_value());
-  EXPECT_THAT(status->total, Eq(11));  // The resting pose, plus 2*5 points.
+  EXPECT_THAT(status->total, Eq(12));  // Resting, gains, plus 2*5 points.
 }
 
 TEST_F(StartTest, RefusesTooFewOrTooManyScreens) {
@@ -115,11 +149,11 @@ TEST_F(NoAdvanceWithoutCaptureTest, RefusesNextBeforeAnyPose) {
 TEST_F(NoAdvanceWithoutCaptureTest, EachStepNeedsItsOwnCapture) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0));
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string first_next_error;
   ASSERT_TRUE(session_.Next(first_next_error).has_value());
 
-  // The next step has not been captured, even though the last one was.
+  // The next step (gains) has not been captured, even though resting was.
   std::string error;
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("no pose captured yet for this step"));
@@ -131,6 +165,89 @@ TEST_F(NoAdvanceWithoutCaptureTest, RefusesNextWithNoSessionRunning) {
   EXPECT_THAT(error, Eq("no calibration session is running"));
 }
 
+using NoSaveWithWeakStepTest = CalibrationSessionTest;
+
+TEST_F(NoSaveWithWeakStepTest, RefusesAGainsStepWithTooLittleHeadTravel) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string resting_error;
+  ASSERT_TRUE(session_.Next(resting_error).has_value());
+
+  // Barely any head travel: well under the default min_head_travel_degrees.
+  session_.Update(Pose(0, 0), Eye(0, 0));
+  session_.Update(Pose(0.5, 0), Eye(-0.01, 0));
+
+  std::string error;
+  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
+  EXPECT_THAT(error,
+              Eq("turn your head further while you keep looking at the dot"));
+}
+
+TEST_F(NoSaveWithWeakStepTest, ARefusedGainsStepCanBeRetried) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string resting_error;
+  ASSERT_TRUE(session_.Next(resting_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0, 0));
+  std::string weak_error;
+  ASSERT_THAT(session_.Next(weak_error), Eq(std::nullopt));
+
+  std::string error;
+  const std::optional<CalibrationController::Status> status =
+      PassGainsStep(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_FALSE(status->gains_step);
+  EXPECT_THAT(status->screen, Eq(0));
+  EXPECT_THAT(status->point, Eq(CalibrationPoint::kCentre));
+}
+
+TEST_F(NoSaveWithWeakStepTest, RefusesACornerTooCloseToItsOwnCentre) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string resting_error;
+  ASSERT_TRUE(session_.Next(resting_error).has_value());
+  std::string gains_error;
+  ASSERT_TRUE(PassGainsStep(gains_error).has_value()) << gains_error;
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string centre_error;
+  ASSERT_TRUE(session_.Next(centre_error).has_value()) << centre_error;
+
+  // The corner's gaze barely differs from the centre just stored: under
+  // the default min_spread_degrees.
+  session_.Update(Pose(0.5, 0), EyeSignal{});
+
+  std::string error;
+  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
+  EXPECT_THAT(error,
+              Eq("look further toward that corner, away from the centre"));
+}
+
+TEST_F(NoSaveWithWeakStepTest, ARefusedCornerCanBeRetried) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string resting_error;
+  ASSERT_TRUE(session_.Next(resting_error).has_value());
+  std::string gains_error;
+  ASSERT_TRUE(PassGainsStep(gains_error).has_value()) << gains_error;
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string centre_error;
+  ASSERT_TRUE(session_.Next(centre_error).has_value()) << centre_error;
+  session_.Update(Pose(0.5, 0), EyeSignal{});
+  std::string weak_error;
+  ASSERT_THAT(session_.Next(weak_error), Eq(std::nullopt));
+
+  session_.Update(Pose(20, 20), EyeSignal{});
+  std::string error;
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_THAT(status->point, Eq(CalibrationPoint::kTopRight));
+}
+
 using CalibrationWalksEveryTargetTest = CalibrationSessionTest;
 
 // Walks every one of a screen's five points in order.
@@ -139,19 +256,24 @@ TEST_F(CalibrationWalksEveryTargetTest, WalksEachScreensFivePointsInOrder) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
 
-  session_.Update(Pose(1, -1));
+  session_.Update(Pose(1, -1), EyeSignal{});
   std::string resting_error;
-  const auto after_resting = session_.Next(resting_error);
-  ASSERT_TRUE(after_resting.has_value());
-  EXPECT_FALSE(after_resting->resting_step);
-  EXPECT_THAT(after_resting->index, Eq(1));
-  EXPECT_THAT(after_resting->screen, Eq(0));
-  EXPECT_THAT(after_resting->point, Eq(CalibrationPoint::kCentre));
+  ASSERT_TRUE(session_.Next(resting_error).has_value());
+  std::string gains_error;
+  const auto after_gains = PassGainsStep(gains_error);
+  ASSERT_TRUE(after_gains.has_value()) << gains_error;
+  EXPECT_THAT(after_gains->index, Eq(2));
+  EXPECT_THAT(after_gains->screen, Eq(0));
+  EXPECT_THAT(after_gains->point, Eq(CalibrationPoint::kCentre));
 
+  // Each capture (the loop's first is the centre) sits well clear of the
+  // one before, so the spread check never refuses one (#137).
+  double yaw = 10;
   for (const CalibrationPoint point :
        {CalibrationPoint::kTopLeft, CalibrationPoint::kTopRight,
         CalibrationPoint::kBottomLeft, CalibrationPoint::kBottomRight}) {
-    session_.Update(Pose(10, 10));
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    yaw += 10;
     std::string error;
     const auto status = session_.Next(error);
     ASSERT_TRUE(status.has_value()) << error;
@@ -174,12 +296,13 @@ TEST_F(CalibrationWalksEveryTargetTest, SavesTheAveragePoseOfEachTarget) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
 
-  session_.Update(Pose(2, -2));
-  session_.Update(Pose(4, -4));  // Resting: averages to (3, -3).
+  session_.Update(Pose(2, -2), EyeSignal{});
+  session_.Update(Pose(4, -4), EyeSignal{});  // Resting: averages to (3, -3).
   std::string error;
   ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
   for (const double yaw : {10, 20, 30, 40, 50}) {
-    session_.Update(Pose(yaw, yaw));
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
     ASSERT_TRUE(session_.Next(error).has_value()) << error;
   }
 
@@ -196,25 +319,179 @@ TEST_F(CalibrationWalksEveryTargetTest, SavesTheAveragePoseOfEachTarget) {
       Eq(50));
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(CalibrationWalksEveryTargetTest, SavesTheEstimatedGainsAndRestingEye) {
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0.2, 0));
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_THAT(captured.resting_eye.horizontal, Eq(0.2));
+  EXPECT_NEAR(captured.gains.horizontal, 20, 1e-9);
+}
+
+TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheEyeAverage) {
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0.2, 0));
+  // A blink, with an eye signal that would skew the average if it counted:
+  // the head still updates (captured_ stays true from it alone), but the
+  // eye signal does not.
+  session_.Update(Pose(0, 0), Eye(0.9, 0, /*blink=*/true));
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_THAT(captured.resting_eye.horizontal, Eq(0.2));
+}
+
+TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheGainsStep) {
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  // A blink mid-step, with a head and eye pair that would corrupt the
+  // slope away from 20 if it counted: on the wrong side of the real
+  // fixate-and-turn line entirely.
+  session_.Update(Pose(100, 0), Eye(100, 0, /*blink=*/true));
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_NEAR(captured.gains.horizontal, 20, 1e-9);
+}
+
+// A step where every frame blinks captures nothing for the eye signal, so
+// it falls back to a centred (0, 0) average rather than crashing or
+// leaving a stale value (#137): one indivisible walk through a whole
+// session, the same as the other full-session tests above.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(CalibrationWalksEveryTargetTest,
+       AllBlinkFramesLeaveTheRestingEyeCentred) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0.9, 0.9, /*blink=*/true));
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    // Every point's own frame blinks too, so the composed gaze falls back
+    // to head pose alone and the corner-vs-centre spread check still
+    // passes on the head offset alone.
+    session_.Update(Pose(yaw, yaw), Eye(0.9, 0.9, /*blink=*/true));
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_THAT(captured.resting_eye.horizontal, Eq(0));
+  EXPECT_THAT(captured.resting_eye.vertical, Eq(0));
+}
+
+// #137's own bound on the gains step's own sample buffer: a session
+// walked well past kMaxGainsSamples still estimates gains correctly
+// rather than growing its buffer without limit.
+TEST_F(CalibrationWalksEveryTargetTest, TheGainsStepStopsBufferingPastItsCap) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  constexpr int kWellPastTheCap = 1100;
+  for (int sample = 0; sample < kWellPastTheCap; ++sample) {
+    const double step = (sample % 21) - 10;
+    session_.Update(Pose(step, 0), Eye(-step / 20.0, 0));
+  }
+  const auto status = session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_FALSE(status->gains_step);
+}
+
 // Walks every step before checking the last one finishes the session.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
 TEST_F(CalibrationWalksEveryTargetTest, TheLastStepFinishesTheSession) {
   ON_CALL(store_, Save).WillByDefault(Return(true));
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  for (int step = 0; step < 5; ++step) {
-    session_.Update(Pose(0, 0));
-    std::string error;
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
     ASSERT_TRUE(session_.Next(error).has_value()) << error;
   }
 
-  session_.Update(Pose(0, 0));
-  std::string error;
+  session_.Update(Pose(50, 50), EyeSignal{});
   const auto status = session_.Next(error);
 
-  ASSERT_TRUE(status.has_value());
+  ASSERT_TRUE(status.has_value()) << error;
   EXPECT_FALSE(status->running);
   EXPECT_TRUE(status->done);
+  EXPECT_THAT(status->screens, Eq(1));
+}
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(CalibrationWalksEveryTargetTest, OnFinishedIsToldTheSavedProfile) {
+  ON_CALL(store_, Save).WillByDefault(Return(true));
+  CalibrationProfile told;
+  bool told_at_all = false;
+  CalibrationSession session(store_, CalibrationSettings{},
+                             [&](const CalibrationProfile& profile) {
+                               told = profile;
+                               told_at_all = true;
+                             });
+  std::string start_error;
+  ASSERT_TRUE(session.Start(1, start_error).has_value());
+  session.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session.Next(error).has_value()) << error;
+  for (int step = -10; step <= 10; step += 2) {
+    session.Update(Pose(step, 0), Eye(-step / 20.0, 0));
+  }
+  ASSERT_TRUE(session.Next(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    session.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session.Next(error).has_value()) << error;
+  }
+
+  EXPECT_TRUE(told_at_all);
+  ASSERT_THAT(told.screens.size(), Eq(1));
 }
 
 // Walks every step, then checks a failed save leaves the capture in place
@@ -230,14 +507,16 @@ TEST_F(CalibrationWalksEveryTargetTest, AFailedSaveLeavesTheStepRunning) {
   ON_CALL(store_, Save).WillByDefault(Return(true));
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  for (int step = 0; step < 5; ++step) {
-    session_.Update(Pose(0, 0));
-    std::string step_error;
-    ASSERT_TRUE(session_.Next(step_error).has_value()) << step_error;
-  }
-  session_.Update(Pose(0, 0));
-
+  session_.Update(Pose(0, 0), EyeSignal{});
   std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+  session_.Update(Pose(50, 50), EyeSignal{});
+
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("disk full"));
 
@@ -254,7 +533,7 @@ TEST_F(NoSaveOnCancelTest, CancellingNeverSaves) {
   EXPECT_CALL(store_, Save).Times(0);
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(5, 5));
+  session_.Update(Pose(5, 5), EyeSignal{});
 
   std::string error;
   EXPECT_TRUE(session_.Cancel(error));
@@ -291,7 +570,7 @@ TEST_F(NoRunningWithoutCameraTest, LosingTheCameraCancelsARunningSession) {
   EXPECT_CALL(store_, Save).Times(0);
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(5, 5));
+  session_.Update(Pose(5, 5), EyeSignal{});
 
   session_.OnCameraLost();
 
@@ -320,7 +599,7 @@ TEST_F(NoRunningWithoutCameraTest, TheCameraComingBackAllowsStarting) {
 using UpdateIgnoredWithoutASessionTest = CalibrationSessionTest;
 
 TEST_F(UpdateIgnoredWithoutASessionTest, APoseWithNoSessionChangesNothing) {
-  session_.Update(Pose(5, 5));
+  session_.Update(Pose(5, 5), EyeSignal{});
 
   std::string error;
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
@@ -337,21 +616,35 @@ TEST_F(UpdateIgnoredWithoutASessionTest, APoseWithNoSessionChangesNothing) {
 // production under the right timing.
 TEST_F(CalibrationSessionTest,
        UpdateRunsSafelyAlongsideStartAndNextOnAnotherThread) {
+  // Every weak-step threshold at 0 (#137): this test's own job is the
+  // race between Update (the frames thread) and Start/Next (this one)
+  // under ThreadSanitizer, not the weak-step checks NoSaveWithWeakStepTest
+  // above already covers; with a threshold above 0, this test's own
+  // retry-on-refusal loop below would still be correct, but could spin on
+  // a step whose two threads' timing happens to always lose the race for
+  // a passing sample, which is exactly the kind of flakiness a test
+  // should not carry.
   ON_CALL(store_, Save).WillByDefault(Return(true));
+  CalibrationSession session(store_,
+                             CalibrationSettings{.min_head_travel_degrees = 0,
+                                                 .min_axis_degrees = 0,
+                                                 .min_spread_degrees = 0});
   std::atomic<bool> stop{false};
-  std::thread frames([this, &stop] {
+  std::thread frames([&session, &stop] {
+    int step = -10;
     while (!stop.load()) {
-      session_.Update(Pose(1, 1));
+      session.Update(Pose(step, 1), Eye(-step / 20.0, 0));
+      step = step >= 10 ? -10 : step + 1;
     }
   });
 
   std::string start_error;
-  ASSERT_TRUE(session_.Start(1, start_error).has_value()) << start_error;
+  ASSERT_TRUE(session.Start(1, start_error).has_value()) << start_error;
   bool done = false;
   while (!done) {
     std::string error;
     const std::optional<CalibrationController::Status> status =
-        session_.Next(error);
+        session.Next(error);
     if (!status.has_value()) {
       continue;  // Not yet captured by the frames thread; retry.
     }

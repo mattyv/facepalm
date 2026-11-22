@@ -62,7 +62,8 @@ class MockCalibrationController : public CalibrationController {
   MOCK_METHOD(std::optional<Status>, Start, (int, std::string&), (override));
   MOCK_METHOD(std::optional<Status>, Next, (std::string&), (override));
   MOCK_METHOD(bool, Cancel, (std::string&), (override));
-  MOCK_METHOD(void, Update, (const HeadRotation&), (override));
+  MOCK_METHOD(void, Update, (const HeadRotation&, const EyeSignal&),
+              (override));
   MOCK_METHOD(void, OnCameraLost, (), (override));
   MOCK_METHOD(void, OnCameraUp, (), (override));
 };
@@ -845,7 +846,7 @@ TEST_F(ServiceWithCalibrationTest, StepsAndFinishesWithNext) {
   peer->Send("calibrate next");
 
   EXPECT_THAT(peer->Reply(2),
-              Eq(R"({"ok":true,"calibration":{"state":"done"}})"));
+              Eq(R"({"ok":true,"calibration":{"state":"done","screens":0}})"));
   service_.Stop();
 }
 

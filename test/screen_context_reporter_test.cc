@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "src/calibration.h"
+#include "src/eye_gaze.h"
 #include "src/head_pose.h"
 #include "src/screen_context.h"
 #include "src/screen_source.h"
@@ -176,6 +177,64 @@ TEST(ScreenContextReporterTest, NoProfileGivenLeavesTheCalibratedScreenOut) {
                                        /*titles_enabled=*/false);
 
   EXPECT_EQ(reporter.Json(kRest, kRest), R"({"gaze":"this_screen"})");
+}
+
+// #137's own composition: an eye signal composed with head pose can turn
+// an uncalibrated this_screen reading away, where the raw head pose alone
+// would not have.
+TEST(ScreenContextReporterTest, EyeSignalComposesIntoTheGazeReading) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false, nullptr,
+                                       EyeGains{.horizontal = 30});
+  const EyeSignal eye{.horizontal = 1};
+  const EyeSignal eye_resting{};
+
+  EXPECT_EQ(reporter.Json(kRest, kRest, eye, eye_resting),
+            R"({"gaze":"away"})");
+}
+
+// A profile's own gains take over from the constructor's default once one
+// is given (#137): the same eye signal that composed into kThisScreen with
+// no profile's gains of 0 composes into kAway with the profile's own,
+// much larger, gains.
+TEST(ScreenContextReporterTest, AProfilesOwnGainsTakeOverFromTheDefault) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
+  CalibrationProfile profile;
+  profile.gains = {.horizontal = 30};
+  profile.screens = {ScreenCalibration{}};  // One screen, centred at (0, 0).
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false, &profile);
+  const EyeSignal eye{.horizontal = 1};
+  const EyeSignal eye_resting{};
+
+  EXPECT_EQ(reporter.Json(kRest, kRest, eye, eye_resting),
+            R"({"gaze":"away","calibrated_screen":0})");
+}
+
+TEST(ScreenContextReporterTest, SetProfileSwapsWhatNextCallReads) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false))
+      .Times(2)
+      .WillRepeatedly(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).Times(2).WillRepeatedly(Return(std::nullopt));
+  EXPECT_CALL(source, Screens())
+      .Times(2)
+      .WillRepeatedly(Return(std::vector<ScreenRect>{}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  EXPECT_EQ(reporter.Json(kRest, kRest), R"({"gaze":"this_screen"})");
+
+  const CalibrationProfile profile = TwoScreenProfile();
+  reporter.SetProfile(&profile);
+
+  EXPECT_EQ(reporter.Json(kRest, kRest),
+            R"({"gaze":"this_screen","calibrated_screen":0})");
 }
 
 }  // namespace

@@ -53,7 +53,7 @@ ScreenSide SideOf(std::span<const ScreenRect> screens) {
   return side;
 }
 
-Gaze CoarseGazeFrom(const HeadRotation& pose,
+Gaze CoarseGazeFrom(const HeadRotation& gaze,
                     const std::optional<HeadRotation>& resting, ScreenSide side,
                     const GazeSettings& settings) {
   if (!resting) {
@@ -62,8 +62,8 @@ Gaze CoarseGazeFrom(const HeadRotation& pose,
   // As LookAwayDetector's own `off`: yaw wrapped at the +/-180 seam, the
   // larger of it and the pitch difference.
   const double yaw_off =
-      std::remainder(pose.yaw_degrees - resting->yaw_degrees, kFullTurnDegrees);
-  const double pitch_off = pose.pitch_degrees - resting->pitch_degrees;
+      std::remainder(gaze.yaw_degrees - resting->yaw_degrees, kFullTurnDegrees);
+  const double pitch_off = gaze.pitch_degrees - resting->pitch_degrees;
   const double off = std::max(std::abs(yaw_off), std::abs(pitch_off));
   if (off <= settings.other_screen_degrees) {
     return Gaze::kThisScreen;

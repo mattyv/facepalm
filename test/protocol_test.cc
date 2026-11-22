@@ -295,6 +295,15 @@ TEST(JsonTest, WritesTheRestingStep) {
                  R"("total":6,"step":"resting"}})"));
 }
 
+TEST(JsonTest, WritesTheGainsStep) {
+  const CalibrationController::Status status{
+      .running = true, .index = 1, .total = 7, .gains_step = true};
+
+  EXPECT_THAT(CalibrationStatusJson(status),
+              Eq(R"({"ok":true,"calibration":{"state":"running","index":1,)"
+                 R"("total":7,"step":"gains"}})"));
+}
+
 TEST(JsonTest, WritesAScreenStep) {
   const CalibrationController::Status status{
       .running = true,
@@ -311,8 +320,9 @@ TEST(JsonTest, WritesAScreenStep) {
 }
 
 TEST(JsonTest, WritesDoneAndIdle) {
-  EXPECT_THAT(CalibrationStatusJson({.running = false, .done = true}),
-              Eq(R"({"ok":true,"calibration":{"state":"done"}})"));
+  EXPECT_THAT(
+      CalibrationStatusJson({.running = false, .done = true, .screens = 2}),
+      Eq(R"({"ok":true,"calibration":{"state":"done","screens":2}})"));
   EXPECT_THAT(CalibrationStatusJson({.running = false, .done = false}),
               Eq(R"({"ok":true,"calibration":{"state":"idle"}})"));
 }

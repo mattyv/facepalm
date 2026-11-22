@@ -38,6 +38,16 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_TRUE(config.screen_context_enabled);
   EXPECT_FALSE(config.screen_context_window_titles_enabled);
   EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(7.5F));
+  EXPECT_THAT(config.eye_gaze_horizontal_gain, FloatEq(30.0F));
+  EXPECT_THAT(config.eye_gaze_vertical_gain, FloatEq(30.0F));
+  EXPECT_THAT(config.eye_gaze_blink_threshold, FloatEq(0.5F));
+  EXPECT_THAT(config.eye_gaze_median_ms, Eq(250));
+  EXPECT_THAT(config.eye_gaze_resting_ms, Eq(3000));
+  EXPECT_THAT(config.eye_gaze_gap_ms, Eq(2000));
+  EXPECT_THAT(config.eye_gaze_head_only_yaw_degrees, FloatEq(35.0F));
+  EXPECT_THAT(config.calibration_min_head_travel_degrees, FloatEq(10.0F));
+  EXPECT_THAT(config.calibration_min_axis_degrees, FloatEq(4.0F));
+  EXPECT_THAT(config.calibration_min_spread_degrees, FloatEq(3.0F));
 }
 
 TEST(ParseConfigTest, ReadsEverySetting) {
@@ -62,7 +72,17 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "looking_away.hold_ms = 1500\n"
       "screen_context.enabled = false\n"
       "screen_context.window_titles_enabled = true\n"
-      "screen_context.other_screen_degrees = 5\n",
+      "screen_context.other_screen_degrees = 5\n"
+      "eye_gaze.horizontal_gain = 25\n"
+      "eye_gaze.vertical_gain = 28\n"
+      "eye_gaze.blink_threshold = 0.4\n"
+      "eye_gaze.median_ms = 300\n"
+      "eye_gaze.resting_ms = 2500\n"
+      "eye_gaze.gap_ms = 1800\n"
+      "eye_gaze.head_only_yaw_degrees = 40\n"
+      "calibration.min_head_travel_degrees = 12\n"
+      "calibration.min_axis_degrees = 5\n"
+      "calibration.min_spread_degrees = 4\n",
       error);
   ASSERT_TRUE(parsed.has_value()) << error;
   const Config config = parsed.value_or(Config{});
@@ -87,6 +107,16 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_FALSE(config.screen_context_enabled);
   EXPECT_TRUE(config.screen_context_window_titles_enabled);
   EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(5.0F));
+  EXPECT_THAT(config.eye_gaze_horizontal_gain, FloatEq(25.0F));
+  EXPECT_THAT(config.eye_gaze_vertical_gain, FloatEq(28.0F));
+  EXPECT_THAT(config.eye_gaze_blink_threshold, FloatEq(0.4F));
+  EXPECT_THAT(config.eye_gaze_median_ms, Eq(300));
+  EXPECT_THAT(config.eye_gaze_resting_ms, Eq(2500));
+  EXPECT_THAT(config.eye_gaze_gap_ms, Eq(1800));
+  EXPECT_THAT(config.eye_gaze_head_only_yaw_degrees, FloatEq(40.0F));
+  EXPECT_THAT(config.calibration_min_head_travel_degrees, FloatEq(12.0F));
+  EXPECT_THAT(config.calibration_min_axis_degrees, FloatEq(5.0F));
+  EXPECT_THAT(config.calibration_min_spread_degrees, FloatEq(4.0F));
 }
 
 TEST(ParseConfigTest, SkipsCommentsAndBlankLines) {
@@ -313,6 +343,51 @@ TEST(ParseConfigTest, RefusesOtherScreenDegreesOutsideZeroToOneEighty) {
               Eq("line 1: expected a number from 0 to 180"));
   // from_chars reads "nan", and NaN passes a < 0 || > 180 check.
   EXPECT_THAT(ErrorFor("screen_context.other_screen_degrees = nan"),
+              Eq("line 1: expected a number from 0 to 180"));
+}
+
+TEST(ParseConfigTest, RefusesAnEyeGazeGainOutsideZeroTo200) {
+  EXPECT_THAT(ErrorFor("eye_gaze.horizontal_gain = -1"),
+              Eq("line 1: expected a number from 0 to 200"));
+  EXPECT_THAT(ErrorFor("eye_gaze.horizontal_gain = 200.1"),
+              Eq("line 1: expected a number from 0 to 200"));
+  EXPECT_THAT(ErrorFor("eye_gaze.vertical_gain = strong"),
+              Eq("line 1: expected a number from 0 to 200"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 200 check.
+  EXPECT_THAT(ErrorFor("eye_gaze.vertical_gain = nan"),
+              Eq("line 1: expected a number from 0 to 200"));
+}
+
+TEST(ParseConfigTest, RefusesAnEyeGazeBlinkThresholdOutsideZeroToOne) {
+  EXPECT_THAT(ErrorFor("eye_gaze.blink_threshold = -0.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("eye_gaze.blink_threshold = 1.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("eye_gaze.blink_threshold = high"),
+              Eq("line 1: expected a number from 0 to 1"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
+  EXPECT_THAT(ErrorFor("eye_gaze.blink_threshold = nan"),
+              Eq("line 1: expected a number from 0 to 1"));
+}
+
+TEST(ParseConfigTest, RefusesAnEyeGazeMillisecondsOutsideZeroTo10000) {
+  EXPECT_THAT(ErrorFor("eye_gaze.median_ms = -1"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+  EXPECT_THAT(ErrorFor("eye_gaze.resting_ms = 10001"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+  EXPECT_THAT(ErrorFor("eye_gaze.gap_ms = 1.5"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+}
+
+TEST(ParseConfigTest, RefusesADegreesSettingOutsideZeroToOneEighty) {
+  EXPECT_THAT(ErrorFor("eye_gaze.head_only_yaw_degrees = -0.1"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("calibration.min_head_travel_degrees = 180.1"),
+              Eq("line 1: expected a number from 0 to 180"));
+  EXPECT_THAT(ErrorFor("calibration.min_axis_degrees = far"),
+              Eq("line 1: expected a number from 0 to 180"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 180 check.
+  EXPECT_THAT(ErrorFor("calibration.min_spread_degrees = nan"),
               Eq("line 1: expected a number from 0 to 180"));
 }
 

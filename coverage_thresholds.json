@@ -466,6 +466,13 @@
       "functions": 100
     }
   },
+  "src/eye_gaze.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/window_activation.cc": {
     "unit": {
       "lines": 100,

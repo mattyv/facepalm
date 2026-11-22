@@ -12,6 +12,7 @@
 
 #include "src/camera_controller.h"
 #include "src/expressions.h"
+#include "src/eye_gaze.h"
 #include "src/face_model.h"
 #include "src/head_pose.h"
 
@@ -24,6 +25,7 @@ constexpr double kDegree = std::numbers::pi / 180;
 struct Pose {
   double yaw = 0;
   double pitch = 0;
+  float eye_look_out_left = 0;  // Blendshape 15, for Eye signal tests.
 };
 
 // As test/look_away_reader_test.cc's FaceAt: a face whose transformation
@@ -46,6 +48,7 @@ Face FaceAt(Pose pose) {
     }
   }
   face.pose_column_major[15] = 1;
+  face.blendshapes[15] = pose.eye_look_out_left;
   return face;
 }
 
@@ -69,7 +72,11 @@ class ScreenContextReaderTest : public ::testing::Test {
                                   .spreads = 3,
                                   .hold_ms = 200,
                                   .eye_look_down_threshold = 0.3,
-                                  .eye_blink_threshold = 0.5}};
+                                  .eye_blink_threshold = 0.5},
+      EyeGazeTracker::Settings{.blink_threshold = 0.5,
+                               .median_ms = 250,
+                               .resting_ms = 3000,
+                               .gap_ms = 2000}};
   std::vector<Reaction> reactions_;
 };
 
@@ -81,6 +88,27 @@ TEST_F(ScreenContextReaderTest, ReportsNoReactionOfItsOwn) {
 TEST_F(ScreenContextReaderTest, NothingBeforeTheFirstFace) {
   EXPECT_EQ(reader_.Pose(), std::nullopt);
   EXPECT_EQ(reader_.RestingPose(), std::nullopt);
+  EXPECT_EQ(reader_.EyeReading(), std::nullopt);
+  EXPECT_EQ(reader_.EyeResting(), std::nullopt);
+}
+
+TEST_F(ScreenContextReaderTest, EyeReadingFollowsTheLatestFace) {
+  Hold(1, {.eye_look_out_left = 0.3F});
+  const EyeSignal eye = reader_.EyeReading().value_or(EyeSignal{});
+  EXPECT_NEAR(eye.horizontal, 0.15, 0.01);
+}
+
+TEST_F(ScreenContextReaderTest, EyeRestingIsLearnedAfterThreeSeconds) {
+  Hold(4, {.eye_look_out_left = 0.2F});
+  const EyeSignal resting = reader_.EyeResting().value_or(EyeSignal{});
+  EXPECT_NEAR(resting.horizontal, 0.1, 0.01);
+}
+
+TEST_F(ScreenContextReaderTest, OnNoFaceClearsTheEyeReadingToo) {
+  Hold(1, {.eye_look_out_left = 0.3F});
+  ASSERT_TRUE(reader_.EyeReading().has_value());
+  reader_.OnNoFace();
+  EXPECT_EQ(reader_.EyeReading(), std::nullopt);
 }
 
 TEST_F(ScreenContextReaderTest, PoseFollowsTheLatestFace) {

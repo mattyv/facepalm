@@ -187,16 +187,22 @@ facepalm_unit(screen_context)
 # the rotation type and ReactionFrom's sign convention (#61 item 11).
 target_link_libraries(screen_context PUBLIC head_pose)
 facepalm_unit(screen_context_reporter)
-# The gaze rule and protocol::Quoted are pure computation, so the
-# reporter's tests run them for real; only ScreenSource, the OS seam, is
-# mocked.
-target_link_libraries(screen_context_reporter PUBLIC screen_context protocol calibration)
+# The gaze rule, ComposeGaze and protocol::Quoted are pure computation, so
+# the reporter's tests run them for real; only ScreenSource, the OS seam,
+# is mocked.
+target_link_libraries(screen_context_reporter PUBLIC screen_context protocol calibration eye_gaze)
 facepalm_unit(screen_context_reader)
-# ScreenContextReader's tests run the real ExpressionTracker and head_pose
-# (also pure computation), as expression_reader's and look_away_reader's
-# do, for the same reason.
-target_link_libraries(screen_context_reader PUBLIC expressions head_pose)
+# ScreenContextReader's tests run the real ExpressionTracker, EyeGazeTracker
+# and head_pose (also pure computation), as expression_reader's and
+# look_away_reader's do, for the same reason.
+target_link_libraries(screen_context_reader PUBLIC expressions head_pose eye_gaze)
 facepalm_unit(head_pose)
+# The eye-in-head signal, its composition with head pose into a coarse
+# gaze angle, and the gains step's own estimate (#137): pure computation,
+# like head_pose and screen_context, over FpFace's blendshapes and
+# head_pose's own HeadRotation.
+facepalm_unit(eye_gaze)
+target_link_libraries(eye_gaze PUBLIC head_pose face_model)
 facepalm_unit(head_pose_reader)
 facepalm_unit(head_gesture_model)
 # Formats camera_probe's `eyes` line (#139): pure computation over FpFace's
@@ -237,11 +243,11 @@ target_link_libraries(expression_reader PUBLIC expressions head_pose)
 target_link_libraries(look_away PUBLIC head_pose)
 target_link_libraries(look_away_reader PUBLIC look_away expressions head_pose)
 facepalm_unit(calibration)
-target_link_libraries(calibration PUBLIC head_pose)
+target_link_libraries(calibration PUBLIC head_pose eye_gaze)
 facepalm_unit(calibration_store)
 target_link_libraries(calibration_store PUBLIC calibration)
 facepalm_unit(calibration_reader)
-target_link_libraries(calibration_reader PUBLIC calibration head_pose)
+target_link_libraries(calibration_reader PUBLIC calibration head_pose eye_gaze)
 # The one place that decides calibration is unavailable, rather than a
 # nullptr check repeated in tools/daemon/main.cc (#116, #64).
 facepalm_unit(daemon_calibration)
