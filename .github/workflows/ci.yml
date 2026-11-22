@@ -46,6 +46,15 @@ jobs:
             integrations/claude-code/test
       - name: Markdown
         run: npx --yes markdownlint-cli2@0.23.3 "**/*.md"
+      # FuzzTest and its own dependencies (Abseil, RE2, ANTLR) add a few
+      # minutes to a cold build; cached the way scripts/mediapipe_c.sh's
+      # fetch already is, keyed on CMakeLists.txt, which holds the pin, so
+      # a warm run only compiles facepalm's own sources and the fuzz
+      # targets themselves.
+      - uses: actions/cache@v6
+        with:
+          path: build-coverage/_deps
+          key: fuzztest-deps-macos-${{ hashFiles('CMakeLists.txt') }}
       - name: Tests and coverage
         # FACEPALM_FUZZTEST here builds and runs #120's fuzz and property
         # tests too, in GoogleTest's own brief replay mode (fuzzing mode
@@ -298,6 +307,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang libclang-rt-dev libgmock-dev libgtest-dev llvm ninja-build
+      # Keyed apart from the macos job's own cache of the same dependencies
+      # (different OS, compiler and sanitizer flags, so a different build).
+      - uses: actions/cache@v6
+        with:
+          path: build-fuzzing/_deps
+          key: fuzztest-deps-fuzzing-${{ hashFiles('CMakeLists.txt') }}
       - name: Build in fuzzing mode, with AddressSanitizer and UndefinedBehaviorSanitizer
         run: |
           cmake -S . -B build-fuzzing -G Ninja -DCMAKE_BUILD_TYPE=Debug \

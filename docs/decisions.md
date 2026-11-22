@@ -67,6 +67,16 @@ a line saying which entry replaced it.
     (macOS, AppleClang): the task notes FuzzTest's fuzzing mode may not
     work on macOS, so the continuous mode is verified by the Linux job
     alone.
+-   **Cost on the `macos` job:** measured locally (macOS, AppleClang,
+    `-j4`): a cold `bash scripts/coverage.sh` is about 59 seconds; with
+    `-DFACEPALM_FUZZTEST=ON` added, about 3 minutes 4 seconds, a FuzzTest,
+    Abseil, RE2 and ANTLR build away from the floor. That crossed the "a
+    few minutes" line, so both this job and the new `fuzzing` job cache
+    `build-coverage/_deps` and `build-fuzzing/_deps`, keyed on
+    `CMakeLists.txt` (which holds the pin), the way
+    `scripts/fetch_mediapipe_c.sh`'s own fetch already is: a warm run only
+    compiles facepalm's own sources and the fuzz targets, not FuzzTest's
+    dependency tree over again.
 -   **Two build-integration problems found and fixed, not FuzzTest's own
     bugs:** Abseil, FuzzTest's own dependency, defines a raw CMake target
     literally named `config`, colliding with facepalm's own `config` unit;
