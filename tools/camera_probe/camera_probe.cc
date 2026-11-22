@@ -511,7 +511,10 @@ class Probe : public CameraReports {
               .pose_range = config_.expressions_pose_range,
               .settle_ms = config_.expressions_settle_ms,
               .spreads = config_.expressions_spreads,
-              .hold_ms = config_.expressions_hold_ms}));
+              .hold_ms = config_.expressions_hold_ms,
+              .eye_look_down_threshold =
+                  config_.expressions_eye_look_down_threshold,
+              .eye_blink_threshold = config_.expressions_eye_blink_threshold}));
     }
     if (config_.looking_away_enabled) {
       readers.push_back(std::make_unique<LookAwayReader>(
@@ -521,7 +524,10 @@ class Probe : public CameraReports {
               .pose_range = config_.expressions_pose_range,
               .settle_ms = config_.expressions_settle_ms,
               .spreads = config_.expressions_spreads,
-              .hold_ms = config_.expressions_hold_ms},
+              .hold_ms = config_.expressions_hold_ms,
+              .eye_look_down_threshold =
+                  config_.expressions_eye_look_down_threshold,
+              .eye_blink_threshold = config_.expressions_eye_blink_threshold},
           LookAwayDetector::Settings{.degrees = config_.looking_away_degrees,
                                      .hold_ms = config_.looking_away_hold_ms}));
     }

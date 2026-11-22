@@ -5,6 +5,39 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: eyes_narrowed is gated on the raw eyeLookDown and eyeBlink scores, not #137's composed gaze
+
+-   **Decision (what gates it):** `ExpressionTracker`'s `eyes_narrowed`
+    (`src/expressions.cc`, #140) is also gated on MediaPipe's own
+    `eyeLookDown` (indices 11, 12) and `eyeBlink` (9, 10) blendshapes,
+    straight from the `Scores` `Update` already receives: the higher of
+    each pair, each against its own threshold. A downward glance, as at a
+    keyboard, or a blink lifts `eyeSquint` the same way a real squint
+    does, so without this gate a glance at the keyboard reads as
+    confused. Scoped to `eyes_narrowed` alone: the other four expressions
+    are read as usual while it is gated.
+-   **Decision (read from the raw scores, not #137's gaze):** #137 is
+    building a composed gaze reading in parallel on its own branch; this
+    gate does not depend on it, reads the two blendshapes directly, and
+    holds whether or not that composed reading ever lands.
+-   **Decision (skip the state entirely, like the pose gate):** a gated
+    frame skips `eyes_narrowed`'s own level, spread and hold update
+    entirely, mirroring how the existing pose gate (#46) skips every
+    state while the head is away: the glance or blink neither reports nor
+    learns into the resting squint, and a hold that straddles it restarts
+    once it ends, rather than carrying a partial hold across the gap.
+-   **Decision (provisional thresholds):** `Config::kDefaultExpressionsEyeLookDownThreshold`
+    (0.3) and `kDefaultExpressionsEyeBlinkThreshold` (0.5) are reasoned
+    from MediaPipe's 0-to-1 blendshape scale, not measured: #139's
+    fixtures (`test/fixtures/eyes/*.probe`) are not yet recorded, and no
+    camera was opened to record them for this change. They are to be
+    tuned once those fixtures exist, or, lacking those, against synthetic
+    data replayed through `src/eyes_replay.h` (#147).
+-   **Decision (no spec):** no TLA+ spec models `ExpressionTracker`; its
+    gates are simple per-frame arithmetic with no lifecycle or
+    concurrency of their own, so `CLAUDE.md`'s spec-first rule does not
+    apply here, as it did not for the pose gate (#46) either.
+
 ## 2026-11-22: camera_probe prints an eyes line, and a replay reader reads it back, for #139's fixtures
 
 -   **Decision (the eyes line's shape):** `camera_probe`'s new `eyes` line

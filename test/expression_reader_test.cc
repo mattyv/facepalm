@@ -87,12 +87,15 @@ class ExpressionReaderTest : public ::testing::Test {
   void Rest() { Hold(5); }
 
   std::int64_t now_ms_ = 1000;
-  ExpressionReader reader_{ExpressionTracker::Settings{.rise = 0.05,
-                                                       .pose_degrees = 10,
-                                                       .pose_range = 3,
-                                                       .settle_ms = 600,
-                                                       .spreads = 3,
-                                                       .hold_ms = 200}};
+  ExpressionReader reader_{
+      ExpressionTracker::Settings{.rise = 0.05,
+                                  .pose_degrees = 10,
+                                  .pose_range = 3,
+                                  .settle_ms = 600,
+                                  .spreads = 3,
+                                  .hold_ms = 200,
+                                  .eye_look_down_threshold = 0.3,
+                                  .eye_blink_threshold = 0.5}};
   std::vector<Reaction> reactions_;
 };
 

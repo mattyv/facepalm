@@ -30,6 +30,8 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_THAT(config.expressions_pose_degrees, FloatEq(10.0F));
   EXPECT_THAT(config.expressions_pose_range, FloatEq(3.0F));
   EXPECT_THAT(config.expressions_settle_ms, Eq(600));
+  EXPECT_THAT(config.expressions_eye_look_down_threshold, FloatEq(0.3F));
+  EXPECT_THAT(config.expressions_eye_blink_threshold, FloatEq(0.5F));
   EXPECT_TRUE(config.looking_away_enabled);
   EXPECT_THAT(config.looking_away_degrees, FloatEq(15.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1000));
@@ -53,6 +55,8 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "expressions.pose_degrees = 12\n"
       "expressions.pose_range = 5\n"
       "expressions.settle_ms = 500\n"
+      "expressions.eye_look_down_threshold = 0.35\n"
+      "expressions.eye_blink_threshold = 0.55\n"
       "looking_away.enabled = false\n"
       "looking_away.degrees = 20\n"
       "looking_away.hold_ms = 1500\n"
@@ -75,6 +79,8 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_THAT(config.expressions_pose_degrees, FloatEq(12.0F));
   EXPECT_THAT(config.expressions_pose_range, FloatEq(5.0F));
   EXPECT_THAT(config.expressions_settle_ms, Eq(500));
+  EXPECT_THAT(config.expressions_eye_look_down_threshold, FloatEq(0.35F));
+  EXPECT_THAT(config.expressions_eye_blink_threshold, FloatEq(0.55F));
   EXPECT_FALSE(config.looking_away_enabled);
   EXPECT_THAT(config.looking_away_degrees, FloatEq(20.0F));
   EXPECT_THAT(config.looking_away_hold_ms, Eq(1500));
@@ -235,6 +241,34 @@ TEST(ParseConfigTest, RefusesASettleTimeOutsideZeroTo5000Ms) {
               Eq("line 1: expected a whole number from 0 to 5000"));
   EXPECT_THAT(ErrorFor("expressions.settle_ms = slow"),
               Eq("line 1: expected a whole number from 0 to 5000"));
+}
+
+TEST(ParseConfigTest, RefusesAnEyeLookDownThresholdOutsideZeroToOne) {
+  EXPECT_THAT(ErrorFor("expressions.eye_look_down_threshold = -0.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("expressions.eye_look_down_threshold = 1.5"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("expressions.eye_look_down_threshold = low"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("expressions.eye_look_down_threshold = 0.3x"),
+              Eq("line 1: expected a number from 0 to 1"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
+  EXPECT_THAT(ErrorFor("expressions.eye_look_down_threshold = nan"),
+              Eq("line 1: expected a number from 0 to 1"));
+}
+
+TEST(ParseConfigTest, RefusesAnEyeBlinkThresholdOutsideZeroToOne) {
+  EXPECT_THAT(ErrorFor("expressions.eye_blink_threshold = -0.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("expressions.eye_blink_threshold = 1.5"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("expressions.eye_blink_threshold = low"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("expressions.eye_blink_threshold = 0.5x"),
+              Eq("line 1: expected a number from 0 to 1"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
+  EXPECT_THAT(ErrorFor("expressions.eye_blink_threshold = nan"),
+              Eq("line 1: expected a number from 0 to 1"));
 }
 
 TEST(ParseConfigTest, RefusesALookAwaySwitchThatIsNotTrueOrFalse) {
