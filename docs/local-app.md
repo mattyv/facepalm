@@ -135,6 +135,12 @@ menu opens a window of the camera while it is on, started only by hand
 window's own close button, or the camera going off, and no frame reaches
 anything but that window.
 
+Command-Tab, the Dock and the app switcher reach Settings, the preview and
+the calibration wizard while any one of them is open (#146): the 🤦 menu is
+otherwise a menu-bar-only accessory app, invisible to all three, but switches
+to a regular app the moment the first of these windows opens and back the
+moment the last one closes.
+
 ## Calibration (optional)
 
 A short guided session improves on the coarse, uncalibrated gaze of item 11
