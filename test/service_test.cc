@@ -845,7 +845,7 @@ TEST_F(ServiceWithCalibrationTest, StepsAndFinishesWithNext) {
   peer->Send("calibrate next");
 
   EXPECT_THAT(peer->Reply(2),
-              Eq(R"({"ok":true,"calibration":{"state":"done"}})"));
+              Eq(R"({"ok":true,"calibration":{"state":"done","screens":0}})"));
   service_.Stop();
 }
 
