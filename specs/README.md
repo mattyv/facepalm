@@ -39,7 +39,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 134 |
 | `McpSocket.cfg` | one session, up to two requests, backoff bounded to two ticks | holds, with `LinkRecovers` | 65 |
-| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 37 |
+| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 48 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 9,776 |
@@ -407,6 +407,7 @@ table, is gone: its concern is now `NeverStreamsOnAStaleRequest`'s alone.
 | `MenuDeathEndsStreaming` (#114) | Liveness: once the menu that made a request is gone, streaming always eventually stops, and -- since only a live menu's own `StartPreview` can turn it back on -- stops for good. This is the acceptance bar's "nothing streams without a live menu window", phrased as a leads-to rather than an instant cutoff: the daemon can only learn of the menu's death indirectly, on its own per-frame check, within the couple of seconds `GuardRequestFresh`'s own grace period already allows for. | `IsFreshPreviewRequestTest.AbandonedLongAgoIsStale` in `test/preview_request_test.cc`; hand-checked against `tools/menu/main.mm`'s `applicationWillTerminate:` and `tools/menu/main_linux.cc`'s `QCoreApplication::aboutToQuit`, which remove a clean quit's own request outright rather than waiting on this grace period at all |
 | `PreviewStreamsWhenWanted` (#114) | Liveness, and something must happen: the camera, the request and the menu behind it, all held from some point on, lead to the preview actually streaming. `[](<>[]Wanted => <>streaming)`, as `specs/DaemonAdmission.tla`'s own `JoinOpens` uses the shape, rather than a plain `~>` a momentary ask could satisfy only by chance. | `OnFrameTest.GrantsAndPublishesOnceTheCameraIsOpenAndItIsRequested` in `test/preview_publisher_test.cc` |
 | `NeverFrameWithoutStreaming` (#129) | The frame file on disk never outlives the preview: not a crash's leftover at startup, and not a publish still in flight once something else has already stopped streaming. | `OnFrameTest.SkipsPublishingAFrameEncodedBeforeTheCameraClosedMidEncode` in `test/preview_publisher_test.cc`, `PublishTest.SkipsTheWriteOnceStreamingHasStopped` in `test/preview_lease_test.cc` |
+| `NeverReadingsWithoutStreaming` (#134) | The readings text beside the frame never outlives the preview either, for the same two reasons as the frame -- a crash's leftover, or a write landing after a transition already cleared it -- since both go through the one `PreviewLease::Publish`. | `PublishTest.SkipsTheWriteOnceStreamingHasStopped` in `test/preview_lease_test.cc`, which already proves the shared gate regardless of what it writes; `tools/daemon/main.cc`'s `Engine::PublishPreviewReadings` calls that same `Publish`, the way `PreviewPublisher::OnFrame` does for the frame, and is otherwise composition, tested the way `clients_`'s and `approved_`'s own forwarding is -- by reading it, not a unit of its own |
 
 Each mutation, and what TLC found:
 
@@ -417,8 +418,8 @@ Each mutation, and what TLC found:
 | `CameraOpens` never enabled (its guard replaced by `FALSE`) | `EventuallyOpens`, 4 states |
 | `GuardRequestFresh = FALSE` (#114): streaming never checks the request's age | `MenuDeathEndsStreaming`: a request a dead menu left behind streams forever once granted |
 | No fairness on `Frame` (#114): the daemon's own per-frame check is never required to run | `PreviewStreamsWhenWanted` (nothing is ever forced to grant) and `MenuDeathEndsStreaming` (nothing is ever forced to age a stale one away) |
-| `GuardPublishChecksStreaming = FALSE` (#129): `Publish` writes the frame unconditionally | `NeverFrameWithoutStreaming`, 6 states |
-| `GuardStartClearsFrame = FALSE` (#129): a crash's leftover frame is never cleared at startup | `NeverFrameWithoutStreaming`, violated by the initial state itself |
+| `GuardPublishChecksStreaming = FALSE` (#129): `Publish` writes the frame unconditionally | `NeverFrameWithoutStreaming`, 46 states; `PublishReadings` shares the same guard (#134), so `NeverReadingsWithoutStreaming` breaks too, in fewer steps (21 states), since it has no `pending_publish` of its own to wait on first |
+| `GuardStartClearsFrame = FALSE` (#129): a crash's leftover frame is never cleared at startup | `NeverFrameWithoutStreaming`, violated by the initial state itself; `readings_exists`' own `Init` shares the same guard (#134), so `NeverReadingsWithoutStreaming` is violated by the initial state too |
 | No fairness on `Publish` (#129): a frame once committed to is never required to actually publish | `PreviewStreamsWhenWanted` and `MenuDeathEndsStreaming`, the same way missing `Frame` fairness does: `Frame` cannot run again, by its own `~pending_publish` guard, while a publish stays forever outstanding |
 
 Issue #129 adds a third gate: whether the frame file itself, on disk, is
@@ -443,6 +444,22 @@ removes any frame a previous crash left behind before the daemon can
 stream again, matching `CameraStatus!Restart` already doing the same
 for the camera-in-use indicator; without it, `Init` is free to start
 with one already sitting there.
+
+Issue #134 adds a second file beside the frame: the text the preview
+shows, the readings as they happen and the latest beat's feeling.
+`readings_exists` models it, written by `src/preview_readings.h`'s own
+line-building, published through the very same `PreviewLease::Publish`
+`src/preview_publisher.cc` already calls for the frame -- one mutex, one
+method, called twice over -- which is why `readings_exists` shares
+`GuardPublishChecksStreaming` and `GuardStartClearsFrame` rather than
+needing guards of its own, and why `PublishReadings` needs no
+`pending_publish` of its own either: unlike encoding a frame, nothing in
+`src/preview_readings.h` ever releases the lock between building the
+line and writing it, so there is no gap for `CameraOpens`, `CameraCloses`
+or `StopPreview` to land inside, the way there is between `Frame`
+deciding to encode and `Publish` writing the result. `PublishReadings`
+is therefore modeled as one atomic step, the decision and the write
+together, with no counterpart to `Frame` of its own.
 
 `StreamingMatchesFormula`, an earlier draft's exact `streaming = ...`
 state invariant checked at every step rather than only eventually, is

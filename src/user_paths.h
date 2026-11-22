@@ -36,6 +36,11 @@ struct UserPaths {
   // from the approved-token service every other client uses.
   std::string preview_request;
   std::string preview_frame;
+  // The preview's own text (#134): the readings as they happen, each
+  // held briefly, and the latest beat's feeling, beside `preview_frame`
+  // in `directory`, under the same rules -- written only while
+  // `preview_frame` is, and cleared with it.
+  std::string preview_readings;
 };
 
 // The paths under `home`, or nullopt when `home` is not an absolute path.
