@@ -134,6 +134,10 @@ struct AvFoundationSession::Impl {
   FacepalmFrameDelegate* delegate = nil;
   AVCaptureDevice* device = nil;
   NSArray<id<NSObject>>* observers = @[];
+  // Registered only once StartWatching is called (#121), separately from
+  // `observers` above so the destructor can remove both whether or not
+  // StartWatching was ever called.
+  NSArray<id<NSObject>>* device_observers = @[];
 };
 
 AvFoundationSession::AvFoundationSession(std::string device_id,
@@ -141,7 +145,10 @@ AvFoundationSession::AvFoundationSession(std::string device_id,
                                          std::function<void()> on_session_failed,
                                          std::function<void(const std::string&)> on_disconnected,
                                          std::function<void(const std::string&)> on_connected)
-    : device_id_(std::move(device_id)), impl_(std::make_unique<Impl>()) {
+    : device_id_(std::move(device_id)),
+      on_disconnected_(std::move(on_disconnected)),
+      on_connected_(std::move(on_connected)),
+      impl_(std::make_unique<Impl>()) {
   impl_->delegate = [[FacepalmFrameDelegate alloc] initWithHandler:std::move(on_frame)];
   NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
   impl_->observers = @[
@@ -151,23 +158,35 @@ AvFoundationSession::AvFoundationSession(std::string device_id,
                     usingBlock:^(NSNotification*) {
                       on_session_failed();
                     }],
+  ];
+}
+
+// #121: deferred from the constructor, so a device connecting or
+// disconnecting cannot call back into a sibling the constructor's own
+// caller had not yet constructed.
+void AvFoundationSession::StartWatching() {
+  NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+  impl_->device_observers = @[
     [center addObserverForName:AVCaptureDeviceWasDisconnectedNotification
                         object:nil
                          queue:nil
                     usingBlock:^(NSNotification* note) {
-                      on_disconnected(UniqueId(note));
+                      on_disconnected_(UniqueId(note));
                     }],
     [center addObserverForName:AVCaptureDeviceWasConnectedNotification
                         object:nil
                          queue:nil
                     usingBlock:^(NSNotification* note) {
-                      on_connected(UniqueId(note));
+                      on_connected_(UniqueId(note));
                     }],
   ];
 }
 
 AvFoundationSession::~AvFoundationSession() {
   for (id<NSObject> observer in impl_->observers) {
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+  }
+  for (id<NSObject> observer in impl_->device_observers) {
     [NSNotificationCenter.defaultCenter removeObserver:observer];
   }
   [impl_->session stopRunning];

@@ -579,7 +579,7 @@ clears it. `CameraLifecycle.cfg` chooses the default device; the symmetric
 | `NoEventToStranger` | A reaction reaches only a subscribed client. | `NoEventToStrangerTest` |
 | `DeadHelperHoldsNoCamera` | A dead helper holds no camera. | `DeadHelperHoldsNoCameraTest`: a restarted helper is a new controller, which starts closed |
 | `CapturesOnlyChosenDevice` | The device captures only while the device the person chose is attached (#13). | `SessionCameraTest.IgnoresAnotherCameraDisconnecting`, `IgnoresAnotherCameraConnecting`; held to the spec by reading for `AvFoundationSession::Configure` and `V4l2Session::Configure`'s own identity match, which `V4l2SessionTest.ConfigureMatchesTheChosenDeviceAmongSeveral` and `ConfigureGivesNothingWhenNoNodeMatchesTheChoice` exercise directly |
-| `DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack` on Linux | A camera connecting or disconnecting while the daemon runs reaches `SessionCamera` on Linux too, the way AVFoundation's own notifications already do on macOS (#111). | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` holds `V4l2Session` to asking the given `HotplugMonitor` to watch with exactly the callbacks it was given, once asked to (`ConstructingDoesNotStartWatchingUntilToldTo`, #115); `V4l2HotplugTest`'s `ANewCameraFiresOnConnected`, `AKnownCameraDisconnects` and the rest hold `V4l2InotifyMonitor`, the real watch over inotify, to finding and reporting a node's id the same way `Configure`/`List` do, with a node `IN_CREATE` could not yet open retried on `IN_ATTRIB` (`AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects`, #115) |
+| `DeviceLost`/`DeviceBack`/`OtherDeviceLost`/`OtherDeviceBack` on Linux | A camera connecting or disconnecting while the daemon runs reaches `SessionCamera` on Linux too, the way AVFoundation's own notifications already do on macOS (#111), both only once `StartWatching` is called (#115, #121). | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` holds `V4l2Session` to asking the given `HotplugMonitor` to watch with exactly the callbacks it was given, once asked to (`ConstructingDoesNotStartWatchingUntilToldTo`, #115); `V4l2HotplugTest`'s `ANewCameraFiresOnConnected`, `AKnownCameraDisconnects` and the rest hold `V4l2InotifyMonitor`, the real watch over inotify, to finding and reporting a node's id the same way `Configure`/`List` do, with a node `IN_CREATE` could not yet open retried on `IN_ATTRIB` (`AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects`, #115); `AvFoundationSessionTest.StartWatchingWiresDeviceChangeCallbacksToTheGivenOnes` (`test/avfoundation_session_check.mm`) holds `AvFoundationSession` to the macOS analog, with `ConstructingDoesNotWatchDevicesUntilStartWatchingIsCalled` the regression test for its own constructor (#121) |
 | `CanOpen` | Something must happen: a wanted, closed camera can start opening, once neither the device nor a denied permission or failed start (#52) stands in the way. | `WantedOpensTest`, `RetriesTest` |
 | `RevokingCloses` | Revoking consent leads to the camera being closed. | `RevokingClosesTest` |
 | `LastLeaveCloses` | No subscribers leads to the camera being closed. | `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` |
@@ -681,7 +681,23 @@ now watches `IN_ATTRIB`, retrying a probed node `IN_CREATE` found it could
 not open: udev applies a node's permissions some moments after creating
 it, so the node may not have been readable yet (#115).
 
-| Mutation to `SessionCamera`, `FramePipeline` or `V4l2Session` | Fails |
+`AvFoundationSession`'s own device-change observers had the identical
+hazard on macOS (#121), found reading #122's Linux fix for #115:
+`AVCaptureDeviceWasConnectedNotification`/`WasDisconnectedNotification`
+are posted with `object:nil`, so, registered in the constructor, either
+could fire for any device as soon as it ran, calling back into `camera_`
+in `tools/daemon/main.cc` before `Engine`'s own constructor had built it.
+A new `StartWatching` registers them instead, called from
+`Engine::Start()` alongside `V4l2Session::StartWatching`, once every
+member is built; the runtime-error observer stays in the constructor,
+since it is scoped to this session's own `AVCaptureSession` (`object:`)
+and so cannot fire before `Start` makes that session run. The model does
+not cover this ordering either, only the device states themselves;
+`ConstructingDoesNotWatchDevicesUntilStartWatchingIsCalled` in
+`test/avfoundation_session_check.mm` is the regression test, read for by
+this table's own `AvFoundationSession` constructor row below.
+
+| Mutation to `SessionCamera`, `FramePipeline`, `V4l2Session` or `AvFoundationSession` | Fails |
 |---|---|
 | A start for a closed attempt runs | `SessionCameraTest.StartsNothingWhenPermissionIsGrantedAfterClose`, `StartsOnlyForTheCurrentAttempt`, `ARefusalAfterCloseReportsNothing` |
 | Only the camera in use counts coming back | `SessionCameraTest.ReportsAnyCameraConnectingBeforeOneIsPicked` |
@@ -691,6 +707,8 @@ it, so the node may not have been readable yet (#115).
 | `V4l2Session::Configure`/`List` do not skip a node that does not query | `V4l2SessionTest.ConfigureSkipsANodeThatDoesNotQuery`, `ListSkipsANodeThatDoesNotQuery` |
 | `V4l2Session` does not ask the given `HotplugMonitor` to watch, or not with the callbacks it was given | `V4l2SessionTest.StartWatchingWiresHotplugCallbacksToTheGivenOnes` (#111) |
 | `V4l2Session`'s constructor starts the watch itself | `V4l2SessionTest.ConstructingDoesNotStartWatchingUntilToldTo` (#115) |
+| `AvFoundationSession`'s constructor registers the device-change observers itself | `AvFoundationSessionTest.ConstructingDoesNotWatchDevicesUntilStartWatchingIsCalled` (#121) |
+| `AvFoundationSession::StartWatching` does not register the observers, or not with the callbacks the constructor was given | `AvFoundationSessionTest.StartWatchingWiresDeviceChangeCallbacksToTheGivenOnes` (#121) |
 | `V4l2InotifyMonitor` fires `on_connected` for a node already attached when the watch starts | `V4l2HotplugTest.InitialScanProbesAllFourNodesWithoutFiringAnyCallback` (#111) |
 | `V4l2InotifyMonitor` does not filter by the four probed node names, firing for an unrelated entry under /dev | `V4l2HotplugTest.AnUnrelatedNameIsIgnored` (#111) |
 | `V4l2InotifyMonitor` does not retry a node `IN_CREATE` could not open, on `IN_ATTRIB` | `V4l2HotplugTest.AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects` (#115) |
