@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OfflineError } from './session.js';
 
 // A feeling's name, as server.js checks it: the names come from the
 // service's one list (src/feelings.h), sent with each interpretation.
@@ -66,8 +67,13 @@ export function registerFeelingElicitation(server, session, options = {}) {
       const reply = await session.request(`feel ${id} ${picked}`, signal, 5000);
       if (reply?.ok !== true) throw new Error('feeling refused');
       return { content: [{ type: 'text', text: 'Feeling taken.' }] };
-    } catch {
-      return { isError: true, content: [{ type: 'text', text: 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes; restart the MCP server if the session was interrupted.' }] };
+    } catch (error) {
+      // #117: the session itself keeps retrying with a bounded backoff,
+      // so this no longer tells anyone to restart the MCP server.
+      const text = error instanceof OfflineError
+        ? 'Facepalm is off; turn it on from its menu.'
+        : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
+      return { isError: true, content: [{ type: 'text', text }] };
     }
   });
 }
