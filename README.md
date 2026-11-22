@@ -765,8 +765,8 @@ The class and report numbers are 0 none, 1 nod, 2 shake, 3 tilt, 4 turn and
 
 Run `build/gesture_replay --looking-away < camera-probe.log` to replay a
 recording's looks away instead: it reads the probe's `head_pose <timestamp>
-<yaw> <pitch> <roll>` lines (no eyes line, so gaze is head pose alone,
-#137's own fallback with no eye signal) and its `gesture_no_face` lines
+<yaw> <pitch> <roll>` lines (no eyes line, so gaze is head pose alone, the
+fallback #137 uses with no eye signal) and its `gesture_no_face` lines
 (#141's own `gone` kind), and prints
 `looked_away <timestamp> <kind> <duration_ms>` for each look away reported
 with the default settings, once it returns. Probe logs from before #35
