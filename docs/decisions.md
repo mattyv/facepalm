@@ -97,6 +97,76 @@ a line saying which entry replaced it.
     [#61](https://github.com/mattyv/facepalm/issues/61),
     [#43](https://github.com/mattyv/facepalm/issues/43).
 
+## 2026-11-22: Calibration is wired to the daemon; the menu entry is its own issue
+
+-   **Decision:** `tools/daemon/main.cc`'s `Engine` now gives `Service` a
+    real `CalibrationController`, adds a `CalibrationReader` to every
+    camera session's readers, and forwards the camera's own lifecycle to
+    it, through a new tested class, `src/daemon_calibration.h`'s
+    `DaemonCalibration` (#116, #64: the nullptr-check kind of decision
+    stays out of `main.cc`, in a source with its own test file).
+    `Engine::Open` calls `OnCameraUp` exactly when the frame pipeline's
+    model is created (the camera is really open by then), `Engine::Close`
+    calls `OnCameraLost` before it is destroyed, and `Engine::Start` calls
+    `OnCameraLost` once more at startup, before either has run: without
+    it, `CalibrationSession`'s own default of an up camera (right for
+    #96's tests, which gave it no camera signal at all) would let a
+    `calibrate start` through before any client has ever subscribed.
+-   **Also decided:** the menu gets no calibration entry in this fix. The
+    daemon side (`Service`, `MakeFaceReaders`, the camera's lifecycle) is
+    what #116 names; a stepped wizard in both platforms' Settings windows,
+    with a socket client the menu does not have today, is real UI work
+    with a lifecycle of its own to track, not a composition-root wiring
+    bug. Filed as [#118](https://github.com/mattyv/facepalm/issues/118).
+-   **No new spec:** `specs/Calibration.tla` already models `CameraLost`
+    and `CameraBack`; this change implements the actions it already
+    specifies, in the composition root that was the one piece missing, not
+    a new piece of lifecycle.
+-   **Evidence:** [#116](https://github.com/mattyv/facepalm/issues/116),
+    [#64](https://github.com/mattyv/facepalm/issues/64),
+    [#96](https://github.com/mattyv/facepalm/issues/96),
+    [#92](https://github.com/mattyv/facepalm/issues/92).
+
+## 2026-11-22: A service hang-up leaves the feed once, from whoever gets there first (#115)
+
+-   **Decision:** `Service::Serve`'s own end-of-connection cleanup, the
+    watcher's `Service!Noticed` on a hang-up mid-wait, and `Stop`'s
+    `BeginStop` can each reach the point of disconnecting a connection's
+    name from the feed; only the first of them now does, through a new
+    `Service::Leave(Connection&, name)` guarded by a `Connection::left`
+    flag under `mutex_`. Before, `Watched`'s watcher called
+    `feed_.Disconnect(name)` itself on a hang-up, and `Serve`'s own
+    cleanup called it again unconditionally afterward; a new connection
+    that took the freed name in the gap between those two calls was then
+    disconnected by the second, stale one. `specs/Service.tla` was not
+    wrong (`Noticed` already left `feed` unchanged, only `Closed` removes
+    the name); the code did not match it.
+-   **Also decided:** a Linux hotplug node `IN_CREATE` could not yet open,
+    because udev had not yet applied its permissions, gets one retry: the
+    watch on `/dev` now also takes `IN_ATTRIB`, and a probed node's
+    `IN_ATTRIB` is retried through the same `IdOf` probe when the node is
+    not already known, so the permissions change udev makes a moment
+    after creating the node is itself the retry trigger, not a timer.
+-   **Also decided:** `V4l2Session`'s constructor no longer starts its
+    `HotplugMonitor`'s watch itself; a new `StartWatching()` does, called
+    from `Engine::Start()` in `tools/daemon/main.cc`, once every member
+    its callbacks reach, `camera_` among them, is constructed. Before,
+    the watcher thread `hotplug.Start()` creates in the constructor could
+    call back into `camera_` before `Engine`'s own constructor had built
+    it, since a `std::jthread` begins running concurrently with whatever
+    the constructor does next, unlike `AvFoundationSession`'s own
+    notification observers.
+-   **Spec:** no change to `specs/Service.tla` (the code was wrong, not
+    the spec) or to `specs/CameraLifecycle.tla` (neither the retry nor
+    the construction order is part of the device lifecycle it models).
+    A mutated copy of `Service.tla`, with `Noticed` also removing the
+    name from `feed`, violates `FeedMatchesConns` (6 states) and
+    `UniqueNames` (8 states) under `Service.cfg`'s own bounds; the
+    mutation was discarded once both counterexamples were seen.
+-   **Evidence:** [#115](https://github.com/mattyv/facepalm/issues/115),
+    found in the Fable review of #86-#113 named on
+    [#61](https://github.com/mattyv/facepalm/issues/61).
+
 ## 2026-11-22: The preview window and the Linux encoder close #108, no new spec
 
 -   **Decision:** the menu's own window for the camera preview (#108, the

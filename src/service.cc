@@ -69,18 +69,20 @@ void Service::Serve(Connection& connection) {
   if (name) {
     while (const std::optional<std::string> line =
                connection.stream->ReadLine()) {
-      if (!Answer(*name, *line, *connection.stream)) {
+      if (!Answer(connection, *name, *line)) {
         break;
       }
     }
-    // Service!Closed: the client leaves the feed (GuardLeaveOnClose). Its
-    // name is cleared first, so Stop does not disconnect it again; if Stop
-    // got there first, the second Disconnect changes nothing.
+    // Service!Closed: the client leaves the feed (GuardLeaveOnClose),
+    // through Leave, which changes nothing if the watcher's
+    // Service!Noticed or Stop's BeginStop already did (#115). Its name is
+    // cleared first, so a fresh BeginStop never finds it to disconnect
+    // again either.
     {
       const std::scoped_lock lock(mutex_);
       connection.name.reset();
     }
-    feed_.Disconnect(*name);
+    Leave(connection, *name);
   }
   const std::scoped_lock lock(mutex_);
   connection.done = true;
@@ -140,15 +142,18 @@ bool Service::BeginStop() {
   stopping_ = true;
   for (Connection& connection : connections_) {
     connection.stream->Shutdown();
-    if (connection.name) {
+    // Inlined, not Leave: this already holds mutex_.
+    if (connection.name && !connection.left) {
+      connection.left = true;
       feed_.Disconnect(*connection.name);
     }
   }
   return true;
 }
 
-bool Service::Answer(const std::string& name, std::string_view line,
-                     Stream& stream) {
+bool Service::Answer(Connection& connection, const std::string& name,
+                     std::string_view line) {
+  Stream& stream = *connection.stream;
   std::string error;
   const std::optional<protocol::Request> request = protocol::Parse(line, error);
   if (!request) {
@@ -189,12 +194,12 @@ bool Service::Answer(const std::string& name, std::string_view line,
   // (specs/FeelingBeat.tla), or a read.
   std::optional<Feed::Delivery> delivery;
   if (const auto* beat = std::get_if<protocol::BeatRequest>(&*request)) {
-    delivery = Watched(name, stream, [&] {
+    delivery = Watched(connection, name, [&] {
       return feed_.Beat(name, beat->kind, beat->window);
     });
   } else if (const auto* wait = std::get_if<protocol::WaitRequest>(&*request)) {
-    delivery =
-        Watched(name, stream, [&] { return feed_.Wait(name, wait->timeout); });
+    delivery = Watched(connection, name,
+                       [&] { return feed_.Wait(name, wait->timeout); });
   } else {
     delivery = feed_.Read(name);
   }
@@ -208,20 +213,38 @@ bool Service::Answer(const std::string& name, std::string_view line,
 }
 
 // Service!Noticed: while the connection's thread waits, and so reads
-// nothing, a watcher disconnects the client when the peer hangs up, which
-// ends the wait at once (GuardHangUpWakes).
+// nothing, a watcher leaves the feed when the peer hangs up, through
+// Leave, which ends the wait at once (GuardHangUpWakes) and is the one
+// Service!Closed effect on the feed for this connection, whether the
+// watcher, Stop or Serve's own cleanup gets there first (#115).
 std::optional<Feed::Delivery> Service::Watched(
-    const std::string& name, Stream& stream,
+    Connection& connection, const std::string& name,
     const std::function<std::optional<Feed::Delivery>()>& wait) {
+  Stream& stream = *connection.stream;
   std::thread watcher([&] {
     if (stream.AwaitHangUp()) {
-      feed_.Disconnect(name);
+      Leave(connection, name);
     }
   });
   std::optional<Feed::Delivery> delivery = wait();
   stream.EndAwaitHangUp();
   watcher.join();
   return delivery;
+}
+
+// The one Service!Closed effect on the feed for `connection`: changes
+// nothing once another caller, the watcher's Service!Noticed, Stop's
+// BeginStop or this same cleanup from somewhere else, has already left it,
+// so a name freed here and taken by a new connection is never disconnected
+// a second time (#115, GuardLeaveOnClose).
+void Service::Leave(Connection& connection, const std::string& name) {
+  std::unique_lock lock(mutex_);
+  if (connection.left) {
+    return;
+  }
+  connection.left = true;
+  lock.unlock();
+  feed_.Disconnect(name);
 }
 
 // specs/Calibration.tla's Start, Advance, Finish and Cancel, dispatched to

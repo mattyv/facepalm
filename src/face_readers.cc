@@ -4,6 +4,8 @@
 #include <memory>
 #include <vector>
 
+#include "src/calibration.h"
+#include "src/calibration_reader.h"
 #include "src/camera_controller.h"
 #include "src/config.h"
 #include "src/expression_reader.h"
@@ -39,7 +41,8 @@ class ScreenContextReaderForwarder : public FaceReader {
 }  // namespace
 
 std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
-    const Config& config, ScreenContextReader* screen_context_reader) {
+    const Config& config, ScreenContextReader* screen_context_reader,
+    CalibrationController* calibration) {
   const ExpressionTracker::Settings tracker{
       .rise = config.expressions_smallest_rise,
       .pose_degrees = config.expressions_pose_degrees,
@@ -64,6 +67,9 @@ std::vector<std::unique_ptr<FaceReader>> MakeFaceReaders(
   if (config.screen_context_enabled && screen_context_reader != nullptr) {
     readers.push_back(
         std::make_unique<ScreenContextReaderForwarder>(*screen_context_reader));
+  }
+  if (calibration != nullptr) {
+    readers.push_back(std::make_unique<CalibrationReader>(*calibration));
   }
   return readers;
 }
