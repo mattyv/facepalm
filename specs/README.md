@@ -93,6 +93,17 @@ against `mcp/session.js`'s own `disconnect()`, and adds a third, new piece:
     that holds it accountable, the same way `menu_alive` holds
     `specs/PreviewLease.tla`'s own freshness check accountable.
 
+Issue #133 asks the model the same question again: `session.js`'s
+`knownInterpretations` now stores a `{read, picked}` record for each known
+id, not just the fact of knowing it, so `tell_feeling`, `ask_feeling` and a
+new `get_feeling` can report the person's pick back to the agent alongside
+Facepalm's own read. `Learn`, `Tell` and `GuardForgetsIdsOnLinkDown` model
+only whether an id is known at all, never what is stored alongside it, and
+`disconnect()`'s own `.clear()` forgets the whole record the same way it
+already forgot the whole `Set` entry -- what changed is the payload one
+`knownId` now stands for, not when it becomes `TRUE` or `FALSE`. No action,
+guard or property needed a change, and no new mutation row applies.
+
 | Property | What it says | Test (`mcp/test/session.test.js`) |
 |---|---|---|
 | `NoSendAfterClose` | A request never reaches the wire once this session is closed, or while its link is down. | `'active cancellation is terminal and never reconnects'`, `'refused hello and pre-cancelled calls do not send requests'` |

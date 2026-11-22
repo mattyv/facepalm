@@ -78,6 +78,61 @@ test('a click sends tell_feeling for that interpretation, disables every button,
   assert.equal(status.textContent, 'Thanks — Facepalm will learn from this.');
 });
 
+test('tells the agent the pick through updateModelContext, when the host supports it (#133)', async () => {
+  const { doc, buttons, status } = card();
+  const updates = [];
+  const structuredContent = { id: 7, read: 'confused', picked: 'disagreement', feeling: 'disagreement' };
+  const app = {
+    callServerTool: async () => ({ content: [], structuredContent }),
+    getHostCapabilities: () => ({ updateModelContext: { text: {} } }),
+    updateModelContext: async (params) => { updates.push(params); },
+  };
+  mountFeelingCard(app, doc);
+  app.ontoolresult({ structuredContent: record });
+  buttons.children[1].click();
+  await Promise.resolve().then(() => {}).then(() => {}).then(() => {});
+  assert.deepEqual(updates, [{ structuredContent }]);
+  assert.equal(status.textContent, 'Thanks — Facepalm will learn from this.');
+});
+
+test('never calls updateModelContext when the host does not support it', async () => {
+  const { doc, buttons, status } = card();
+  const app = {
+    callServerTool: async () => ({ content: [], structuredContent: { id: 7, read: 'confused', picked: 'disagreement', feeling: 'disagreement' } }),
+    getHostCapabilities: () => ({}),
+    updateModelContext: async () => assert.fail('must not be called'),
+  };
+  mountFeelingCard(app, doc);
+  app.ontoolresult({ structuredContent: record });
+  buttons.children[1].click();
+  await Promise.resolve().then(() => {}).then(() => {});
+  assert.equal(status.textContent, 'Thanks — Facepalm will learn from this.');
+});
+
+test('never calls updateModelContext when the host declares no capabilities at all', async () => {
+  const { doc, buttons, status } = card();
+  const app = { callServerTool: async () => ({ content: [], structuredContent: { id: 7, read: 'confused', picked: 'disagreement', feeling: 'disagreement' } }) };
+  mountFeelingCard(app, doc);
+  app.ontoolresult({ structuredContent: record });
+  buttons.children[1].click();
+  await Promise.resolve().then(() => {}).then(() => {});
+  assert.equal(status.textContent, 'Thanks — Facepalm will learn from this.');
+});
+
+test('swallows a rejected updateModelContext, keeping the thank-you shown', async () => {
+  const { doc, buttons, status } = card();
+  const app = {
+    callServerTool: async () => ({ content: [], structuredContent: { id: 7, read: 'confused', picked: 'disagreement', feeling: 'disagreement' } }),
+    getHostCapabilities: () => ({ updateModelContext: { text: {} } }),
+    updateModelContext: async () => { throw new Error('host refused'); },
+  };
+  mountFeelingCard(app, doc);
+  app.ontoolresult({ structuredContent: record });
+  buttons.children[1].click();
+  await Promise.resolve().then(() => {}).then(() => {}).then(() => {}).then(() => {});
+  assert.equal(status.textContent, 'Thanks — Facepalm will learn from this.');
+});
+
 test('a second click is refused: no second call, no change once sent', async () => {
   const { doc, buttons } = card();
   const calls = [];
