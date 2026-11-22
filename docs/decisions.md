@@ -62,6 +62,39 @@ a line saying which entry replaced it.
     [#36](https://github.com/mattyv/facepalm/issues/36),
     [#108](https://github.com/mattyv/facepalm/issues/108).
 
+## 2026-11-21: Publish the camera-in-use indicator to a plain status file
+
+-   **Decision:** the daemon writes whether the camera is in use to
+    `status`, a new file beside `service.sock` in `UserPaths::directory`
+    (#89's existing per-user folder), replaced atomically on every
+    subscription change and once more at startup. The menu and the tray
+    reread it on their own one-second timer; no socket, token, or
+    environment variable of its own. `specs/CameraStatus.tla` models it.
+-   **Why:** #61 item 8 asks for the menu to show "camera on" within two
+    seconds of a client subscribing, and off after the last one leaves,
+    on both macOS and Linux. A plain file in the directory every local
+    process already trusts (the socket and the client tokens live there
+    too) needs nothing a reader must authenticate or a writer must
+    configure; a rename is atomic, so a reader never sees a half-written
+    value. TLC's model of the earlier design salvaged from Codex's
+    `fix/delivery-audit` branch (`UiStatus`, a second socket with its own
+    generated token and instance secret) showed none of that machinery is
+    needed once the value is this simple and this private.
+-   **Rejected:** a second socket serving a live request/response
+    protocol (the salvaged design), which needs its own secret and adds a
+    protocol to maintain for one boolean; and restarting without
+    republishing, which TLC's `NeverStaleWhileRunning` showed leaves the
+    file stuck on a value from before a crash with no later subscription
+    change to correct it.
+-   **Cost:** a crash timed to land between a subscription change and the
+    next poll can make the display miss that one change for good; this is
+    physically correct, since the camera the display never caught really
+    did go off in the crash, but it is worth naming as a limit TLC found
+    rather than a bug it ruled out (`specs/README.md`'s `CameraStatus`
+    section).
+-   **Evidence:** [#61](https://github.com/mattyv/facepalm/issues/61),
+    [#37](https://github.com/mattyv/facepalm/issues/37).
+
 ## 2026-11-21: A QLockFile claim plus a QLocalServer handoff for the Linux tray's single instance
 
 -   **Decision:** `tools/menu/main_linux.cc` claims a `QLockFile` at

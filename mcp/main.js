@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './server.js';
+import { openFacepalmSettings } from './settings-launcher.js';
 import { SocketSession } from './session.js';
 import { startHookBroker } from './hook-broker.js';
 
@@ -57,7 +58,7 @@ if (process.env.FACEPALM_HOOK_SOCKET) {
   try { broker = await startHookBroker({ path: process.env.FACEPALM_HOOK_SOCKET, session }); }
   catch { console.error('Facepalm hooks unavailable; MCP remains available.'); }
 }
-const server = createServer(session);
+const server = createServer(session, { openSettings: openFacepalmSettings });
 const transport = new StdioServerTransport(process.stdin, process.stdout, { maxBufferSize: 64 * 1024 });
 let closing = false;
 function close() {

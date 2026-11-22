@@ -59,6 +59,7 @@ facepalm_unit(daemon_control)
 facepalm_unit(preview_lease)
 facepalm_unit(preview_publisher)
 target_link_libraries(preview_publisher PUBLIC preview_lease frame)
+facepalm_unit(daemon_status)
 facepalm_unit(daemon_options)
 facepalm_unit(feed_clients)
 facepalm_unit(user_paths)
@@ -175,8 +176,8 @@ target_link_libraries(calibrate_cli_tool PRIVATE calibrate_cli client_token user
 install(TARGETS gesture_replay_cli calibrate_cli_tool RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
 install(FILES LICENSE THIRDPARTY.md DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm COMPONENT Runtime)
 install(FILES mcp/main.js mcp/server.js mcp/session.js mcp/hook-broker.js
-  mcp/feeling-widget.js mcp/feeling-widget.html mcp/feeling-elicitation.js
-  mcp/package.json mcp/package-lock.json
+  mcp/settings-launcher.js mcp/feeling-widget.js mcp/feeling-widget.html
+  mcp/feeling-elicitation.js mcp/package.json mcp/package-lock.json
   DESTINATION ${CMAKE_INSTALL_DATADIR}/facepalm/mcp COMPONENT MCP)
 
 if(FACEPALM_LINUX_TRAY)
@@ -188,7 +189,7 @@ if(FACEPALM_LINUX_TRAY)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths single_instance Qt6::Widgets Qt6::Network)
+    client_token user_paths daemon_status single_instance Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -246,12 +247,12 @@ if(APPLE)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths "-framework AppKit")
+    client_token user_paths daemon_status "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
-      client_approvals client_token user_paths GTest::gtest_main "-framework AppKit")
+      client_approvals client_token user_paths daemon_status GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 
@@ -317,8 +318,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     INSTALL_RPATH "@executable_path/../Frameworks")
   target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
     client_approvals client_token
-    daemon_control daemon_options face_readers feed_clients user_paths avfoundation_session
-    camera_controller config frame_pipeline face_analyzer
+    daemon_control daemon_options daemon_status face_readers feed_clients user_paths
+    avfoundation_session camera_controller config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
     screen_context_reporter screen_context_macos reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe preview_lease preview_publisher preview_jpeg
@@ -374,7 +375,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   # the one that calls it.
   target_link_libraries(facepalm_daemon PRIVATE approved_feed calibration calibration_store
     client_approvals client_token
-    daemon_control daemon_options face_readers feed_clients user_paths
+    daemon_control daemon_options daemon_status face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader screen_context_reader screen_context_reporter screen_context
     reaction_feed feeling_store service session_camera unix_socket v4l2_session

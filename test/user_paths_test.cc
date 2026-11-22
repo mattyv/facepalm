@@ -27,6 +27,8 @@ TEST(UserPathsTest, MacOsKeepsThemInApplicationSupport) {
       Eq("/Users/person/Library/Application Support/Facepalm/service.sock"));
   EXPECT_THAT(paths.clients,
               Eq("/Users/person/Library/Application Support/Facepalm/clients"));
+  EXPECT_THAT(paths.status,
+              Eq("/Users/person/Library/Application Support/Facepalm/status"));
   EXPECT_THAT(
       paths.calibration,
       Eq("/Users/person/Library/Application Support/Facepalm/calibration"));
@@ -45,6 +47,7 @@ TEST(UserPathsTest, LinuxKeepsThemInTheStateDirectory) {
   EXPECT_THAT(paths.socket,
               Eq("/home/person/.local/state/facepalm/service.sock"));
   EXPECT_THAT(paths.clients, Eq("/home/person/.local/state/facepalm/clients"));
+  EXPECT_THAT(paths.status, Eq("/home/person/.local/state/facepalm/status"));
   EXPECT_THAT(paths.calibration,
               Eq("/home/person/.local/state/facepalm/calibration"));
   EXPECT_THAT(paths.preview_request,

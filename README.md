@@ -250,8 +250,10 @@ and expression detection, and advanced tuning. Choose **Settings…** from the
 tray to reopen the form. **Turn On Facepalm…** in the tray, as in the macOS
 menu, gives consent and starts the camera daemon as a systemd user service
 with the saved settings; **Turn Off Facepalm** stops it. The tray also shows
-local camera service readiness and offline replay availability. Only one
-tray runs at a time: choosing **Facepalm** again, which runs
+local camera service readiness, offline replay availability, and a
+**Camera on**/**Camera off** indicator that follows a client's
+subscription within a couple of seconds (#61 item 8). Only one tray
+runs at a time: choosing **Facepalm** again, which runs
 `facepalm-menu --settings`, while one is already running reopens its
 Settings form instead of opening a second tray icon (#98).
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
@@ -315,7 +317,9 @@ cannot tell, and `feelings`, every feeling the person can pick instead. The
 feeling is advisory, never an answer. When the person says how they really
 felt, `tell_feeling` takes the interpretation's ID and their pick, sends
 `feel <id> <feeling>`, and Facepalm tunes later reads from it. A client resets
-the person's picks with `reset feelings`.
+the person's picks with `reset feelings`. `open_facepalm_settings` requests
+the installed Facepalm Settings window (#61 item 8); it does not start the
+camera, change consent, or confirm the window became visible.
 
 Where the host renders interactive widgets ([MCP
 Apps](https://github.com/modelcontextprotocol/ext-apps)), `show_feeling_card`
@@ -407,6 +411,11 @@ screen_context.window_titles_enabled = false
 # looking_away.degrees, above, is reused as the away threshold.
 screen_context.other_screen_degrees = 7.5
 ```
+
+The macOS menu's and the Linux tray's **Settings** windows show and save
+every setting above, including looking away's and screen context's
+(#79): window titles still default off there too. Turn Facepalm off and
+on again from the menu to apply a change, as for the other settings.
 
 A nod, a shake or a tilt moves the blendshape scores as much as an
 expression does, so while the head is away from its resting pose, or has

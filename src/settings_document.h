@@ -19,6 +19,15 @@ struct MenuSettings {
   std::string expression_pose_degrees = "10";
   std::string expression_pose_range = "3";
   std::string expression_settle_ms = "600";
+  // Looking away (#35, #79): the Settings windows did not show these.
+  bool looking_away_enabled = true;
+  std::string looking_away_degrees = "15";
+  std::string looking_away_hold_ms = "1000";
+  // Screen context (#61 item 11, #79): window titles default off, since
+  // they can hold private text and need a permission on macOS.
+  bool screen_context_enabled = true;
+  bool screen_context_window_titles_enabled = false;
+  std::string screen_context_other_screen_degrees = "7.5";
 };
 
 // Validates the original, changes only the listed settings, and preserves

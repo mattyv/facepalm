@@ -32,6 +32,7 @@
 #include "src/config.h"
 #include "src/daemon_control.h"
 #include "src/daemon_options.h"
+#include "src/daemon_status.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
 #include "src/face_readers.h"
@@ -176,7 +177,7 @@ class Engine : public DaemonController, public DaemonPipeline {
          std::unique_ptr<FeelingStore> feelings,
          const CalibrationProfile* calibration_profile, Post control,
          Post camera, Post inference, [[maybe_unused]] std::string device = {},
-         std::string preview_request_path = {},
+         std::string status_path = {}, std::string preview_request_path = {},
          std::string preview_frame_path = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
@@ -228,6 +229,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                       calibration_profile))
                 : std::nullopt),
         feelings_(std::move(feelings)),
+        status_path_(std::move(status_path)),
         feed_(kFeedCapacity, *feelings_),
         clients_(
             [this](std::string summary, std::string detail,
@@ -246,6 +248,9 @@ class Engine : public DaemonController, public DaemonPipeline {
         approved_(
             feed_,
             [this](bool joined) {
+              // CameraStatus!Publish (#37 item 8): the menu's indicator
+              // follows this same first-join/last-leave signal.
+              PublishStatus(joined);
               control_queue_([this, joined] {
                 control_.Subscription(joined);
                 // PreviewLease!CameraOpens / CameraCloses (#37 item 8):
@@ -307,7 +312,13 @@ class Engine : public DaemonController, public DaemonPipeline {
                     }}) {
   }
 
-  void Start() { service_.Start(); }
+  // CameraStatus!Restart: republishes off before the service can take any
+  // subscription (#37 item 8), so a status file left stale by a previous
+  // crash does not linger once this one takes over.
+  void Start() {
+    PublishStatus(false);
+    service_.Start();
+  }
   void Stop() { control_.Stop(); }
   void Subscribe() override { controller_.Subscribe("approved"); }
   void Leave() override { controller_.Leave("approved"); }
@@ -339,6 +350,18 @@ class Engine : public DaemonController, public DaemonPipeline {
     return analyzers;
   }
 
+  // CameraStatus!Publish. A daemon started with no --status path (such as
+  // a test fixture's) simply runs without one.
+  void PublishStatus(bool on) {
+    if (status_path_.empty()) {
+      return;
+    }
+    std::string error;
+    if (!PublishCameraStatus(status_path_, on, error)) {
+      std::fprintf(stderr, "facepalm-daemon: %s\n", error.c_str());
+    }
+  }
+
   Post control_queue_;
   std::string model_;
   Config config_;
@@ -352,6 +375,7 @@ class Engine : public DaemonController, public DaemonPipeline {
   ScreenContextReader screen_context_reader_;
   std::optional<ScreenContextReporter> reporter_;
   std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
+  std::string status_path_;
   ReactionFeed feed_;
   FeedClients clients_;
   ApprovedFeed approved_;
@@ -494,6 +518,7 @@ int main(int argc, char** argv) {
                           calibration_profile ? &*calibration_profile : nullptr,
                           control.Poster(), camera.Poster(), inference.Poster(),
                           device != nullptr ? device : "/dev/video0",
+                          options->status,
                           facepalm::PreviewRequestPath(daemon_paths),
                           facepalm::PreviewFramePath(daemon_paths));
   engine.Start();
@@ -520,7 +545,8 @@ int main(int argc, char** argv) {
           dispatch_queue_create("facepalm.camera", DISPATCH_QUEUE_SERIAL)),
       facepalm::OnQueue(
           dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)),
-      /*device=*/{}, facepalm::PreviewRequestPath(daemon_paths),
+      /*device=*/{}, options->status,
+      facepalm::PreviewRequestPath(daemon_paths),
       facepalm::PreviewFramePath(daemon_paths));
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);

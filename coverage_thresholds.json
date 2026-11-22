@@ -13,6 +13,13 @@
       "functions": 100
     }
   },
+  "src/daemon_status.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/head_pose.cc": {
     "unit": {
       "lines": 100,

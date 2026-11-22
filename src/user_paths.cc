@@ -20,6 +20,7 @@ std::optional<UserPaths> PathsFor(std::string_view home, Platform platform) {
   return UserPaths{.directory = directory,
                    .socket = directory + "/service.sock",
                    .clients = directory + "/clients",
+                   .status = directory + "/status",
                    .calibration = directory + "/calibration",
                    .preview_request = directory + "/preview_request",
                    .preview_frame = directory + "/preview_frame.jpg"};

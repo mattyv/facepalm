@@ -67,8 +67,9 @@ foreach(file LICENSE THIRDPARTY.md)
   endif()
 endforeach()
 
-foreach(file main.js server.js session.js hook-broker.js feeling-widget.js
-    feeling-widget.html feeling-elicitation.js package.json package-lock.json)
+foreach(file main.js server.js session.js hook-broker.js settings-launcher.js
+    feeling-widget.js feeling-widget.html feeling-elicitation.js
+    package.json package-lock.json)
   if(NOT EXISTS "${moved}/share/facepalm/mcp/${file}")
     fail("installed MCP adapter is missing ${file}")
   endif()
