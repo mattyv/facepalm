@@ -238,7 +238,7 @@ TEST_F(LookAwayReaderTest, SetProfileWiresInTheOtherScreenBoxTest) {
 }
 
 TEST_F(LookAwayReaderTest, SetProfileOfNullptrGoesBackToNoBoxTest) {
-  CalibrationProfile profile;
+  const CalibrationProfile profile;
   reader_.SetProfile(&profile);
   reader_.SetProfile(nullptr);
 

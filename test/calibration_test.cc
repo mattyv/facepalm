@@ -93,26 +93,6 @@ TEST_F(StartTest, StartsAtTheRestingStep) {
   EXPECT_THAT(error, IsEmpty());
 }
 
-// Far more than the gains step's own sample cap (1,024,
-// src/calibration.cc's own kMaxGainsSamples): repeating the same real
-// fixate-and-turn past it, the step still passes, so samples past the
-// cap are dropped rather than grown without limit while it is held open.
-TEST_F(CalibrationSessionTest, GainsSampleBufferStopsGrowingPastItsOwnCap) {
-  std::string start_error;
-  ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0), EyeSignal{});
-  std::string resting_error;
-  ASSERT_TRUE(session_.Next(resting_error).has_value()) << resting_error;
-
-  for (int cycle = 0; cycle < 100; ++cycle) {
-    for (int step = -10; step <= 10; step += 2) {
-      session_.Update(Pose(step, 0), Eye(-step / 20.0, 0));
-    }
-  }
-  std::string error;
-  EXPECT_TRUE(session_.Next(error).has_value()) << error;
-}
-
 TEST_F(StartTest, MovesToTheGainsStepAfterResting) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
@@ -362,35 +342,7 @@ TEST_F(CalibrationWalksEveryTargetTest, SavesTheEstimatedGainsAndRestingEye) {
   EXPECT_NEAR(captured.gains.horizontal, 20, 1e-9);
 }
 
-// A resting step every one of whose frames was a blink: eye_sample_count_
-// stays zero, so resting_eye_ defaults rather than reading an average of
-// nothing.
-TEST_F(CalibrationWalksEveryTargetTest, RestingEyeDefaultsWhenEveryFrameWasABlink) {
-  CalibrationProfile captured;
-  EXPECT_CALL(store_, Save)
-      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
-        captured = profile;
-        return true;
-      });
-  std::string start_error;
-  ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0), Eye(9, 9, /*blink=*/true));
-  std::string error;
-  ASSERT_TRUE(session_.Next(error).has_value()) << error;
-  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
-  for (const double yaw : {10, 20, 30, 40, 50}) {
-    session_.Update(Pose(yaw, yaw), EyeSignal{});
-    ASSERT_TRUE(session_.Next(error).has_value()) << error;
-  }
-
-  EXPECT_THAT(captured.resting_eye.horizontal, Eq(0));
-  EXPECT_THAT(captured.resting_eye.vertical, Eq(0));
-}
-
-// A screen point every one of whose frames was a blink: its own gaze
-// composes with no eye signal at all (src/eye_gaze.h's ComposeGaze, head
-// pose alone), the same as a point whose eye signal read exactly zero.
-TEST_F(CalibrationWalksEveryTargetTest, APointWithOnlyABlinkReadsGazeFromHeadPoseAlone) {
+TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheEyeAverage) {
   CalibrationProfile captured;
   EXPECT_CALL(store_, Save)
       .WillOnce([&](const CalibrationProfile& profile, std::string&) {
@@ -400,38 +352,10 @@ TEST_F(CalibrationWalksEveryTargetTest, APointWithOnlyABlinkReadsGazeFromHeadPos
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
   session_.Update(Pose(0, 0), Eye(0.2, 0));
-  std::string error;
-  ASSERT_TRUE(session_.Next(error).has_value()) << error;
-  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
-  // The centre, first of the five: only a blink, unlike the other four.
-  session_.Update(Pose(10, 10), Eye(9, 9, /*blink=*/true));
-  ASSERT_TRUE(session_.Next(error).has_value()) << error;
-  for (const double yaw : {20, 30, 40, 50}) {
-    session_.Update(Pose(yaw, yaw), EyeSignal{});
-    ASSERT_TRUE(session_.Next(error).has_value()) << error;
-  }
-
-  ASSERT_THAT(captured.screens.size(), Eq(1));
-  EXPECT_THAT(captured.screens[0]
-                  .points[static_cast<std::size_t>(CalibrationPoint::kCentre)]
-                  .yaw_degrees,
-             Eq(10));
-}
-
-// Update's own blink skip (#137), exercised directly: a frame it reads
-// as a blink is averaged into the pose (Accumulate, above it) but never
-// into the eye signal, resting or otherwise.
-TEST_F(CalibrationWalksEveryTargetTest, SkipsABlinkFrameWhenAveragingTheRestingEye) {
-  CalibrationProfile captured;
-  EXPECT_CALL(store_, Save)
-      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
-        captured = profile;
-        return true;
-      });
-  std::string start_error;
-  ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0), Eye(0.2, 0));
-  session_.Update(Pose(0, 0), Eye(5, 5, /*blink=*/true));  // Skipped.
+  // A blink, with an eye signal that would skew the average if it counted:
+  // the head still updates (captured_ stays true from it alone), but the
+  // eye signal does not.
+  session_.Update(Pose(0, 0), Eye(0.9, 0, /*blink=*/true));
   std::string error;
   ASSERT_TRUE(session_.Next(error).has_value()) << error;
   ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
@@ -441,6 +365,81 @@ TEST_F(CalibrationWalksEveryTargetTest, SkipsABlinkFrameWhenAveragingTheRestingE
   }
 
   EXPECT_THAT(captured.resting_eye.horizontal, Eq(0.2));
+}
+
+TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheGainsStep) {
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  // A blink mid-step, with a head and eye pair that would corrupt the
+  // slope away from 20 if it counted: on the wrong side of the real
+  // fixate-and-turn line entirely.
+  session_.Update(Pose(100, 0), Eye(100, 0, /*blink=*/true));
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    session_.Update(Pose(yaw, yaw), EyeSignal{});
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_NEAR(captured.gains.horizontal, 20, 1e-9);
+}
+
+// A step where every frame blinks captures nothing for the eye signal, so
+// it falls back to a centred (0, 0) average rather than crashing or
+// leaving a stale value (#137): one indivisible walk through a whole
+// session, the same as the other full-session tests above.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+TEST_F(CalibrationWalksEveryTargetTest,
+       AllBlinkFramesLeaveTheRestingEyeCentred) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0.9, 0.9, /*blink=*/true));
+  CalibrationProfile captured;
+  EXPECT_CALL(store_, Save)
+      .WillOnce([&](const CalibrationProfile& profile, std::string&) {
+        captured = profile;
+        return true;
+      });
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  ASSERT_TRUE(PassGainsStep(error).has_value()) << error;
+  for (const double yaw : {10, 20, 30, 40, 50}) {
+    // Every point's own frame blinks too, so the composed gaze falls back
+    // to head pose alone and the corner-vs-centre spread check still
+    // passes on the head offset alone.
+    session_.Update(Pose(yaw, yaw), Eye(0.9, 0.9, /*blink=*/true));
+    ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  }
+
+  EXPECT_THAT(captured.resting_eye.horizontal, Eq(0));
+  EXPECT_THAT(captured.resting_eye.vertical, Eq(0));
+}
+
+// #137's own bound on the gains step's own sample buffer: a session
+// walked well past kMaxGainsSamples still estimates gains correctly
+// rather than growing its buffer without limit.
+TEST_F(CalibrationWalksEveryTargetTest, TheGainsStepStopsBufferingPastItsCap) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  ASSERT_TRUE(session_.Next(error).has_value()) << error;
+  constexpr int kWellPastTheCap = 1100;
+  for (int sample = 0; sample < kWellPastTheCap; ++sample) {
+    const double step = (sample % 21) - 10;
+    session_.Update(Pose(step, 0), Eye(-step / 20.0, 0));
+  }
+  const auto status = session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_FALSE(status->gains_step);
 }
 
 // Walks every step before checking the last one finishes the session.

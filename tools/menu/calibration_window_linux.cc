@@ -49,14 +49,14 @@ QString GainsStepText() {
 // QGuiApplication::screens()'s own order -- the daemon's own screen
 // index (CalibrationFlow::View::screen) is counted against this same
 // order on this machine.
-QList<QScreen*> OrderedScreens() {
+QList<const QScreen*> OrderedScreens() {
   const QList<QScreen*> screens = QGuiApplication::screens();
-  QScreen* primary = QGuiApplication::primaryScreen();
-  QList<QScreen*> ordered;
+  const QScreen* primary = QGuiApplication::primaryScreen();
+  QList<const QScreen*> ordered;
   if (primary != nullptr) {
     ordered.append(primary);
   }
-  for (QScreen* screen : screens) {
+  for (const QScreen* screen : screens) {
     if (screen != primary) {
       ordered.append(screen);
     }
@@ -66,8 +66,8 @@ QList<QScreen*> OrderedScreens() {
 
 // `screen`, or nullptr once `index` is past the last one Qt reports (the
 // window simply stays where it was).
-QScreen* ScreenAt(int index) {
-  const QList<QScreen*> screens = OrderedScreens();
+const QScreen* ScreenAt(int index) {
+  const QList<const QScreen*> screens = OrderedScreens();
   if (index < 0 || index >= screens.size()) {
     return nullptr;
   }
@@ -76,8 +76,8 @@ QScreen* ScreenAt(int index) {
 
 // Where `screen` sits relative to the primary one (#135: "the screen the
 // prompt names").
-QString ScreenPosition(QScreen* screen) {
-  QScreen* primary = QGuiApplication::primaryScreen();
+QString ScreenPosition(const QScreen* screen) {
+  const QScreen* primary = QGuiApplication::primaryScreen();
   if (screen == primary || primary == nullptr) {
     return QStringLiteral("the main screen");
   }
@@ -95,8 +95,8 @@ QString ScreenPosition(QScreen* screen) {
 // and Qt's own name for it (#135, #137) -- the closest a Linux display
 // has to AppKit's localizedName -- or just the position for a screen
 // with none.
-QString ScreenDescription(QScreen* screen) {
-  const QString position = ScreenPosition(screen);
+QString ScreenDescription(const QScreen* screen) {
+  QString position = ScreenPosition(screen);
   if (screen->name().isEmpty()) {
     return position;
   }
@@ -180,14 +180,14 @@ QString StepPrompt(const facepalm::CalibrationFlow::View& view) {
       where = QStringLiteral("the bottom-right corner");
       break;
   }
-  QScreen* screen = ScreenAt(view.screen);
-  const QString screenName =
+  const QScreen* screen = ScreenAt(view.screen);
+  const QString screen_name =
       screen != nullptr ? ScreenDescription(screen)
                         : QStringLiteral("screen %1").arg(view.screen + 1);
   return QStringLiteral(
              "Look at %1 of %2, the way you normally would, then "
              "click Next.")
-      .arg(where, screenName);
+      .arg(where, screen_name);
 }
 
 }  // namespace
@@ -240,13 +240,14 @@ void CalibrationWindow::MoveToScreenForStep(
   if (view.resting_step || view.gains_step) {
     return;
   }
-  QScreen* screen = ScreenAt(view.screen);
+  const QScreen* screen = ScreenAt(view.screen);
   if (screen == nullptr) {
     return;
   }
   const QRect visible = screen->availableGeometry();
-  const QPoint origin(visible.x() + (visible.width() - window_.width()) / 2,
-                      visible.y() + (visible.height() - window_.height()) / 2);
+  const QPoint origin(
+      visible.x() + ((visible.width() - window_.width()) / 2),
+      visible.y() + ((visible.height() - window_.height()) / 2));
   window_.move(origin);
 }
 
@@ -290,7 +291,7 @@ void CalibrationWindow::PrimaryClicked() {
   if (!started_) {
     started_ = true;
     // The real screen count (#135), not a hardcoded one screen.
-    flow_->Start(QGuiApplication::screens().size());
+    flow_->Start(static_cast<int>(QGuiApplication::screens().size()));
   } else if (flow_->CurrentView().state ==
              facepalm::CalibrationFlow::State::kPrompting) {
     flow_->Next();

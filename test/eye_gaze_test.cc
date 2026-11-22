@@ -152,6 +152,18 @@ TEST_F(EyeGazeTrackerTest, ReportsNeitherSignalNorRestingBeforeAnyFrame) {
   EXPECT_FALSE(tracker_.Resting().has_value());
 }
 
+// A blink as the very first frame a fresh tracker ever sees: neither
+// LearnResting nor the median window's own deque is ever touched, so
+// recent_ is still empty when Update's eviction loop checks it -- the
+// same empty deque as before any frame at all, not a gap clearing a
+// window that had something in it.
+TEST_F(EyeGazeTrackerTest, ABlinkAsTheVeryFirstFrameLearnsNothing) {
+  const Face blinking = FaceWithEyes({.blink_left = 0.9F, .blink_right = 0.9F});
+  tracker_.Update(blinking, 0);
+  EXPECT_FALSE(tracker_.Signal().has_value());
+  EXPECT_FALSE(tracker_.Resting().has_value());
+}
+
 TEST_F(EyeGazeTrackerTest, LearnsARestingLevelOverTheRestingWindow) {
   // Centred eyes, steady, for just over resting_ms: by then the level is
   // learned and a face arriving the same instant also reports a signal.
@@ -232,6 +244,25 @@ TEST_F(EyeGazeTrackerTest, AMissingFaceClearsTheMedianWindow) {
   }
   tracker_.Update(std::nullopt, 1100);
   EXPECT_FALSE(tracker_.Signal().has_value());
+}
+
+// A missing face clears have_last_ too (ScreenContextReader's own pose
+// does the same on a missing face), so Resting() reads as not yet
+// learned again until the next real frame, even though the level itself
+// (resting_) is still sitting there, untouched.
+TEST_F(EyeGazeTrackerTest,
+       AMissingFaceMakesRestingUnavailableUntilTheNextFrame) {
+  const Face centred = CentredFace();
+  for (std::int64_t ms = 0; ms <= 1000; ms += 100) {
+    tracker_.Update(centred, ms);
+  }
+  ASSERT_TRUE(tracker_.Resting().has_value());
+
+  tracker_.Update(std::nullopt, 1100);
+  EXPECT_FALSE(tracker_.Resting().has_value());
+
+  tracker_.Update(centred, 1200);
+  EXPECT_TRUE(tracker_.Resting().has_value());
 }
 
 // specs/README.md carries no entry for EstimateGains: it is a stateless
