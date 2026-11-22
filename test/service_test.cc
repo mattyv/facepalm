@@ -480,6 +480,62 @@ TEST_F(HangUpEndsTest, AHangUpDuringABeatDisconnectsTheClient) {
   service_.Stop();
 }
 
+// Regression for #115: Watched's watcher (Service!Noticed) and Serve's own
+// cleanup (Service!Closed) both reach Leave for the same connection; only
+// the first may actually disconnect "agent" from the feed, or a new
+// connection that takes the freed name in between is kicked by the stale
+// second call. Disconnect's cardinality (not WillRepeatedly, as the other
+// hang-up tests use) is the assertion: a second call fails it.
+TEST_F(HangUpEndsTest, AHangUpDuringAWaitDisconnectsTheClientOnlyOnce) {
+  service_.Start();
+  std::promise<void> waiting;
+  std::promise<void> disconnected;
+  auto woken = disconnected.get_future().share();
+  std::once_flag once;
+  EXPECT_CALL(feed_, Wait("agent", _)).WillOnce([&] {
+    waiting.set_value();
+    woken.wait_for(2 * kPrompt);
+    return std::optional<Feed::Delivery>();
+  });
+  EXPECT_CALL(feed_, Disconnect("agent")).Times(1).WillRepeatedly([&] {
+    std::call_once(once, [&] { disconnected.set_value(); });
+  });
+  const auto peer = Named("agent");
+  peer->Send("wait 60000");
+  ASSERT_THAT(waiting.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+
+  peer->HangUp();
+
+  EXPECT_THAT(woken.wait_for(kPrompt), Eq(std::future_status::ready));
+  service_.Stop();
+}
+
+TEST_F(HangUpEndsTest, AHangUpDuringABeatDisconnectsTheClientOnlyOnce) {
+  service_.Start();
+  std::promise<void> beating;
+  std::promise<void> disconnected;
+  auto woken = disconnected.get_future().share();
+  std::once_flag once;
+  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal, _)).WillOnce([&] {
+    beating.set_value();
+    woken.wait_for(2 * kPrompt);
+    return std::optional<Feed::Delivery>();
+  });
+  EXPECT_CALL(feed_, Disconnect("agent")).Times(1).WillRepeatedly([&] {
+    std::call_once(once, [&] { disconnected.set_value(); });
+  });
+  const auto peer = Named("agent");
+  peer->Send("beat proposal 10000");
+  ASSERT_THAT(beating.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+
+  peer->HangUp();
+
+  EXPECT_THAT(woken.wait_for(kPrompt), Eq(std::future_status::ready));
+  service_.Stop();
+}
+
 TEST_F(HangUpEndsTest, AWaitThatEndsOnItsOwnLeavesTheClientConnected) {
   service_.Start();
   EXPECT_CALL(feed_, Wait("agent", _))

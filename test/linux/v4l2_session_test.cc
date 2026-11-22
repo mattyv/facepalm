@@ -249,8 +249,9 @@ class V4l2SessionTest : public ::testing::Test {
 
   ::testing::StrictMock<MockV4l2> mock_;
   // Nice, not strict: almost no test here cares that V4l2Session asks it to
-  // watch (#111); WiresHotplugCallbacksToTheGivenOnes below does, with its
-  // own strict instance.
+  // watch (#111); StartWatchingWiresHotplugCallbacksToTheGivenOnes and
+  // ConstructingDoesNotStartWatchingUntilToldTo below do, each with its own
+  // strict instance.
   NiceMock<MockHotplugMonitor> hotplug_;
   std::mutex mutex_;
   std::condition_variable changed_;
@@ -259,12 +260,24 @@ class V4l2SessionTest : public ::testing::Test {
   std::unique_ptr<V4l2Session> session_;
 };
 
+// #115: constructing a V4l2Session must not itself start the watcher
+// thread, which could then call back into a sibling (such as Engine's
+// camera_ in tools/daemon/main.cc) before its own constructor runs; a
+// StrictMock's Start catches that regression at once.
+TEST_F(V4l2SessionTest, ConstructingDoesNotStartWatchingUntilToldTo) {
+  StrictMock<MockHotplugMonitor> hotplug;
+
+  const V4l2Session session(
+      /*device_id=*/"", [](const Frame&) {}, [] {}, [](const std::string&) {},
+      [](const std::string&) {}, hotplug);
+}
+
 // specs/CameraLifecycle.tla's DeviceLost, DeviceBack, OtherDeviceLost and
-// OtherDeviceBack (#111): V4l2Session asks the given HotplugMonitor to
-// start watching with exactly the callbacks it was given, the way
-// AvFoundationSession wires AVFoundation's own notifications straight to
-// SessionCamera's OnDeviceDisconnected/OnDeviceConnected.
-TEST_F(V4l2SessionTest, WiresHotplugCallbacksToTheGivenOnes) {
+// OtherDeviceBack (#111): StartWatching asks the given HotplugMonitor to
+// start watching with exactly the callbacks the constructor was given, the
+// way AvFoundationSession wires AVFoundation's own notifications straight
+// to SessionCamera's OnDeviceDisconnected/OnDeviceConnected.
+TEST_F(V4l2SessionTest, StartWatchingWiresHotplugCallbacksToTheGivenOnes) {
   StrictMock<MockHotplugMonitor> hotplug;
   std::function<void(std::string)> started_disconnected;
   std::function<void(std::string)> started_connected;
@@ -277,10 +290,11 @@ TEST_F(V4l2SessionTest, WiresHotplugCallbacksToTheGivenOnes) {
   std::optional<std::string> disconnected;
   std::optional<std::string> connected;
 
-  const V4l2Session session(
+  V4l2Session session(
       /*device_id=*/"", [](const Frame&) {}, [] {},
       [&](const std::string& id) { disconnected = id; },
       [&](const std::string& id) { connected = id; }, hotplug);
+  session.StartWatching();
 
   ASSERT_TRUE(started_disconnected);
   ASSERT_TRUE(started_connected);
