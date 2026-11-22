@@ -29,6 +29,12 @@ namespace facepalm {
 // already takes (#111, #13): `hotplug` is asked to call them, over inotify
 // rather than AVFoundation's own notifications. The caller owns `hotplug`
 // and keeps it alive at least as long as this session.
+//
+// This constructor only keeps `on_disconnected`, `on_connected` and
+// `hotplug` for StartWatching to use; it starts no thread itself, since
+// the caller's own `on_disconnected`/`on_connected` usually close over a
+// sibling member not yet constructed at this point, such as Engine's
+// `camera_` in tools/daemon/main.cc (#115).
 class V4l2Session final : public CaptureSession {
  public:
   V4l2Session(std::string device_id, std::function<void(const Frame&)> on_frame,
@@ -39,6 +45,12 @@ class V4l2Session final : public CaptureSession {
   ~V4l2Session() override;
   V4l2Session(const V4l2Session&) = delete;
   V4l2Session& operator=(const V4l2Session&) = delete;
+
+  // Asks `hotplug` to start watching, with the callbacks the constructor
+  // was given (#115): separate from the constructor so the caller can
+  // call it once every sibling those callbacks may reach is itself
+  // constructed. Called at most once.
+  void StartWatching();
 
   Permission CurrentPermission() override;
   void RequestPermission(std::function<void(bool)> done) override;
@@ -52,6 +64,9 @@ class V4l2Session final : public CaptureSession {
   std::string device_id_;
   std::function<void(const Frame&)> on_frame_;
   std::function<void()> on_session_failed_;
+  std::function<void(const std::string&)> on_disconnected_;
+  std::function<void(const std::string&)> on_connected_;
+  HotplugMonitor& hotplug_;
   int fd_ = -1;
   std::jthread capture_;
 };

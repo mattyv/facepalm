@@ -91,6 +91,16 @@ std::size_t HandleEvent(const std::byte* event,
         on_disconnected(found->second);
         known.erase(found);
       }
+    } else if ((header.mask & IN_ATTRIB) != 0 && !known.contains(path)) {
+      // udev applies a device node's permissions some moments after
+      // creating it, so the open IN_CREATE tried may have found it not
+      // yet readable (#115): IN_ATTRIB's own change in those permissions
+      // is the retry, tried only for a node not already known, so one
+      // already connected is not reopened or told about twice.
+      if (const std::optional<std::string> id = IdOf(path)) {
+        known[path] = *id;
+        on_connected(*id);
+      }
     }
   }
   return sizeof(header) + header.len;
@@ -117,7 +127,8 @@ void V4l2InotifyMonitor::Start(std::function<void(std::string)> on_disconnected,
 // identified disappearing fires `on_disconnected` with the same id, so
 // SessionCamera's own OnDeviceConnected/OnDeviceDisconnected can tell
 // whether it is the camera in use the same way it already does for macOS
-// (#13).
+// (#13). A node IN_CREATE could not yet open gets one retry, on IN_ATTRIB,
+// since udev applies its permissions a moment after creating it (#115).
 void V4l2InotifyMonitor::Watch(
     const std::stop_token& stop,
     // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
@@ -127,7 +138,8 @@ void V4l2InotifyMonitor::Watch(
   if (notify < 0) {
     return;
   }
-  if (inotify_add_watch(notify, kDevDirectory, IN_CREATE | IN_DELETE) < 0) {
+  if (inotify_add_watch(notify, kDevDirectory,
+                        IN_CREATE | IN_DELETE | IN_ATTRIB) < 0) {
     close(notify);
     return;
   }
