@@ -163,6 +163,8 @@ facepalm_unit(expressions)
 facepalm_unit(face_analyzer)
 facepalm_unit(face_model)
 facepalm_unit(feelings)
+facepalm_unit(preview_readings)
+target_link_libraries(preview_readings PUBLIC feelings)
 facepalm_unit(tuning)
 # The feelings are pure computation, so the tuning's tests run them for real.
 target_link_libraries(tuning PUBLIC feelings)
@@ -504,7 +506,7 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     avfoundation_session camera_controller facepalm_config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
     screen_context_reporter screen_context_macos reaction_feed feeling_store service
-    unix_socket face_model facepalm_mediapipe preview_lease preview_publisher preview_request
+    unix_socket face_model facepalm_mediapipe preview_lease preview_publisher preview_readings preview_request
     preview_jpeg "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
@@ -585,7 +587,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     look_away_reader screen_context_reader screen_context_reporter screen_context
     reaction_feed feeling_store service session_camera unix_socket v4l2_hotplug v4l2_session
     face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
-    ${X11_LIBRARIES} ${XRANDR_LIBRARY} preview_lease preview_publisher preview_request
+    ${X11_LIBRARIES} ${XRANDR_LIBRARY} preview_lease preview_publisher preview_readings preview_request
     preview_jpeg)
   target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)

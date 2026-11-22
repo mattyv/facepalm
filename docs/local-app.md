@@ -133,7 +133,12 @@ been tested with live capture. Choosing **Show Camera Preview** from the 🤦
 menu opens a window of the camera while it is on, started only by hand
 (#37 item 8, #108): it stops the same way it started, from the menu item, the
 window's own close button, or the camera going off, and no frame reaches
-anything but that window.
+anything but that window. Beside the frame, the window shows what Facepalm is
+reading as you watch yourself (#134): each gesture or expression it reports,
+held for two seconds so it can be read, and the latest beat's feeling (such
+as "Last read: confused (question)"), which stays until the next one. Both
+are a diagnostic only, text written to a private file beside the frame under
+the same rules, read only by the menu and only while the preview streams.
 
 Command-Tab, the Dock and the app switcher reach Settings, the preview and
 the calibration wizard while any one of them is open (#146): the 🤦 menu is

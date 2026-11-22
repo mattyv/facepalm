@@ -39,14 +39,17 @@ class MockFeed : public Feed {
 class ApprovedFeedTest : public ::testing::Test {
  protected:
   ApprovedFeed Make() {
-    return {
-        inner_, [this](bool joined) { changes_.push_back(joined); },
-        [this](const std::string& session) { retired_.push_back(session); }};
+    return {inner_, [this](bool joined) { changes_.push_back(joined); },
+            [this](const std::string& session) { retired_.push_back(session); },
+            [this](const Feed::Interpretation& interpretation) {
+              beats_.push_back(interpretation);
+            }};
   }
 
   MockFeed inner_;
   std::vector<bool> changes_;
   std::vector<std::string> retired_;
+  std::vector<Feed::Interpretation> beats_;
 };
 
 using SubscriptionMatchesTest = ApprovedFeedTest;
@@ -126,6 +129,78 @@ TEST_F(ApprovedFeedTest, EachClientUsesItsOwnSession) {
       .WillOnce(Return(Feed::Delivery{}));
   EXPECT_TRUE(
       feed.Beat("desktop", BeatKind::kProposal, std::chrono::milliseconds(6)));
+}
+
+using BeatCallbackTest = ApprovedFeedTest;
+
+TEST_F(BeatCallbackTest, AnInterpretationReachesOnBeat) {
+  ApprovedFeed feed = Make();
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  const Feed::Interpretation interpretation{
+      .id = 5, .feeling = Feeling::kConfused, .beat = BeatKind::kQuestion};
+  EXPECT_CALL(inner_, Beat("approved-1", BeatKind::kQuestion,
+                           std::chrono::milliseconds(6)))
+      .WillOnce(Return(
+          Feed::Delivery{.readings = {}, .interpretation = interpretation}));
+
+  feed.Beat("desktop", BeatKind::kQuestion, std::chrono::milliseconds(6));
+
+  EXPECT_THAT(beats_, ElementsAre(interpretation));
+}
+
+TEST_F(BeatCallbackTest, ARefusedInnerBeatCallsNothing) {
+  ApprovedFeed feed = Make();
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  EXPECT_CALL(inner_, Beat("approved-1", BeatKind::kQuestion,
+                           std::chrono::milliseconds(6)))
+      .WillOnce(Return(std::nullopt));
+
+  EXPECT_FALSE(
+      feed.Beat("desktop", BeatKind::kQuestion, std::chrono::milliseconds(6))
+          .has_value());
+
+  EXPECT_TRUE(beats_.empty());
+}
+
+TEST_F(BeatCallbackTest, NoInterpretationCallsNothing) {
+  ApprovedFeed feed = Make();
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  EXPECT_CALL(inner_, Beat("approved-1", BeatKind::kQuestion,
+                           std::chrono::milliseconds(6)))
+      .WillOnce(Return(Feed::Delivery{}));
+
+  feed.Beat("desktop", BeatKind::kQuestion, std::chrono::milliseconds(6));
+
+  EXPECT_TRUE(beats_.empty());
+}
+
+TEST_F(BeatCallbackTest, AnUnrecognizedClientNeverReachesTheInnerBeatOrOnBeat) {
+  ApprovedFeed feed = Make();
+
+  EXPECT_FALSE(
+      feed.Beat("stranger", BeatKind::kQuestion, std::chrono::milliseconds(6)));
+
+  EXPECT_TRUE(beats_.empty());
+}
+
+TEST_F(BeatCallbackTest, ACallbackIsOptional) {
+  ApprovedFeed feed(inner_, [](bool) {}, [](const std::string&) {});
+  EXPECT_CALL(inner_, Connect("approved-1")).WillOnce(Return(true));
+  ASSERT_TRUE(feed.Connect("desktop"));
+  EXPECT_CALL(inner_, Beat("approved-1", BeatKind::kQuestion,
+                           std::chrono::milliseconds(6)))
+      .WillOnce(Return(Feed::Delivery{.readings = {},
+                                      .interpretation = Feed::Interpretation{
+                                          .id = 1,
+                                          .feeling = Feeling::kUnknown,
+                                          .beat = BeatKind::kQuestion}}));
+
+  EXPECT_TRUE(
+      feed.Beat("desktop", BeatKind::kQuestion, std::chrono::milliseconds(6))
+          .has_value());
 }
 
 TEST_F(ApprovedFeedTest, ARefusedFeelingOrResetIsReportedToTheClient) {
