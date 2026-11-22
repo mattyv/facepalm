@@ -46,6 +46,14 @@ std::string_view Name(Expression expression);
 // resting pose, or has moved more than a little recently, the tracker
 // gates the scores out: it neither reports nor learns from them, so a nod
 // is never read as an expression.
+//
+// eyes_narrowed alone has a second gate (#140): a downward glance, as at a
+// keyboard, or a blink lifts eyeSquint the same way a real squint does, so
+// while MediaPipe's own eyeLookDown or eyeBlink score is above its
+// threshold, eyes_narrowed neither reports nor learns, though the other
+// four expressions are read as usual. This is read from the raw
+// blendshapes directly, never from #137's composed gaze, so it holds
+// whether or not that reading is available.
 class ExpressionTracker {
  public:
   // Their defaults live in Config.
@@ -65,6 +73,12 @@ class ExpressionTracker {
     double spreads;
     // How long a rise must last, so that a blink is not a squint.
     std::int64_t hold_ms;
+    // eyes_narrowed's own gate (#140): the eyeLookDown score, either eye,
+    // above which a downward glance holds the squint back.
+    double eye_look_down_threshold;
+    // eyes_narrowed's own gate (#140): the eyeBlink score, either eye,
+    // above which a blink holds the squint back.
+    double eye_blink_threshold;
   };
 
   explicit ExpressionTracker(Settings settings);
@@ -88,6 +102,13 @@ class ExpressionTracker {
   // shifted with it, so the resting face is learned afresh, as after a
   // gap; after a nod or a glance the head returns to the pose it left, and
   // the levels it froze still stand.
+  //
+  // eyes_narrowed has the second gate above it (#140): while `scores`'
+  // eyeLookDown or eyeBlink, either eye, is above its own threshold, that
+  // one state neither reports nor learns from this frame, though the
+  // other four expressions still do; its own hold restarts once the
+  // glance or blink ends, the same way a hold that straddles the pose
+  // gate restarts.
   std::vector<Expression> Update(const Scores& scores, const HeadRotation& pose,
                                  std::int64_t timestamp_ms);
 
@@ -128,6 +149,11 @@ class ExpressionTracker {
   // face the scores now come from, and the resting face must be learned
   // afresh.
   bool PostureChangedWhileGated(bool away);
+
+  // Whether `scores`' eyeLookDown or eyeBlink, either eye, is above its
+  // threshold: eyes_narrowed's own gate (#140), read from MediaPipe's raw
+  // blendshapes, not #137's composed gaze.
+  [[nodiscard]] bool EyesGated(const Scores& scores) const;
 
   Settings settings_;
   std::array<double, 3> resting_pose_{};

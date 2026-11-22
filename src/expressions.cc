@@ -44,6 +44,18 @@ constexpr std::array<int, 1> kLipsPressed = {42};
 constexpr std::array<int, 2> kBrowsDown = {1, 2};       // browDown*.
 constexpr std::array<int, 2> kEyesNarrowed = {19, 20};  // eyeSquint*.
 
+// MediaPipe's indices for eyes_narrowed's own gate (#140): a downward
+// glance or a blink lifts eyeSquint the same way a real squint does.
+constexpr std::array<int, 2> kEyeLookDown = {11, 12};  // eyeLookDown*.
+constexpr std::array<int, 2> kEyeBlink = {9, 10};      // eyeBlink*.
+
+// The larger of `scores`' two values at `indices`.
+double Higher(const std::array<int, 2>& indices, const Scores& scores) {
+  return std::max(
+      static_cast<double>(scores.at(static_cast<std::size_t>(indices[0]))),
+      static_cast<double>(scores.at(static_cast<std::size_t>(indices[1]))));
+}
+
 // The scores each expression is read from, in Expression's order.
 constexpr std::array<std::span<const int>, 5> kScoresOf = {
     kBrowsUp, kSmile, kLipsPressed, kBrowsDown, kEyesNarrowed};
@@ -146,6 +158,11 @@ bool ExpressionTracker::PostureChangedWhileGated(bool away) {
   return false;
 }
 
+bool ExpressionTracker::EyesGated(const Scores& scores) const {
+  return Higher(kEyeLookDown, scores) > settings_.eye_look_down_threshold ||
+         Higher(kEyeBlink, scores) > settings_.eye_blink_threshold;
+}
+
 std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
                                                   const HeadRotation& pose,
                                                   std::int64_t timestamp_ms) {
@@ -180,8 +197,19 @@ std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
     return began;
   }
 
+  const bool eyes_gated = EyesGated(scores);
   for (std::size_t index = 0; index < states_.size(); ++index) {
     State& state = states_.at(index);
+    if (index == static_cast<std::size_t>(Expression::kEyesNarrowed) &&
+        eyes_gated) {
+      // A downward glance or a blink lifts eyeSquint the same way a real
+      // squint does (#140): skip this state's update entirely, as the
+      // pose gate skips every state while the head is away, so the glance
+      // or blink neither reports nor learns into the resting squint, and
+      // a hold that straddles it restarts once it ends.
+      state.risen_ms = kNotRisen;
+      continue;
+    }
     const double rise = Signal(index, scores) - state.level;
     const double starts_at =
         std::max(settings_.rise, settings_.spreads * state.spread);

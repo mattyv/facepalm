@@ -338,7 +338,10 @@ class Engine : public DaemonController, public DaemonPipeline {
                 .pose_range = config.expressions_pose_range,
                 .settle_ms = config.expressions_settle_ms,
                 .spreads = config.expressions_spreads,
-                .hold_ms = config.expressions_hold_ms},
+                .hold_ms = config.expressions_hold_ms,
+                .eye_look_down_threshold =
+                    config.expressions_eye_look_down_threshold,
+                .eye_blink_threshold = config.expressions_eye_blink_threshold},
             EyeGazeTracker::Settings{
                 .blink_threshold = config.eye_gaze_blink_threshold,
                 .median_ms = config.eye_gaze_median_ms,

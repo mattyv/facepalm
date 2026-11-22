@@ -518,6 +518,12 @@ expressions.pose_degrees = 10
 expressions.pose_range = 3
 # How long after the head was last away or moving it keeps pausing.
 expressions.settle_ms = 600
+# Narrowed eyes alone pauses further on a downward glance or a blink,
+# which lift the squint score the same way a real squint does (#140):
+# MediaPipe's eyeLookDown and eyeBlink scores, either eye, above which it
+# pauses. Provisional, pending a tuning recording.
+expressions.eye_look_down_threshold = 0.3
+expressions.eye_blink_threshold = 0.5
 # Looking away (#35): yaw or pitch this many degrees from the resting pose,
 # held this long. Nods and shakes are shorter than the hold.
 looking_away.enabled = true

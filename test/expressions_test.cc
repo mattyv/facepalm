@@ -27,6 +27,10 @@ constexpr int kBrowDownRight = 2;
 constexpr int kBrowInnerUp = 3;
 constexpr int kBrowOuterUpLeft = 4;
 constexpr int kBrowOuterUpRight = 5;
+constexpr int kEyeBlinkLeft = 9;
+constexpr int kEyeBlinkRight = 10;
+constexpr int kEyeLookDownLeft = 11;
+constexpr int kEyeLookDownRight = 12;
 constexpr int kEyeSquintLeft = 19;
 constexpr int kEyeSquintRight = 20;
 constexpr int kMouthShrugLower = 42;
@@ -69,12 +73,15 @@ class ExpressionsTest : public ::testing::Test {
   HeadRotation pose_{};
   std::int64_t now_ms_ = 1000;
   std::int64_t frame_ms_ = kFrameMs;
-  ExpressionTracker tracker_{ExpressionTracker::Settings{.rise = 0.05,
-                                                         .pose_degrees = 10,
-                                                         .pose_range = 3,
-                                                         .settle_ms = 600,
-                                                         .spreads = 3,
-                                                         .hold_ms = 200}};
+  ExpressionTracker tracker_{
+      ExpressionTracker::Settings{.rise = 0.05,
+                                  .pose_degrees = 10,
+                                  .pose_range = 3,
+                                  .settle_ms = 600,
+                                  .spreads = 3,
+                                  .hold_ms = 200,
+                                  .eye_look_down_threshold = 0.3,
+                                  .eye_blink_threshold = 0.5}};
   std::vector<Expression> reported_;
 };
 
@@ -319,6 +326,79 @@ TEST_F(ExpressionsTest, ReadsNarrowedEyesFromTheSquintScores) {
   Rest();
 
   Hold(1, {kEyeSquintLeft, kEyeSquintRight});
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kEyesNarrowed));
+}
+
+// Eye gate (#140): eyeSquint rises the same way on a downward glance or a
+// blink as it does on a real squint, so eyes_narrowed is also gated on
+// MediaPipe's own eyeLookDown and eyeBlink scores directly, not through
+// #137's composed gaze.
+
+// A glance down at the keyboard lifts eyeLookDown past its threshold and
+// eyeSquint along with it; the squint must not be read from that.
+TEST_F(ExpressionsTest, DoesNotReportASquintWhileLookingDown) {
+  Rest();
+
+  Hold(1,
+       {kEyeSquintLeft, kEyeSquintRight, kEyeLookDownLeft, kEyeLookDownRight},
+       0.4F);
+
+  EXPECT_THAT(reported_, IsEmpty());
+}
+
+// A blink lifts eyeBlink past its threshold and eyeSquint along with it;
+// the squint must not be read from that either.
+TEST_F(ExpressionsTest, DoesNotReportASquintWhileBlinking) {
+  Rest();
+
+  Hold(1, {kEyeSquintLeft, kEyeSquintRight, kEyeBlinkLeft, kEyeBlinkRight},
+       0.6F);
+
+  EXPECT_THAT(reported_, IsEmpty());
+}
+
+// The gate is read from one eye at a time: either eye's eyeLookDown or
+// eyeBlink alone, above its threshold, is enough.
+TEST_F(ExpressionsTest, EitherEyeAloneGatesTheSquint) {
+  Rest();
+  Hold(1, {kEyeSquintLeft, kEyeSquintRight, kEyeLookDownRight}, 0.4F);
+  EXPECT_THAT(reported_, IsEmpty());
+
+  Hold(1, {kEyeSquintLeft, kEyeSquintRight, kEyeBlinkLeft}, 0.6F);
+  EXPECT_THAT(reported_, IsEmpty());
+}
+
+// The gate is scoped to eyes_narrowed alone: a smile reported while looking
+// down still reports, since a glance down does not move the smile scores.
+TEST_F(ExpressionsTest, ALookDownDoesNotGateOtherExpressions) {
+  Rest();
+
+  Hold(1,
+       {kMouthSmileLeft, kMouthSmileRight, kEyeLookDownLeft, kEyeLookDownRight},
+       0.4F);
+
+  EXPECT_THAT(reported_, ElementsAre(Expression::kSmile));
+}
+
+// Once the glance ends, a squint already under way restarts its hold,
+// exactly as a rise that straddles the pose gate does (see
+// ARiseThatStraddlesMovementRestartsItsHold above): the partial hold from
+// before the glance does not combine with time after it ends to report
+// sooner than a fresh hold would.
+TEST_F(ExpressionsTest, ASquintThatStraddlesAGlanceDownRestartsItsHold) {
+  Rest();
+  Hold(0.1, {kEyeSquintLeft, kEyeSquintRight});  // One frame, well under the
+                                                 // 200 ms hold.
+  Hold(1,
+       {kEyeSquintLeft, kEyeSquintRight, kEyeLookDownLeft, kEyeLookDownRight},
+       0.4F);                                    // Gated throughout.
+  Hold(0.1, {kEyeSquintLeft, kEyeSquintRight});  // One more frame, alone.
+
+  EXPECT_THAT(reported_, IsEmpty());
+
+  Hold(0.3, {kEyeSquintLeft, kEyeSquintRight});  // Enough to cross the hold
+                                                 // from a fresh start.
 
   EXPECT_THAT(reported_, ElementsAre(Expression::kEyesNarrowed));
 }

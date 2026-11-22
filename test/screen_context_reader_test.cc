@@ -64,16 +64,19 @@ class ScreenContextReaderTest : public ::testing::Test {
   }
 
   std::int64_t now_ms_ = 1000;
-  ScreenContextReader reader_{ExpressionTracker::Settings{.rise = 0.06,
-                                                          .pose_degrees = 10,
-                                                          .pose_range = 3,
-                                                          .settle_ms = 600,
-                                                          .spreads = 3,
-                                                          .hold_ms = 200},
-                              EyeGazeTracker::Settings{.blink_threshold = 0.5,
-                                                       .median_ms = 250,
-                                                       .resting_ms = 3000,
-                                                       .gap_ms = 2000}};
+  ScreenContextReader reader_{
+      ExpressionTracker::Settings{.rise = 0.06,
+                                  .pose_degrees = 10,
+                                  .pose_range = 3,
+                                  .settle_ms = 600,
+                                  .spreads = 3,
+                                  .hold_ms = 200,
+                                  .eye_look_down_threshold = 0.3,
+                                  .eye_blink_threshold = 0.5},
+      EyeGazeTracker::Settings{.blink_threshold = 0.5,
+                               .median_ms = 250,
+                               .resting_ms = 3000,
+                               .gap_ms = 2000}};
   std::vector<Reaction> reactions_;
 };
 
