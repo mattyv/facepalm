@@ -31,3 +31,14 @@ Each file is missing until the user records it; this is deliberate (#139):
 an agent working this issue does not open the camera. `eyes_probe_test.cc`
 and `eyes_replay_test.cc` cover the line's format and its parsing with
 hand-written lines, so they do not need these recordings to pass.
+
+## What these files keep
+
+Each file is camera_probe's log trimmed to what the tests replay: the `eyes`
+lines (eye-look, blink, squint and wide scores, and the iris and eye-corner
+positions), `head_pose`, the `reaction` lines and the run's summary lines.
+The full expression scores (`blendshapes`), the landmark coordinates
+(`gesture_raw`) and the gesture model's probabilities (`gesture_probs`) are
+dropped; `scripts/record_eye_fixtures.sh` does this when it saves. Recorded
+on a Mac with one screen on 2026-11-22; the other-screen fixtures are a look
+off to the side.

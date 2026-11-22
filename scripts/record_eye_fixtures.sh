@@ -64,7 +64,10 @@ record_one() {
     fail "camera_probe failed recording ${name}"
   fi
   mkdir -p "${OUT_DIR}"
-  mv "${log}" "${OUT_DIR}/${name}.probe"
+  # Keep only what the tests replay: the eyes, head pose and reactions.
+  grep -v -E '^(blendshapes|gesture_raw|gesture_probs) ' "${log}" \
+    >"${OUT_DIR}/${name}.probe" || true
+  rm -f "${log}"
   echo "Saved ${OUT_DIR}/${name}.probe"
 }
 
