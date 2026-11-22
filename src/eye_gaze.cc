@@ -114,7 +114,11 @@ void EyeGazeTracker::Update(const std::optional<Face>& face,
 }
 
 std::optional<EyeSignal> EyeGazeTracker::Signal() const {
-  if (recent_.empty() || !resting_) {
+  // resting_ is set on the very same first non-blink frame that first
+  // makes recent_ non-empty (Update), and nothing ever clears resting_
+  // back to nullopt (unlike recent_, on a gap or a missing face), so
+  // recent_ being non-empty already implies resting_ is set.
+  if (recent_.empty()) {
     return std::nullopt;
   }
   std::vector<double> horizontal;
@@ -137,7 +141,11 @@ std::optional<EyeSignal> EyeGazeTracker::Signal() const {
 }
 
 std::optional<EyeSignal> EyeGazeTracker::Resting() const {
-  if (!resting_ || resting_samples_ < 1) {
+  // resting_samples_ is always set to 1 in the very same assignment that
+  // first sets resting_ (LearnResting), and never reset to 0 while
+  // resting_ stays set, so resting_ being set already implies
+  // resting_samples_ >= 1.
+  if (!resting_) {
     return std::nullopt;
   }
   // Settings::resting_ms must actually have elapsed since resting_started_ms_

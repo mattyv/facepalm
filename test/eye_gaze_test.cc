@@ -234,6 +234,25 @@ TEST_F(EyeGazeTrackerTest, AMissingFaceClearsTheMedianWindow) {
   EXPECT_FALSE(tracker_.Signal().has_value());
 }
 
+// A missing face clears have_last_ too (ScreenContextReader's own pose
+// does the same on a missing face), so Resting() reads as not yet
+// learned again until the next real frame, even though the level itself
+// (resting_) is still sitting there, untouched.
+TEST_F(EyeGazeTrackerTest,
+       AMissingFaceMakesRestingUnavailableUntilTheNextFrame) {
+  const Face centred = CentredFace();
+  for (std::int64_t ms = 0; ms <= 1000; ms += 100) {
+    tracker_.Update(centred, ms);
+  }
+  ASSERT_TRUE(tracker_.Resting().has_value());
+
+  tracker_.Update(std::nullopt, 1100);
+  EXPECT_FALSE(tracker_.Resting().has_value());
+
+  tracker_.Update(centred, 1200);
+  EXPECT_TRUE(tracker_.Resting().has_value());
+}
+
 // specs/README.md carries no entry for EstimateGains: it is a stateless
 // computation with no lifecycle of its own, tested directly, the way
 // src/screen_context.h's own CoarseGazeFrom is.
