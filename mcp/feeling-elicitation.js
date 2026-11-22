@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { feelingResult } from './feeling-result.js';
 import { OfflineError, UnapprovedError } from './session.js';
 
 // A feeling's name, as server.js checks it: the names come from the
@@ -8,6 +9,10 @@ const feelingName = z.string().regex(/^[a-z]{1,32}$/);
 // remembers (#129): server.js's own unknownInterpretationText, duplicated
 // here rather than shared, the way offlineText's own text already is.
 const unknownInterpretationText = 'Facepalm no longer recognizes that interpretation; it may be from before Facepalm last restarted.';
+// Appended for a call that never reached a definite yes or no from
+// Facepalm (#133): server.js's own readStandsText, duplicated here the
+// same way the error texts above already are.
+const readStandsText = " Facepalm's read stands.";
 
 // The same plain-word labels feeling-view.js (the MCP Apps card) uses, so
 // the question reads the same whichever way a host answers it.
@@ -36,7 +41,8 @@ export function registerFeelingElicitation(server, session, options = {}) {
       + 'Use this where the host supports elicitation but cannot render show_feeling_card\'s inline card (for example, the Claude Code terminal). '
       + 'Pass id, feeling and feelings exactly as wait_for_reaction returned them. '
       + 'This tool sends the person\'s pick to Facepalm itself; do not also call tell_feeling for the same interpretation. '
-      + 'A host with neither elicitation nor a widget: ask in your own words instead, then call tell_feeling yourself.',
+      + 'A host with neither elicitation nor a widget: ask in your own words instead, then call tell_feeling yourself. '
+      + 'Returns id, read, picked and feeling (the pick, once there is one, otherwise the read): the pick replaces the read for that beat, advisory either way.',
     inputSchema: { id: z.number().int().positive().safe(), feeling: feelingName, feelings: z.array(feelingName).min(1) },
   }, async ({ id, feeling, feelings }, { signal }) => {
     if (!feelings.includes(feeling)) {
@@ -45,8 +51,9 @@ export function registerFeelingElicitation(server, session, options = {}) {
     // #129: refused locally, before even asking the person, for an id
     // this session no longer remembers giving out.
     if (session.knowsInterpretation?.(id) === false) {
-      return { isError: true, content: [{ type: 'text', text: unknownInterpretationText }] };
+      return { isError: true, content: [{ type: 'text', text: unknownInterpretationText + readStandsText }] };
     }
+    const read = session.interpretation?.(id)?.read;
     let result;
     try {
       result = await elicitInput({
@@ -66,7 +73,9 @@ export function registerFeelingElicitation(server, session, options = {}) {
       }, { signal });
     } catch { return { isError: true, content: [{ type: 'text', text: 'Could not ask the person how they felt.' }] }; }
     if (result?.action !== 'accept') {
-      return { content: [{ type: 'text', text: 'The person did not pick a feeling.' }] };
+      // No pick: the read stands (#133), the same as if the person had
+      // never been asked at all.
+      return feelingResult({ id, read, text: 'The person did not pick a feeling.' });
     }
     // elicitInput validates an accepted response against requestedSchema
     // itself (the configured JSON Schema validator), so result.content.feeling
@@ -74,18 +83,29 @@ export function registerFeelingElicitation(server, session, options = {}) {
     const picked = result.content.feeling;
     try {
       const reply = await session.request(`feel ${id} ${picked}`, signal, 5000);
-      if (reply?.ok !== true) throw new Error('feeling refused');
-      return { content: [{ type: 'text', text: 'Feeling taken.' }] };
+      if (reply?.ok !== true) {
+        // Facepalm itself said no: the person still picked, so the pick
+        // still replaces the read for this beat (#133), even though it
+        // will not tune from it.
+        return feelingResult({
+          id, read, picked, isError: true,
+          text: 'Facepalm did not take that feeling; it will not tune from this pick.',
+        });
+      }
+      session.recordPick?.(id, picked);
+      return feelingResult({ id, read, picked, text: 'Feeling taken.' });
     } catch (error) {
       // #117: the session itself keeps retrying with a bounded backoff,
       // so this no longer tells anyone to restart the MCP server. #129:
-      // an unapproved client gets its own, more actionable, message.
+      // an unapproved client gets its own, more actionable, message. The
+      // exchange never reached a definite yes or no, so unlike Facepalm
+      // explicitly saying no above, the read stands (#133).
       const text = error instanceof UnapprovedError
         ? "Facepalm hasn't approved this client; turn Facepalm on from its menu, or run: facepalm-daemon approve mcp"
         : error instanceof OfflineError
           ? 'Facepalm is off; turn it on from its menu.'
           : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';
-      return { isError: true, content: [{ type: 'text', text }] };
+      return { isError: true, content: [{ type: 'text', text: text + readStandsText }] };
     }
   });
 }

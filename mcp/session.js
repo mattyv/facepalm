@@ -51,9 +51,15 @@ export class SocketSession {
     this.backoffMs = minBackoffMs;
     this.retryAt = 0;
     // The interpretation ids a delivery has told the caller about since
-    // the last time the link came up (#129): wait_for_reaction records
-    // one with noteInterpretation(), and tell_feeling/ask_feeling check
-    // knowsInterpretation() before ever sending `feel <id> ...`.
+    // the last time the link came up (#129), each now carrying its own
+    // read and the person's pick once there is one (#133): id -> {read,
+    // picked}. wait_for_reaction records one with noteInterpretation();
+    // tell_feeling and ask_feeling check knowsInterpretation() before
+    // ever sending `feel <id> ...`, read interpretation() for the read to
+    // return alongside a pick, and record a pick Facepalm actually took
+    // with recordPick(), so a later get_feeling call -- or a host that
+    // never surfaces a tool's own result back to the agent -- can still
+    // find out which feeling now stands for that beat.
     // Forgotten on every disconnect, since src/reaction_feed.cc's own
     // next_interpretation_ restarts at 1 on every daemon run: an id this
     // session was given before a lost link could be reissued, after
@@ -63,8 +69,11 @@ export class SocketSession {
     // than keeping them across a reconnect that might be a fresh daemon
     // run, is the side of that mistake this session can afford: a feeling
     // refused that would have been fine is a retry away, one taken for
-    // the wrong beat is not.
-    this.knownInterpretations = new Set();
+    // the wrong beat is not. #133 only changes what is stored per id, not
+    // when an id itself is known or forgotten, so specs/McpSocket.tla's
+    // Learn, Tell and GuardForgetsIdsOnLinkDown still cover this Map the
+    // same way they covered the Set it replaces (see specs/README.md).
+    this.knownInterpretations = new Map();
   }
 
   // Closes this session for good (specs/McpSocket.tla's Cancel): no later
@@ -100,14 +109,32 @@ export class SocketSession {
   }
 
   // wait_for_reaction calls this for an interpretation a delivery just
-  // gave the caller (#129); knowsInterpretation() is what tell_feeling
-  // and ask_feeling check before sending a feeling back for it.
-  noteInterpretation(id) {
-    this.knownInterpretations.add(id);
+  // gave the caller (#129), with `read`, that interpretation's own
+  // feeling, so interpretation() can return it later (#133);
+  // knowsInterpretation() is what tell_feeling and ask_feeling check
+  // before sending a feeling back for it.
+  noteInterpretation(id, read) {
+    this.knownInterpretations.set(id, { read, picked: undefined });
   }
 
   knowsInterpretation(id) {
     return this.knownInterpretations.has(id);
+  }
+
+  // The {read, picked} tell_feeling, ask_feeling and get_feeling read for
+  // this id (#133), or undefined for one this session does not know.
+  interpretation(id) {
+    return this.knownInterpretations.get(id);
+  }
+
+  // Recorded once Facepalm has actually taken a pick for this id (#133),
+  // so a later get_feeling call, or a host that never surfaces a tool's
+  // own result back to the agent, still finds it. Never called for a
+  // pick Facepalm refused, or one the person was asked about but never
+  // gave: those leave the read standing instead.
+  recordPick(id, picked) {
+    const entry = this.knownInterpretations.get(id);
+    if (entry !== undefined) entry.picked = picked;
   }
 
   // specs/McpSocket.tla's ReconnectSucceeds or ReconnectFails: dials once
