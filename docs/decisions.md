@@ -38,6 +38,64 @@ a line saying which entry replaced it.
     concurrency of their own, so `CLAUDE.md`'s spec-first rule does not
     apply here, as it did not for the pose gate (#46) either.
 
+## 2026-11-22: The camera preview now shows the readings and the latest beat's feeling, closing #134
+
+-   **Decision:** beside the frame, in the same private folder, under the same
+    rules (0600 file, 0700 folder, written only while the preview streams,
+    cleared when it stops): `UserPaths::preview_readings`, a plain text file
+    holding the readings as they happen (the same summary
+    `FeedClients::Deliver` already builds for the reaction feed, such as
+    "Gesture: nod"), each held for two seconds so it can be read
+    (`src/preview_readings.h`'s `PreviewReadings::kHoldMs`), and the latest
+    beat's feeling (such as "Last read: confused (question)"), which never
+    expires on its own. Both menus (`tools/menu/main.mm`, which adds a text
+    field below the preview image; `tools/menu/main_linux.cc`'s `CameraPreview`,
+    which adds a `QLabel` and its own `RefreshReadings` method so `Refresh`'s
+    own cognitive complexity stays down) poll it the same way they already
+    poll the frame.
+-   **Why:** the preview, a diagnostic for watching Facepalm read you live
+    (#61 item 15), showed only the frame; a person watching it had no way to
+    see what Facepalm made of what it saw, moment to moment, or what the
+    last beat was read as.
+-   **Mechanism:** `PreviewReadings` holds only the text -- the reading (with
+    its own hold, reset by a new one, cleared by an empty summary's own
+    "nothing recognized" case, which changes nothing) and the feeling line --
+    never deciding on its own whether the preview is streaming. Engine
+    publishes it through `PreviewLease::Publish`, the very same gate
+    `PreviewPublisher::OnFrame` already takes for the frame -- one mutex, one
+    method, called twice over -- once a frame, alongside the frame's own
+    publish, so a reading's hold expiring shows up even when nothing new has
+    happened. The latest beat's feeling reaches it through a new optional
+    `on_beat` callback on `ApprovedFeed`, fired with the `Feed::Interpretation`
+    a `Beat` resolves with, so Engine never has to reach into `ReactionFeed`
+    for it. `specs/PreviewLease.tla` covers the new file the way #131 covers
+    the frame: `readings_exists`, published by the new `PublishReadings`
+    action, shares `GuardPublishChecksStreaming` and `GuardStartClearsFrame`
+    with the frame's own `frame_exists` -- the same method, the same mutex --
+    and needs no `pending_publish` of its own, since nothing in
+    `src/preview_readings.h` ever releases the lock between building the line
+    and writing it. `NeverReadingsWithoutStreaming` holds; both existing
+    mutations of the two shared guards now break it too.
+-   **Rejected:** a second lease or mutex of the readings' own (the frame's
+    already serializes every writer that needs to agree with it on whether
+    the preview is streaming, so a second one would only risk disagreeing
+    with the first); modeling the readings' own write with a `pending_publish`
+    of its own (there is no encode-like delay between deciding what to write
+    and writing it, unlike the frame, so there is no gap for another
+    transition to land inside); expiring the latest beat's feeling the way a
+    reading expires (the issue asks for the *latest* beat's feeling, not a
+    momentary one).
+-   **Evidence:** [#134](https://github.com/mattyv/facepalm/issues/134);
+    Codex's draft on `fix/delivery-audit` (`5757ad1`, `97af5ac`) was read
+    first, against a `PreviewLease` design (`Ticket`/`PreviewOwner`,
+    `Publish(ticket, frame)`) that predates #114/#129's simpler
+    `CameraOpened`/`CameraClosed`/`Start`/`Stop`/`Publish(write)` one now on
+    `main`, so its own `PreviewLease` and `PreviewPublisher` changes do not
+    apply; its ideas worth keeping -- a `PreviewInfo`-like summary already
+    built once and reused, a short-lived "recent cue" hold, and a feeling
+    line beside it -- are what this decision ports onto the design actually
+    on `main`.
+
 ## 2026-11-22: camera_probe prints an eyes line, and a replay reader reads it back, for #139's fixtures
 
 -   **Decision (the eyes line's shape):** `camera_probe`'s new `eyes` line

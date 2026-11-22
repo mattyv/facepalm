@@ -61,6 +61,7 @@
 #include "src/feeling_store.h"
 #include "src/preview_lease.h"
 #include "src/preview_publisher.h"
+#include "src/preview_readings.h"
 #include "src/preview_request.h"
 #include "src/reaction_feed.h"
 #include "src/service.h"
@@ -227,6 +228,13 @@ std::string PreviewFramePath(
   return daemon_paths ? daemon_paths->preview_frame : std::string{};
 }
 
+// The preview's own text (#134): same emptiness rule as the frame and
+// the request above, when `--home` names no recognized directory.
+std::string PreviewReadingsPath(
+    const std::optional<facepalm::UserPaths>& daemon_paths) {
+  return daemon_paths ? daemon_paths->preview_readings : std::string{};
+}
+
 // Where a finished calibration session saves its profile (#116): empty,
 // the same as a daemon run with no resolvable --home, leaves calibration
 // unavailable, the way DaemonCalibration (src/daemon_calibration.h)
@@ -251,19 +259,29 @@ class Engine : public DaemonController, public DaemonPipeline {
          Post camera, Post inference, std::string status_path = {},
          std::string preview_request_path = {},
          std::string preview_frame_path = {},
+         std::string preview_readings_path = {},
          std::string calibration_store_path = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
         preview_request_path_(std::move(preview_request_path)),
         preview_frame_path_(std::move(preview_frame_path)),
-        // PreviewLease!streaming_changed (#114): once streaming stops,
-        // the last frame published is cleared, so it never answers the
-        // menu's next poll as though the camera were still being shown.
+        preview_readings_path_(std::move(preview_readings_path)),
+        // PreviewLease!streaming_changed (#114, #134): once streaming
+        // stops, the last frame published, and the readings text beside
+        // it, are cleared, so neither ever answers the menu's next poll
+        // as though the camera were still being shown.
         preview_lease_([this](bool streaming) {
-          if (!streaming && !preview_frame_path_.empty()) {
+          if (streaming) {
+            return;
+          }
+          if (!preview_frame_path_.empty()) {
             std::remove(preview_frame_path_.c_str());
           }
+          if (!preview_readings_path_.empty()) {
+            std::remove(preview_readings_path_.c_str());
+          }
+          preview_readings_.Clear();
         }),
         preview_publisher_(
             [this] {
@@ -315,6 +333,10 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this](std::string summary, std::string detail,
                    std::int64_t published_ms,
                    std::optional<std::string> context) {
+              // The camera preview's own readings (#134): the same
+              // summary FeedClients::Deliver already built for the
+              // reaction feed, held briefly in src/preview_readings.h.
+              preview_readings_.OnReading(summary, published_ms);
               feed_.React(std::move(summary), std::move(detail), published_ms,
                           std::move(context));
             },
@@ -345,6 +367,11 @@ class Engine : public DaemonController, public DaemonPipeline {
             },
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
+            },
+            // The camera preview's "latest beat's feeling" (#134).
+            [this](const Feed::Interpretation& interpretation) {
+              preview_readings_.OnBeat(interpretation.feeling,
+                                       interpretation.beat);
             }),
         // Calibration (#116): empty with no --home, like the preview
         // paths above. CalibrationSession takes its store by reference, so
@@ -376,6 +403,7 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this](const Frame& frame) {
               pipeline_.OnFrame(frame);
               preview_publisher_.OnFrame(frame);
+              PublishPreviewReadings();
             },
             [this] { camera_.OnSessionFailed(); },
             [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
@@ -387,6 +415,7 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this](const Frame& frame) {
               pipeline_.OnFrame(frame);
               preview_publisher_.OnFrame(frame);
+              PublishPreviewReadings();
             },
             [this] { camera_.OnSessionFailed(); },
             [this](const std::string& id) { camera_.OnDeviceDisconnected(id); },
@@ -424,6 +453,11 @@ class Engine : public DaemonController, public DaemonPipeline {
     PublishStatus(false);
     if (!preview_frame_path_.empty()) {
       std::remove(preview_frame_path_.c_str());
+    }
+    // PreviewLease!GuardStartClearsFrame (#129, #134): the readings text
+    // a previous crash left behind is removed the same way as the frame.
+    if (!preview_readings_path_.empty()) {
+      std::remove(preview_readings_path_.c_str());
     }
     calibration_.OnCameraLost();
     // #115 (Linux), #121 (macOS): every member capture_'s device-change
@@ -491,13 +525,32 @@ class Engine : public DaemonController, public DaemonPipeline {
     }
   }
 
+  // PreviewLease!PublishReadings (#134): called once a frame, alongside
+  // preview_publisher_'s own OnFrame, so the text beside the preview
+  // keeps up with a reading's own hold expiring even when nothing new
+  // has happened. Goes through preview_lease_.Publish, the very same
+  // gate the frame's own write already takes, so a camera close or
+  // Stop landing first is never undone by this call landing after it.
+  void PublishPreviewReadings() {
+    if (preview_readings_path_.empty()) {
+      return;
+    }
+    const std::int64_t now_ms = UnixMilliseconds();
+    preview_lease_.Publish([this, now_ms] {
+      return WriteFileAtomically(preview_readings_path_,
+                                 preview_readings_.Text(now_ms));
+    });
+  }
+
   Post control_queue_;
   std::string model_;
   Config config_;
   std::string preview_request_path_;
   std::string preview_frame_path_;
+  std::string preview_readings_path_;
   PreviewLease preview_lease_;
   PreviewPublisher preview_publisher_;
+  PreviewReadings preview_readings_;
   // Outlives any one camera session, unlike MakeFaceReaders' own readers
   // (#61 item 11); nullptr/nullopt with screen_context disabled.
   std::unique_ptr<ScreenSource> screen_source_;
@@ -697,6 +750,7 @@ int main(int argc, char** argv) {
                           options->status,
                           facepalm::PreviewRequestPath(daemon_paths),
                           facepalm::PreviewFramePath(daemon_paths),
+                          facepalm::PreviewReadingsPath(daemon_paths),
                           facepalm::CalibrationStorePath(daemon_paths));
   engine.Start();
   int signal_number = 0;
@@ -724,6 +778,7 @@ int main(int argc, char** argv) {
           dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)),
       options->status, facepalm::PreviewRequestPath(daemon_paths),
       facepalm::PreviewFramePath(daemon_paths),
+      facepalm::PreviewReadingsPath(daemon_paths),
       facepalm::CalibrationStorePath(daemon_paths));
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
