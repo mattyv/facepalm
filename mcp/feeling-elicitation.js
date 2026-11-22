@@ -81,7 +81,7 @@ export function registerFeelingElicitation(server, session, options = {}) {
       // so this no longer tells anyone to restart the MCP server. #129:
       // an unapproved client gets its own, more actionable, message.
       const text = error instanceof UnapprovedError
-        ? "Facepalm hasn't approved this client; approve it from Facepalm Settings."
+        ? "Facepalm hasn't approved this client; turn Facepalm on from its menu, or run: facepalm-daemon approve mcp"
         : error instanceof OfflineError
           ? 'Facepalm is off; turn it on from its menu.'
           : 'Facepalm did not take that feeling. It takes one per interpretation given to this session, within five minutes.';

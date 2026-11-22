@@ -74,7 +74,7 @@ test('an unapproved session says so, not that Facepalm is off, for both tools (#
   try {
     const waited = await client.callTool({ name: 'wait_for_reaction', arguments: {} });
     assert.equal(waited.isError, true);
-    assert.match(waited.content[0].text, /hasn't approved this client/);
+    assert.match(waited.content[0].text, /hasn't approved this client; turn Facepalm on from its menu, or run: facepalm-daemon approve mcp/);
     const told = await client.callTool({ name: 'tell_feeling', arguments: { id: 1, feeling: 'confused' } });
     assert.equal(told.isError, true);
     assert.match(told.content[0].text, /hasn't approved this client/);
