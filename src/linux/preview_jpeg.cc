@@ -29,6 +29,10 @@ struct JpegErrorHandler {
 };
 
 void OnJpegError(j_common_ptr cinfo) {
+  // libjpeg's error_exit must not return, and a C++ exception must not
+  // unwind through its C frames; longjmp back to EncodePreviewJpeg is the
+  // recovery its documentation (example.c) gives.
+  // NOLINTNEXTLINE(modernize-avoid-setjmp-longjmp)
   longjmp(reinterpret_cast<JpegErrorHandler*>(cinfo->err)->recovery, 1);
 }
 
@@ -44,12 +48,16 @@ std::optional<std::string> EncodePreviewJpeg(const Frame& frame,
   cinfo.err = jpeg_std_error(&error.base);
   error.base.error_exit = OnJpegError;
   unsigned char* buffer = nullptr;
+  // jpeg_mem_dest's own signature takes an unsigned long*.
+  // NOLINTNEXTLINE(google-runtime-int)
   unsigned long buffer_size = 0;
   std::optional<std::string> encoded;
   // setjmp/longjmp crosses jpeg_create_compress, so nothing after this
   // point may hold a C++ object libjpeg's longjmp would skip the
   // destructor of; `row` and `encoded` are both declared before it.
   std::vector<unsigned char> row(static_cast<std::size_t>(frame.width) * 3);
+  // The other half of OnJpegError's recovery (see there).
+  // NOLINTNEXTLINE(modernize-avoid-setjmp-longjmp)
   if (setjmp(error.recovery) != 0) {
     jpeg_destroy_compress(&cinfo);
     if (buffer != nullptr) {
@@ -77,18 +85,18 @@ std::optional<std::string> EncodePreviewJpeg(const Frame& frame,
   while (cinfo.next_scanline < cinfo.image_height) {
     const std::uint8_t* source =
         frame.bgra +
-        static_cast<std::size_t>(cinfo.next_scanline) * frame.bytes_per_row;
+        (static_cast<std::size_t>(cinfo.next_scanline) * frame.bytes_per_row);
     for (int x = 0; x < frame.width; ++x) {
       // BGRA to RGB: libjpeg's JCS_RGB has no alpha channel of its own.
-      row[static_cast<std::size_t>(x) * 3 + 0] =
-          source[static_cast<std::size_t>(x) * 4 + 2];
-      row[static_cast<std::size_t>(x) * 3 + 1] =
-          source[static_cast<std::size_t>(x) * 4 + 1];
-      row[static_cast<std::size_t>(x) * 3 + 2] =
-          source[static_cast<std::size_t>(x) * 4 + 0];
+      row[(static_cast<std::size_t>(x) * 3) + 0] =
+          source[(static_cast<std::size_t>(x) * 4) + 2];
+      row[(static_cast<std::size_t>(x) * 3) + 1] =
+          source[(static_cast<std::size_t>(x) * 4) + 1];
+      row[(static_cast<std::size_t>(x) * 3) + 2] =
+          source[(static_cast<std::size_t>(x) * 4) + 0];
     }
-    JSAMPROW rows[1] = {row.data()};
-    jpeg_write_scanlines(&cinfo, rows, 1);
+    JSAMPROW scanline = row.data();
+    jpeg_write_scanlines(&cinfo, &scanline, 1);
   }
   jpeg_finish_compress(&cinfo);
   encoded = std::string(reinterpret_cast<const char*>(buffer), buffer_size);

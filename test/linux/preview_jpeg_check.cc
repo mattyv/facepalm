@@ -43,16 +43,18 @@ TEST(PreviewJpegTest, EncodesARealDecodableJpeg) {
   jpeg_error_mgr error{};
   dinfo.err = jpeg_std_error(&error);
   jpeg_create_decompress(&dinfo);
+  // jpeg_mem_src's own signature takes an unsigned long size.
   jpeg_mem_src(&dinfo, reinterpret_cast<const unsigned char*>(encoded->data()),
-               static_cast<unsigned long>(encoded->size()));
+               static_cast<unsigned long>(  // NOLINT(google-runtime-int)
+                   encoded->size()));
   ASSERT_EQ(jpeg_read_header(&dinfo, TRUE), JPEG_HEADER_OK);
   EXPECT_EQ(dinfo.image_width, 2U);
   EXPECT_EQ(dinfo.image_height, 2U);
   jpeg_start_decompress(&dinfo);
   std::array<unsigned char, 6> row{};
-  JSAMPROW rows[1] = {row.data()};
+  JSAMPROW scanline = row.data();
   while (dinfo.output_scanline < dinfo.output_height) {
-    jpeg_read_scanlines(&dinfo, rows, 1);
+    jpeg_read_scanlines(&dinfo, &scanline, 1);
   }
   jpeg_finish_decompress(&dinfo);
   jpeg_destroy_decompress(&dinfo);
