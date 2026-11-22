@@ -83,6 +83,11 @@ class Service {
   struct Connection {
     std::unique_ptr<Stream> stream;
     std::optional<std::string> name;  // Once the client has said hello.
+    // Once Leave has disconnected this connection's name from the feed
+    // (Service!Closed): guards against a second Disconnect for the same
+    // name, from the watcher (Service!Noticed), Stop's BeginStop or
+    // Serve's own cleanup, whichever of them gets there first (#115).
+    bool left = false;
     bool done = false;
     std::thread thread;
   };
@@ -96,11 +101,19 @@ class Service {
   // Marks the service stopping, shuts every connection and disconnects every
   // named client; false when it already was.
   bool BeginStop();
+  // Disconnects `name` from the feed for `connection`, unless another
+  // caller already has (`connection.left`): the one Service!Closed effect
+  // on the feed, reached from the watcher's Service!Noticed, Stop's
+  // BeginStop or Serve's own cleanup, but given only once, so a name it
+  // frees is never disconnected a second time once another connection has
+  // taken it (#115).
+  void Leave(Connection& connection, const std::string& name);
   // The reply to one request from a named client; false to end.
-  bool Answer(const std::string& name, std::string_view line, Stream& stream);
+  bool Answer(Connection& connection, const std::string& name,
+              std::string_view line);
   // Runs `wait`, a wait or a beat, while watching for a hang-up.
   std::optional<Feed::Delivery> Watched(
-      const std::string& name, Stream& stream,
+      Connection& connection, const std::string& name,
       const std::function<std::optional<Feed::Delivery>()>& wait);
   // The reply to a calibrate request, whether or not calibration_ is set.
   std::string CalibrateReply(const protocol::CalibrateRequest& request);
