@@ -1,7 +1,9 @@
 #include "src/calibration.h"
 
+#include <atomic>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -323,6 +325,41 @@ TEST_F(UpdateIgnoredWithoutASessionTest, APoseWithNoSessionChangesNothing) {
   std::string error;
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("no calibration session is running"));
+}
+
+// #128: CalibrationSession's state -- step_, captured_, the running
+// sample, camera_up_ -- is shared between a connection's own thread
+// (Start, Next, Cancel), the inference queue (Update) and the daemon's
+// control queue (OnCameraLost, OnCameraUp), with no lock before this
+// fix's mutex_. Walking a full session while a second thread floods it
+// with poses the whole time shows a race between them under
+// ThreadSanitizer (CI's `thread-sanitizer` job) rather than only in
+// production under the right timing.
+TEST_F(CalibrationSessionTest,
+       UpdateRunsSafelyAlongsideStartAndNextOnAnotherThread) {
+  ON_CALL(store_, Save).WillByDefault(Return(true));
+  std::atomic<bool> stop{false};
+  std::thread frames([this, &stop] {
+    while (!stop.load()) {
+      session_.Update(Pose(1, 1));
+    }
+  });
+
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value()) << start_error;
+  bool done = false;
+  while (!done) {
+    std::string error;
+    const std::optional<CalibrationController::Status> status =
+        session_.Next(error);
+    if (!status.has_value()) {
+      continue;  // Not yet captured by the frames thread; retry.
+    }
+    done = status->done;
+  }
+
+  stop = true;
+  frames.join();
 }
 
 using NearestCalibratedScreenTest = ::testing::Test;

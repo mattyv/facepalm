@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -71,12 +72,13 @@ CalibrationSession::Status CalibrationSession::CurrentStatus() const {
 
 std::optional<CalibrationSession::Status> CalibrationSession::Start(
     int screens, std::string& error) {
+  const std::scoped_lock lock(mutex_);
   if (running_) {
     error = "a calibration session is already running";
     return std::nullopt;
   }
   if (!camera_up_) {
-    error = "the camera is not available";
+    error = std::string(kCameraUnavailableError);
     return std::nullopt;
   }
   if (screens < 1 || screens > kMaxScreens) {
@@ -95,6 +97,7 @@ std::optional<CalibrationSession::Status> CalibrationSession::Start(
 }
 
 void CalibrationSession::Update(const HeadRotation& pose) {
+  const std::scoped_lock lock(mutex_);
   if (!running_) {
     return;
   }
@@ -104,6 +107,7 @@ void CalibrationSession::Update(const HeadRotation& pose) {
 
 std::optional<CalibrationSession::Status> CalibrationSession::Next(
     std::string& error) {
+  const std::scoped_lock lock(mutex_);
   if (!running_) {
     error = "no calibration session is running";
     return std::nullopt;
@@ -145,6 +149,7 @@ std::optional<CalibrationSession::Status> CalibrationSession::Next(
 }
 
 bool CalibrationSession::Cancel(std::string& error) {
+  const std::scoped_lock lock(mutex_);
   if (!running_) {
     error = "no calibration session is running";
     return false;
@@ -158,6 +163,7 @@ bool CalibrationSession::Cancel(std::string& error) {
 }
 
 void CalibrationSession::OnCameraLost() {
+  const std::scoped_lock lock(mutex_);
   camera_up_ = false;
   if (running_) {
     // As Cancel, since there is nothing left to capture; the saved profile
@@ -170,7 +176,10 @@ void CalibrationSession::OnCameraLost() {
   }
 }
 
-void CalibrationSession::OnCameraUp() { camera_up_ = true; }
+void CalibrationSession::OnCameraUp() {
+  const std::scoped_lock lock(mutex_);
+  camera_up_ = true;
+}
 
 std::optional<std::size_t> NearestCalibratedScreen(
     const CalibrationProfile& profile, const HeadRotation& pose) {

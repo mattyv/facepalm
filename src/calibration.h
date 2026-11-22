@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -12,6 +13,14 @@
 #include "src/head_pose.h"
 
 namespace facepalm {
+
+// CalibrationController::Start's error, and CalibrationFlow::Start's
+// (src/calibration_flow.cc) one retryable reason, when the camera the
+// session's poses would come from is not open yet (#128): the one error
+// text both sides of that cold-start retry agree on, so a shared constant
+// replaces matching a literal twice.
+inline constexpr std::string_view kCameraUnavailableError =
+    "the camera is not available";
 
 // One target a calibration session walks the person through, after the
 // resting pose: a screen's centre, then its four corners (#36, #35).
@@ -101,7 +110,13 @@ class CalibrationController {
 // A short guided calibration session (#36, #35, item 12 of #61), following
 // specs/Calibration.tla: Start is its Start, Update its Capture, Next its
 // Advance or Finish, Cancel its Cancel, and OnCameraLost and OnCameraUp its
-// CameraLost and CameraBack.
+// CameraLost and CameraBack. Every one of those runs under one mutex
+// (#128): Start, Next and Cancel reach this from a connection's own
+// thread (src/service.cc), Update from the inference queue, and
+// OnCameraLost and OnCameraUp from the daemon's control queue
+// (src/daemon_calibration.h), with no other ordering between any two of
+// them, so each below is made the single indivisible step
+// specs/Calibration.tla's own actions already assume it is.
 class CalibrationSession : public CalibrationController {
  public:
   static constexpr int kMaxScreens = 8;
@@ -121,6 +136,7 @@ class CalibrationSession : public CalibrationController {
   }
   [[nodiscard]] Status CurrentStatus() const;
 
+  std::mutex mutex_;
   CalibrationStore& store_;
   bool running_ = false;
   bool camera_up_ = true;

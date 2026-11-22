@@ -115,8 +115,24 @@ class Service {
   std::optional<Feed::Delivery> Watched(
       Connection& connection, const std::string& name,
       const std::function<std::optional<Feed::Delivery>()>& wait);
-  // The reply to a calibrate request, whether or not calibration_ is set.
-  std::string CalibrateReply(const protocol::CalibrateRequest& request);
+  // The reply to a calibrate request from `connection`, whether or not
+  // calibration_ is set; ties the one live session to whichever
+  // connection's "calibrate start" opened it (#128), through
+  // calibration_owner_.
+  std::string CalibrateReply(Connection& connection,
+                             const protocol::CalibrateRequest& request);
+  // One case of CalibrateReply each, broken out so each is its switch
+  // case's one statement, with no block of its own for a case that
+  // always returns to leave unreachable.
+  std::string CalibrateStartReply(Connection& connection, int screens,
+                                  std::string& error);
+  std::string CalibrateNextReply(std::string& error);
+  std::string CalibrateCancelReply(std::string& error);
+  // `connection` going away cancels its own live calibration session, if
+  // it still has one nobody has finished or cancelled already (#128):
+  // the daemon's only remaining chance to learn a session like that has
+  // nobody left to answer for it, following specs/Service.tla's Closed.
+  void LeaveCalibration(Connection& connection);
 
   std::unique_ptr<Listener> listener_;
   Feed& feed_;
@@ -126,6 +142,12 @@ class Service {
   std::mutex mutex_;
   bool stopping_ = false;
   std::list<Connection> connections_;
+  // The connection whose "calibrate start" opened the one live
+  // calibration session, or nullptr; guarded by mutex_ (#128). Safe to
+  // compare by address: a Connection is only ever erased from
+  // connections_ once LeaveCalibration has already cleared this if it
+  // named that connection (Serve, below).
+  Connection* calibration_owner_ = nullptr;
   std::thread acceptor_;
 };
 
