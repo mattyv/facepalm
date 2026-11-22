@@ -18,6 +18,7 @@ using ::testing::_;
 using ::testing::InSequence;
 using ::testing::Return;
 using ::testing::StrictMock;
+using FrameRateRange = CaptureSession::FrameRateRange;
 using FrameRates = CaptureSession::FrameRates;
 using Permission = CaptureSession::Permission;
 
@@ -29,12 +30,13 @@ class MockCaptureSession : public CaptureSession {
   MOCK_METHOD(FrameRates, SupportedFrameRates, (), (override));
   MOCK_METHOD(bool, Start, (int, std::uint64_t), (override));
   MOCK_METHOD(void, Stop, (), (override));
+  MOCK_METHOD(std::vector<CameraDevice>, List, (), (override));
 };
 
 class MockCameraReports : public CameraReports {
  public:
   MOCK_METHOD(void, OnOpened, (), (override));
-  MOCK_METHOD(void, OnOpenFailed, (), (override));
+  MOCK_METHOD(void, OnOpenFailed, (OpenFailure), (override));
   MOCK_METHOD(void, OnClosed, (), (override));
   MOCK_METHOD(void, OnDeviceLost, (), (override));
   MOCK_METHOD(void, OnDeviceBack, (), (override));
@@ -78,7 +80,11 @@ const std::string& CameraId() {
   static const auto* const id = new std::string("built-in");
   return *id;
 }
-constexpr FrameRates kCameraRates{.min = 10, .max = 30};
+const FrameRates& CameraRates() {
+  static const auto* const rates =
+      new FrameRates{FrameRateRange{.min = 10, .max = 30}};
+  return *rates;
+}
 
 class SessionCameraTest : public testing::Test {
  protected:
@@ -95,7 +101,7 @@ class SessionCameraTest : public testing::Test {
   FakeQueue control_{"control", ran_on_};
   void SetUp() override {
     ON_CALL(capture_, SupportedFrameRates())
-        .WillByDefault(Return(kCameraRates));
+        .WillByDefault(Return(CameraRates()));
     EXPECT_CALL(capture_, SupportedFrameRates()).Times(testing::AnyNumber());
   }
 
@@ -129,7 +135,7 @@ TEST_F(SessionCameraTest, DoesNothingUntilItsQueueRuns) {
 TEST_F(SessionCameraTest, ReportsOpenFailedWhenPermissionIsDenied) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kDenied));
-  EXPECT_CALL(reports_, OnOpenFailed());
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kPermissionDenied));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -164,7 +170,7 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWhenTheUserRefuses) {
       .WillOnce([](const std::function<void(bool)>& done) {
         done(/*granted=*/false);
       });
-  EXPECT_CALL(reports_, OnOpenFailed());
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kPermissionDenied));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -173,7 +179,7 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWithoutACamera) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kGranted));
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(std::nullopt));
-  EXPECT_CALL(reports_, OnOpenFailed());
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kNoDevice));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -184,7 +190,7 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWhenTheSessionDoesNotRun) {
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(CameraId()));
   EXPECT_CALL(capture_, Start(kFramesPerSecond, kAttempt))
       .WillOnce(Return(false));
-  EXPECT_CALL(reports_, OnOpenFailed());
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kStartFailed));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -256,7 +262,7 @@ TEST_F(SessionCameraTest, ReportsAnyCameraConnectingBeforeOneIsPicked) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kGranted));
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(std::nullopt));
-  EXPECT_CALL(reports_, OnOpenFailed());
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kNoDevice));
   camera_.Open(kAttempt);
   Settle();
   EXPECT_CALL(reports_, OnDeviceBack());
@@ -344,7 +350,8 @@ int StartedRate(int wanted, FrameRates rates) {
   ON_CALL(capture, CurrentPermission())
       .WillByDefault(Return(Permission::kGranted));
   ON_CALL(capture, Configure()).WillByDefault(Return(CameraId()));
-  ON_CALL(capture, SupportedFrameRates()).WillByDefault(Return(rates));
+  ON_CALL(capture, SupportedFrameRates())
+      .WillByDefault(Return(std::move(rates)));
   int started = 0;
   ON_CALL(capture, Start(_, _))
       .WillByDefault([&started](int rate, std::uint64_t) {
@@ -359,19 +366,47 @@ int StartedRate(int wanted, FrameRates rates) {
 }
 
 TEST(SessionCameraFrameRateTest, AsksForTheRateWantedWhenSupported) {
-  EXPECT_EQ(StartedRate(20, {.min = 15, .max = 30}), 20);
+  EXPECT_EQ(StartedRate(20, {{.min = 15, .max = 30}}), 20);
 }
 
 TEST(SessionCameraFrameRateTest, AsksForTheSlowestSupportedWhenWantedIsSlower) {
-  EXPECT_EQ(StartedRate(5, {.min = 15, .max = 30}), 15);
+  EXPECT_EQ(StartedRate(5, {{.min = 15, .max = 30}}), 15);
 }
 
 TEST(SessionCameraFrameRateTest, AsksForTheFastestSupportedWhenWantedIsFaster) {
-  EXPECT_EQ(StartedRate(60, {.min = 15, .max = 30}), 30);
+  EXPECT_EQ(StartedRate(60, {{.min = 15, .max = 30}}), 30);
 }
 
 TEST(SessionCameraFrameRateTest, AsksForTheWantedRateWhenTheCameraReportsNone) {
   EXPECT_EQ(StartedRate(20, {}), 20);
+}
+
+// #43: two separate ranges, such as a camera with 15 and 30 fps presets,
+// are not the same as one collapsed range of 15 to 30. Asking for 20, which
+// neither range actually supports, picks the nearer range's own rate (15,
+// not the unsupported 20 the old collapsed min/max would have asked for).
+TEST(SessionCameraFrameRateTest, AsksForTheNearerOfTwoSeparateRanges) {
+  const FrameRates two_ranges{FrameRateRange{.min = 15, .max = 15},
+                              FrameRateRange{.min = 30, .max = 30}};
+  EXPECT_EQ(StartedRate(20, two_ranges), 15);
+  EXPECT_EQ(StartedRate(26, two_ranges), 30);
+}
+
+// A fixed rate such as 29.97 fps rounds outward to a range whose min is
+// below its max, such as {29, 30}; the old collapsed form could instead
+// produce {ceil 30, floor 29}, breaking std::clamp's ordered-bounds
+// precondition (#43).
+TEST(SessionCameraFrameRateTest, HandlesARangeRoundedOutwardFromAFixedRate) {
+  EXPECT_EQ(StartedRate(15, {{.min = 29, .max = 30}}), 29);
+  EXPECT_EQ(StartedRate(60, {{.min = 29, .max = 30}}), 30);
+}
+
+TEST(SessionCameraFrameRateTest, PicksTheClosestAmongSeveralRanges) {
+  const FrameRates ranges{FrameRateRange{.min = 5, .max = 10},
+                          FrameRateRange{.min = 40, .max = 60},
+                          FrameRateRange{.min = 20, .max = 25}};
+  EXPECT_EQ(StartedRate(22, ranges), 22);
+  EXPECT_EQ(StartedRate(30, ranges), 25);
 }
 
 }  // namespace

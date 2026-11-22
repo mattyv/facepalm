@@ -361,6 +361,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
   find_library(XRANDR_LIBRARY NAMES Xrandr REQUIRED)
   facepalm_unit(mediapipe_c_shim DIRECTORY linux)
   target_include_directories(mediapipe_c_shim SYSTEM PUBLIC ${FACEPALM_MEDIAPIPE_C_INCLUDE})
+  # Watches /dev for a camera connecting or disconnecting (#111), the
+  # callbacks V4l2Session never received before; a seam of its own, so
+  # V4l2SessionTest fakes it rather than linking against this unit at all.
+  facepalm_unit(v4l2_hotplug DIRECTORY linux)
+  target_include_directories(v4l2_hotplug SYSTEM PUBLIC ${V4L2_INCLUDE_DIRECTORY})
+  target_link_libraries(v4l2_hotplug PUBLIC Threads::Threads)
   facepalm_unit(v4l2_session DIRECTORY linux)
   target_include_directories(v4l2_session SYSTEM PUBLIC ${V4L2_INCLUDE_DIRECTORY})
   target_link_libraries(v4l2_session PUBLIC Threads::Threads)
@@ -378,7 +384,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     daemon_control daemon_options daemon_status face_readers feed_clients user_paths
     camera_controller config frame_pipeline face_analyzer expression_reader gesture_reader
     look_away_reader screen_context_reader screen_context_reporter screen_context
-    reaction_feed feeling_store service session_camera unix_socket v4l2_session
+    reaction_feed feeling_store service session_camera unix_socket v4l2_hotplug v4l2_session
     face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
     ${X11_LIBRARIES} ${XRANDR_LIBRARY} preview_lease preview_publisher)
   target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})

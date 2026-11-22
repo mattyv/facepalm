@@ -28,19 +28,36 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/frame.h"
+#include "src/linux/v4l2_hotplug.h"
 #include "src/session_camera.h"
 
 namespace facepalm {
 namespace {
 
 using ::testing::_;
+using ::testing::AnyNumber;
 using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::Gt;
 using ::testing::InSequence;
+using ::testing::IsEmpty;
+using ::testing::NiceMock;
 using ::testing::Optional;
 using ::testing::Return;
+using ::testing::SizeIs;
 using ::testing::StrEq;
+using ::testing::StrictMock;
+
+// HotplugMonitor is V4l2Session's own collaborator for #111; this fakes it,
+// so V4l2SessionTest needs no real inotify watch. v4l2_hotplug_test.cc holds
+// V4l2InotifyMonitor, the real one, to the same interface.
+class MockHotplugMonitor : public HotplugMonitor {
+ public:
+  MOCK_METHOD(void, Start,
+              (std::function<void(std::string)> on_disconnected,
+               std::function<void(std::string)> on_connected),
+              (override));
+};
 
 // The libv4l2 calls and the poll the session makes, as a mock. v4l2_ioctl's
 // two requests get a method each.
@@ -48,6 +65,7 @@ class MockV4l2 {
  public:
   MOCK_METHOD(int, Open, (const char* file, int flags));
   MOCK_METHOD(int, Close, (int fd));
+  MOCK_METHOD(int, QueryCap, (int fd, v4l2_capability* cap));
   MOCK_METHOD(int, SetFormat, (int fd, v4l2_format* format));
   MOCK_METHOD(int, SetRate, (int fd, v4l2_streamparm* rate));
   MOCK_METHOD(ssize_t, Read, (int fd, void* buffer, std::size_t size));
@@ -56,7 +74,11 @@ class MockV4l2 {
 
 MockV4l2* v4l2 = nullptr;
 
-constexpr const char* kDevice = "/dev/video9";
+// Probed first, so the device-choice tests below do not have to mock every
+// node V4l2Session tries before it (#13, item 10 of #61).
+constexpr const char* kDevice = "/dev/video0";
+constexpr const char* kBuiltInCard = "FaceTime HD Camera";
+constexpr const char* kBuiltInBusInfo = "platform:soc-cam0";
 constexpr int kFd = 7;
 constexpr int kFramesPerSecond = 15;
 constexpr std::uint64_t kAttempt = 4;
@@ -104,6 +126,22 @@ auto Settles(v4l2_pix_format pix) {
   };
 }
 
+// Answers VIDIOC_QUERYCAP with `card` and `bus_info` (item 10 of #61), as a
+// driver reports a node's identity.
+auto Capability(std::string card, std::string bus_info) {
+  return [card = std::move(card), bus_info = std::move(bus_info)](
+             int, v4l2_capability* cap) {
+    std::memset(cap, 0, sizeof(*cap));
+    std::memcpy(cap->card, card.c_str(), card.size());
+    std::memcpy(cap->bus_info, bus_info.c_str(), bus_info.size());
+    return 0;
+  };
+}
+
+// The built-in camera's own capabilities, as most tests' one device
+// reports them.
+auto BuiltInCapability() { return Capability(kBuiltInCard, kBuiltInBusInfo); }
+
 // Fills the read buffer with `bytes` and returns how many there were. A
 // failed allocation would end the test run, which is fine.
 auto Delivers(const std::vector<std::uint8_t>& bytes) {
@@ -146,7 +184,7 @@ class V4l2SessionTest : public ::testing::Test {
   void SetUp() override {
     v4l2 = &mock_;
     session_ = std::make_unique<V4l2Session>(
-        kDevice,
+        /*device_id=*/"",
         [this](const Frame& frame) {
           const std::size_t size =
               frame.bytes_per_row * static_cast<std::size_t>(frame.height);
@@ -164,7 +202,8 @@ class V4l2SessionTest : public ::testing::Test {
           const std::scoped_lock lock(mutex_);
           ++failures_;
           changed_.notify_all();
-        });
+        },
+        [](const std::string&) {}, [](const std::string&) {}, hotplug_);
   }
 
   void TearDown() override {
@@ -172,11 +211,14 @@ class V4l2SessionTest : public ::testing::Test {
     v4l2 = nullptr;
   }
 
-  // Configures the session over kFd, which is closed when it stops.
+  // Configures the session over kFd, which is closed when it stops. The
+  // default choice (an empty device_id, #13) matches the first node
+  // probed, kDevice, which reports the built-in camera's capabilities.
   void Configured() {
     EXPECT_CALL(mock_, Open(StrEq(kDevice), _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(BuiltInCapability());
     EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
-    ASSERT_THAT(session_->Configure(), Optional(std::string(kDevice)));
+    ASSERT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
   }
 
   // Expects the driver to settle on `pix` and take any frame rate.
@@ -206,12 +248,47 @@ class V4l2SessionTest : public ::testing::Test {
   }
 
   ::testing::StrictMock<MockV4l2> mock_;
+  // Nice, not strict: almost no test here cares that V4l2Session asks it to
+  // watch (#111); WiresHotplugCallbacksToTheGivenOnes below does, with its
+  // own strict instance.
+  NiceMock<MockHotplugMonitor> hotplug_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::vector<Received> frames_;
   int failures_ = 0;
   std::unique_ptr<V4l2Session> session_;
 };
+
+// specs/CameraLifecycle.tla's DeviceLost, DeviceBack, OtherDeviceLost and
+// OtherDeviceBack (#111): V4l2Session asks the given HotplugMonitor to
+// start watching with exactly the callbacks it was given, the way
+// AvFoundationSession wires AVFoundation's own notifications straight to
+// SessionCamera's OnDeviceDisconnected/OnDeviceConnected.
+TEST_F(V4l2SessionTest, WiresHotplugCallbacksToTheGivenOnes) {
+  StrictMock<MockHotplugMonitor> hotplug;
+  std::function<void(std::string)> started_disconnected;
+  std::function<void(std::string)> started_connected;
+  EXPECT_CALL(hotplug, Start(_, _))
+      .WillOnce([&](std::function<void(std::string)> on_disconnected,
+                    std::function<void(std::string)> on_connected) {
+        started_disconnected = std::move(on_disconnected);
+        started_connected = std::move(on_connected);
+      });
+  std::optional<std::string> disconnected;
+  std::optional<std::string> connected;
+
+  const V4l2Session session(
+      /*device_id=*/"", [](const Frame&) {}, [] {},
+      [&](const std::string& id) { disconnected = id; },
+      [&](const std::string& id) { connected = id; }, hotplug);
+
+  ASSERT_TRUE(started_disconnected);
+  ASSERT_TRUE(started_connected);
+  started_disconnected("lost");
+  started_connected("back");
+  EXPECT_THAT(disconnected, Optional(std::string("lost")));
+  EXPECT_THAT(connected, Optional(std::string("back")));
+}
 
 TEST_F(V4l2SessionTest, PermissionIsLeftToTheDevice) {
   EXPECT_THAT(session_->CurrentPermission(),
@@ -222,37 +299,137 @@ TEST_F(V4l2SessionTest, PermissionIsLeftToTheDevice) {
 }
 
 TEST_F(V4l2SessionTest, ReportsNoFrameRates) {
-  const auto rates = session_->SupportedFrameRates();
-  EXPECT_THAT(rates.min, Eq(0));
-  EXPECT_THAT(rates.max, Eq(0));
+  EXPECT_THAT(session_->SupportedFrameRates(), IsEmpty());
 }
 
 TEST_F(V4l2SessionTest, ConfigureOpensTheDeviceWithoutBlocking) {
   EXPECT_CALL(mock_, Open(StrEq(kDevice), O_RDWR | O_NONBLOCK | O_CLOEXEC))
       .WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(BuiltInCapability());
   EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
 
-  EXPECT_THAT(session_->Configure(), Optional(std::string(kDevice)));
+  EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
 }
 
-TEST_F(V4l2SessionTest, ConfigureGivesNothingWhenTheDeviceDoesNotOpen) {
-  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(-1));
+TEST_F(V4l2SessionTest, ConfigureGivesNothingWhenNoNodeOpens) {
+  EXPECT_CALL(mock_, Open(_, _)).Times(AnyNumber()).WillRepeatedly(Return(-1));
 
   EXPECT_THAT(session_->Configure(), Eq(std::nullopt));
   EXPECT_FALSE(session_->Start(kFramesPerSecond, kAttempt));
+}
+
+TEST_F(V4l2SessionTest, ConfigureGivesNothingWhenNoNodeMatchesTheChoice) {
+  session_ = std::make_unique<V4l2Session>(
+      "usb-0000:00:14.0-1", [](const Frame&) {}, [] {},
+      [](const std::string&) {}, [](const std::string&) {}, hotplug_);
+  // The remaining three nodes (kProbedNodes in v4l2_session.cc) do not
+  // open at all; declared first, so the more specific expectation below
+  // matches the first call. Without RetiresOnSaturation, GoogleMock
+  // never falls through to this one once the other is satisfied: a
+  // saturated expectation with no explicit retirement stays active, and
+  // a further matching call over-saturates it instead.
+  EXPECT_CALL(mock_, Open(_, _)).Times(3).WillRepeatedly(Return(-1));
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(BuiltInCapability());
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+
+  EXPECT_THAT(session_->Configure(), Eq(std::nullopt));
+}
+
+TEST_F(V4l2SessionTest, ConfigureSkipsANodeThatDoesNotQuery) {
+  {
+    InSequence order;
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(Return(-1));
+    EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd + 1));
+    EXPECT_CALL(mock_, QueryCap(kFd + 1, _)).WillOnce(BuiltInCapability());
+  }
+  // The match stays open until the session stops, in TearDown.
+  EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
+
+  EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
+}
+
+TEST_F(V4l2SessionTest, ConfigureMatchesTheChosenDeviceAmongSeveral) {
+  session_ = std::make_unique<V4l2Session>(
+      "usb-0000:00:14.0-1", [](const Frame&) {}, [] {},
+      [](const std::string&) {}, [](const std::string&) {}, hotplug_);
+  {
+    InSequence order;
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(BuiltInCapability());
+    EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd + 1));
+    EXPECT_CALL(mock_, QueryCap(kFd + 1, _))
+        .WillOnce(Capability("USB Camera", "usb-0000:00:14.0-1"));
+  }
+  // The match stays open until the session stops, in TearDown.
+  EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
+
+  EXPECT_THAT(session_->Configure(),
+              Optional(std::string("usb-0000:00:14.0-1")));
 }
 
 TEST_F(V4l2SessionTest, ConfiguringAgainClosesTheDeviceFirst) {
   {
     InSequence order;
     EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(BuiltInCapability());
     EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
     EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd + 1));
+    EXPECT_CALL(mock_, QueryCap(kFd + 1, _)).WillOnce(BuiltInCapability());
     EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
   }
 
-  EXPECT_THAT(session_->Configure(), Optional(std::string(kDevice)));
-  EXPECT_THAT(session_->Configure(), Optional(std::string(kDevice)));
+  EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
+  EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
+}
+
+TEST_F(V4l2SessionTest, ListsEveryDiscoverableDevice) {
+  {
+    InSequence order;
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(BuiltInCapability());
+    EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(-1));
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd + 1));
+    EXPECT_CALL(mock_, QueryCap(kFd + 1, _))
+        .WillOnce(Capability("USB Camera", "usb-0000:00:14.0-1"));
+    EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(-1));
+  }
+
+  const std::vector<CameraDevice> devices = session_->List();
+  ASSERT_THAT(devices, SizeIs(2));
+  EXPECT_THAT(devices[0].id, Eq(kBuiltInBusInfo));
+  EXPECT_THAT(devices[0].name, Eq(kBuiltInCard));
+  EXPECT_TRUE(devices[0].built_in);
+  EXPECT_THAT(devices[1].id, Eq("usb-0000:00:14.0-1"));
+  EXPECT_THAT(devices[1].name, Eq("USB Camera"));
+  EXPECT_FALSE(devices[1].built_in);
+}
+
+TEST_F(V4l2SessionTest, ListsNothingWhenNoNodeOpens) {
+  EXPECT_CALL(mock_, Open(_, _)).Times(AnyNumber()).WillRepeatedly(Return(-1));
+
+  EXPECT_THAT(session_->List(), IsEmpty());
+}
+
+TEST_F(V4l2SessionTest, ListSkipsANodeThatDoesNotQuery) {
+  // Declared first (see ConfigureGivesNothingWhenNoNodeMatchesTheChoice),
+  // so the sequenced block below matches the first call, then retires
+  // rather than over-saturating on the later calls this one should
+  // handle.
+  EXPECT_CALL(mock_, Open(_, _)).Times(3).WillRepeatedly(Return(-1));
+  {
+    InSequence order;
+    EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd)).RetiresOnSaturation();
+    EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(Return(-1));
+    EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  }
+
+  EXPECT_THAT(session_->List(), IsEmpty());
 }
 
 TEST_F(V4l2SessionTest, StartFailsWithoutADevice) {
@@ -574,6 +751,9 @@ int v4l2_ioctl(int fd, unsigned long int request, ...) {
     case VIDIOC_S_PARM:
       return facepalm::v4l2->SetRate(fd,
                                      static_cast<v4l2_streamparm*>(argument));
+    case VIDIOC_QUERYCAP:
+      return facepalm::v4l2->QueryCap(fd,
+                                      static_cast<v4l2_capability*>(argument));
     default:
       ADD_FAILURE() << "unexpected ioctl " << request;
       return -1;

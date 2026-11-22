@@ -128,5 +128,15 @@ TEST(DaemonOptionsTest, ApprovingTakesANameAndOnlyTheClientsDirectory) {
   EXPECT_FALSE(Parse({}));
 }
 
+// item 10 of #61, #13: no running daemon or approval needed.
+TEST(DaemonOptionsTest, CamerasTakesNoOptions) {
+  const DaemonOptions options = Parsed({"cameras"}, Home());
+  EXPECT_THAT(options.command, Eq(Command::kCameras));
+
+  EXPECT_FALSE(Parse({"cameras"}, std::nullopt));
+  EXPECT_FALSE(Parse({"cameras", "--clients", "d"}));
+  EXPECT_FALSE(Parse({"cameras", "extra"}));
+}
+
 }  // namespace
 }  // namespace facepalm

@@ -59,12 +59,15 @@ void DaemonControl::OnOpened() {
 }
 
 // specs/DaemonAdmission.tla, OnOpenFailed: a camera that was opening and
-// failed stops the daemon as a failure (GuardOpenFailStops). One that
+// found no device to use stops the daemon as a failure (GuardOpenFailStops),
+// as before. A denied permission or a failed start (#52, item 10 of #61) is
+// not: CameraController's own retry, scheduled when it reported the
+// failure, runs this process, so the daemon stays up for it. One that
 // already began closing reports Closed next.
-void DaemonControl::OnOpenFailed() {
+void DaemonControl::OnOpenFailed(OpenFailure reason) {
   const bool opening = controller_.State() == CameraController::State::kOpening;
-  controller_.OpenFailed();
-  if (opening) {
+  controller_.OpenFailed(reason);
+  if (opening && reason == OpenFailure::kNoDevice) {
     Fail();
   }
 }

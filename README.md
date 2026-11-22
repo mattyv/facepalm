@@ -163,15 +163,28 @@ made since, each with its reason, are in the
     the one-pass copy from the camera's padded BGRA rows to the packed RGBA
     MediaPipe accepts.
 -   `src/camera_controller`: decides when the camera may be on, following
-    `specs/CameraLifecycle.tla`, with the camera behind an interface.
+    `specs/CameraLifecycle.tla`, with the camera behind an interface. A
+    denied permission or a failed start (#52, item 10 of #61) schedules its
+    own retry, through an injected `RetrySchedule`, rather than waiting for
+    a device-connected report the way a missing camera does.
 -   `src/session_camera`: a camera over one OS's capture API: permission,
     starting, stopping and a lost device, mapped onto the spec's actions, at
-    the supported frame rate nearest the one wanted. Unit-tested with the API
-    mocked.
+    the rate nearest the one wanted from the device's own frame-rate ranges,
+    kept apart rather than collapsed into one minimum and maximum (#43).
+    Unit-tested with the API mocked.
+-   `src/camera_directory`: `CameraDevice{id, name, built_in}`, what
+    `CaptureSession::List` reports for choosing the camera (item 10 of #61,
+    #13): `id` is stable across a reboot, and the protocol's `cameras` line
+    answers with it.
 -   `src/macos/avfoundation_session`: that capture API on macOS, through
-    AVFoundation, following MediaPipe's `MPPCameraInputSource`. It is the
-    AVFoundation calls alone, and needs a real camera, so `camera_probe` is
-    its smoke test; it has no unit tests or coverage floor.
+    AVFoundation, following MediaPipe's `MPPCameraInputSource`. `Configure`
+    resolves `Config`'s `camera.device_id`: blank for the first built-in
+    camera an `AVCaptureDeviceDiscoverySession` finds, by its own device
+    type, never whatever `+defaultDeviceWithMediaType:` hands back, which
+    could be a Continuity Camera; a chosen id is matched the same way,
+    across every discoverable type. It is the AVFoundation calls alone, and
+    needs a real camera, so `camera_probe` is its smoke test; it has no
+    unit tests or coverage floor.
 -   `specs/CameraLifecycle.tla`: when the camera may be on, checked with TLC
     before any capture code. See `specs/README.md`.
 -   `specs/FramePipeline.tla`: how a captured frame reaches the face model,
@@ -377,6 +390,12 @@ with the line named.
 ```text
 # The camera's frame rate: 15 by default, 30 for quicker gestures.
 camera.frames_per_second = 15
+# Which camera to use, by its stable ID (item 10 of #61, #13): blank for
+# the default, the built-in camera, never a Continuity Camera or other
+# external device chosen silently. The protocol's `cameras` line lists
+# every camera's id, name and whether it is built in; a changed choice
+# takes effect on the daemon's next start.
+camera.device_id =
 # The head's yaw, pitch and roll on every frame.
 head_pose.enabled = true
 # Nods, shakes, tilts, turns and up/downs: how sure the model must be of

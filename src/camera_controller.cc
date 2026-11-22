@@ -1,13 +1,18 @@
 #include "src/camera_controller.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <utility>
 
 namespace facepalm {
 
 CameraController::CameraController(Camera& camera, Clients& clients,
-                                   bool consent)
-    : camera_(camera), clients_(clients), consent_(consent) {}
+                                   bool consent, RetrySchedule schedule_retry)
+    : camera_(camera),
+      clients_(clients),
+      consent_(consent),
+      schedule_retry_(std::move(schedule_retry)) {}
 
 // specs/CameraLifecycle.tla, GrantConsent.
 void CameraController::GrantConsent() {
@@ -51,14 +56,29 @@ void CameraController::OnOpened() {
   }
 }
 
-// specs/CameraLifecycle.tla, OpenFailed. The OS refused the device, so it
-// stays unusable until it comes back.
-void CameraController::OnOpenFailed() {
+// specs/CameraLifecycle.tla, Start's failure branches. With no device, it
+// stays unusable until DeviceBack, as before. A denied permission or a
+// failed start (#52) blocks it instead, cleared only by Retry: unlike the
+// device cause, nothing the OS reports on its own clears this one.
+void CameraController::OnOpenFailed(OpenFailure reason) {
   if (state_ != State::kOpening) {
     return;
   }
   state_ = State::kClosed;
-  device_ = false;
+  if (reason == OpenFailure::kNoDevice) {
+    device_ = false;
+    return;
+  }
+  blocked_ = true;
+  schedule_retry_([this] { Retry(); });
+}
+
+// specs/CameraLifecycle.tla, Retry, with GuardRetries (#52). Nothing but
+// Retry clears `blocked_`, and OpenIfWanted will not open while it holds,
+// so the camera is still closed and blocked when a scheduled retry runs.
+void CameraController::Retry() {
+  blocked_ = false;
+  OpenIfWanted();
 }
 
 // specs/CameraLifecycle.tla, Closed.
@@ -109,10 +129,11 @@ void CameraController::OnReaction(std::uint64_t ticket,
 }
 
 // specs/CameraLifecycle.tla, Open, with GuardOpenNeedsConsent. Opening as
-// soon as it is wanted is what WF_vars(Open) asks.
+// soon as it is wanted is what WF_vars(Open) asks; `blocked_` (#52) holds
+// it back the same way `device_` does, until Retry clears it.
 void CameraController::OpenIfWanted() {
   if (state_ != State::kClosed || !consent_ || subscribers_.empty() ||
-      !device_) {
+      !device_ || blocked_) {
     return;
   }
   state_ = State::kOpening;

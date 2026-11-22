@@ -10,6 +10,9 @@
 namespace facepalm {
 struct MenuSettings {
   int frames_per_second = Config::kDefaultFramesPerSecond;
+  // The chosen camera's stable ID (item 10 of #61, #13), from the
+  // `cameras` protocol line; blank for the default, the built-in camera.
+  std::string camera_device_id;
   bool gestures_enabled = true;
   bool expressions_enabled = true;
   std::string gesture_confidence = "0.5";

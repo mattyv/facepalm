@@ -9,7 +9,9 @@
 #include <thread>
 #include <utility>
 #include <variant>
+#include <vector>
 
+#include "src/camera_directory.h"
 #include "src/feed.h"
 #include "src/protocol.h"
 
@@ -27,11 +29,13 @@ std::string CalibrationStatusOrError(
 }  // namespace
 
 Service::Service(std::unique_ptr<Listener> listener, Feed& feed,
-                 Approvals& approvals, CalibrationController* calibration)
+                 Approvals& approvals, CalibrationController* calibration,
+                 CameraDirectory* cameras)
     : listener_(std::move(listener)),
       feed_(feed),
       approvals_(approvals),
-      calibration_(calibration) {}
+      calibration_(calibration),
+      cameras_(cameras) {}
 
 Service::~Service() { Stop(); }
 
@@ -172,6 +176,13 @@ bool Service::Answer(const std::string& name, std::string_view line,
   if (const auto* calibrate =
           std::get_if<protocol::CalibrateRequest>(&*request)) {
     stream.WriteLine(CalibrateReply(*calibrate));
+    return true;
+  }
+  // The cameras available now (item 10 of #61, #13), independent of the
+  // one in use; no cameras when the service is not given a directory.
+  if (std::holds_alternative<protocol::CamerasRequest>(*request)) {
+    stream.WriteLine(protocol::CamerasJson(
+        cameras_ == nullptr ? std::vector<CameraDevice>() : cameras_->List()));
     return true;
   }
   // Service!Wait and Service!Answered, for a wait or a beat

@@ -23,7 +23,7 @@ class MockDaemonController : public DaemonController {
   MOCK_METHOD(void, Leave, (), (override));
   MOCK_METHOD(void, Revoke, (), (override));
   MOCK_METHOD(void, Opened, (), (override));
-  MOCK_METHOD(void, OpenFailed, (), (override));
+  MOCK_METHOD(void, OpenFailed, (OpenFailure), (override));
   MOCK_METHOD(void, Closed, (), (override));
   MOCK_METHOD(void, DeviceLost, (), (override));
   MOCK_METHOD(void, DeviceBack, (), (override));
@@ -177,10 +177,10 @@ TEST_F(StopEndsTest, ACameraThatFailsToOpenStopsTheDaemonAsAFailure) {
   EXPECT_CALL(controller_, State)
       .WillOnce(Return(State::kOpening))
       .WillOnce(Return(State::kClosed));
-  EXPECT_CALL(controller_, OpenFailed);
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kNoDevice));
   EXPECT_CALL(controller_, Revoke);
   ExpectRetirement();
-  daemon_.OnOpenFailed();
+  daemon_.OnOpenFailed(OpenFailure::kNoDevice);
   EXPECT_TRUE(service_stopped_);
 
   retired_();
@@ -194,9 +194,9 @@ TEST_F(StopEndsTest, AFailedOpenReportedAfterClosingBeganIsIgnored) {
       .WillOnce(Return(State::kClosing))
       .WillOnce(Return(State::kClosing));
   daemon_.Stop();
-  EXPECT_CALL(controller_, OpenFailed);
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kNoDevice));
   EXPECT_CALL(pipeline_, Close).Times(0);
-  daemon_.OnOpenFailed();
+  daemon_.OnOpenFailed(OpenFailure::kNoDevice);
   EXPECT_THAT(exited_, Eq(std::nullopt));
 
   ExpectRetirement();
@@ -205,6 +205,25 @@ TEST_F(StopEndsTest, AFailedOpenReportedAfterClosingBeganIsIgnored) {
   retired_();
 
   EXPECT_THAT(exited_, Eq(false));
+}
+
+// #52, item 10 of #61: a denied permission or a failed start does not stop
+// the daemon, unlike a camera with no device to use. CameraController's own
+// retry (specs/CameraLifecycle.tla's Retry) runs in this same process.
+TEST_F(StopEndsTest, ADeniedPermissionDoesNotStopTheDaemon) {
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kOpening));
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kPermissionDenied));
+  daemon_.OnOpenFailed(OpenFailure::kPermissionDenied);
+  EXPECT_FALSE(service_stopped_);
+  EXPECT_THAT(exited_, Eq(std::nullopt));
+}
+
+TEST_F(StopEndsTest, AFailedStartDoesNotStopTheDaemon) {
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kOpening));
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kStartFailed));
+  daemon_.OnOpenFailed(OpenFailure::kStartFailed);
+  EXPECT_FALSE(service_stopped_);
+  EXPECT_THAT(exited_, Eq(std::nullopt));
 }
 
 using SubscriptionMatchesTest = DaemonControlTest;

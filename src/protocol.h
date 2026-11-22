@@ -7,8 +7,10 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "src/calibration.h"
+#include "src/camera_directory.h"
 #include "src/feed.h"
 #include "src/feelings.h"
 
@@ -29,6 +31,8 @@
 //   calibrate start [screens]|next|cancel
 //                           starts, steps through or cancels an optional
 //                           calibration session (#36, #35, item 12 of #61)
+//   cameras                 the cameras available now, for Settings to
+//                           offer (item 10 of #61, #13)
 namespace facepalm::protocol {
 
 struct Hello {
@@ -56,8 +60,11 @@ struct CalibrateRequest {
   int screens = 1;  // Only meaningful for kStart.
 };
 
-using Request = std::variant<Hello, ReadRequest, WaitRequest, BeatRequest,
-                             FeelRequest, ResetRequest, CalibrateRequest>;
+struct CamerasRequest {};
+
+using Request =
+    std::variant<Hello, ReadRequest, WaitRequest, BeatRequest, FeelRequest,
+                 ResetRequest, CalibrateRequest, CamerasRequest>;
 
 // The request on `line`, or nullopt with `error` saying why not.
 std::optional<Request> Parse(std::string_view line, std::string& error);
@@ -86,6 +93,10 @@ std::string ErrorJson(std::string_view message);
 // screen's point; {"ok":true,"calibration":{"state":"done"}} once the last
 // step is finished and saved.
 std::string CalibrationStatusJson(const CalibrationController::Status& status);
+
+// {"ok":true,"cameras":[{"id":"..","name":"..","built_in":true}]} (item 10
+// of #61, #13).
+std::string CamerasJson(const std::vector<CameraDevice>& devices);
 
 }  // namespace facepalm::protocol
 

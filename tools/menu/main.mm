@@ -152,6 +152,35 @@ BOOL ServiceIsOn() {
       [](std::string_view, std::string&) { return std::optional<std::string>(); }, *io);
   return service.IsOn() ? YES : NO;
 }
+
+// The cameras facepalm-daemon's own `cameras` command lists (item 10 of
+// #61, #13): id, name and whether built in, one camera an array. Run
+// synchronously, since opening Settings already waits on reading the
+// settings file; empty, with no error shown, when the daemon binary
+// cannot be found or does not run, so the picker then offers only the
+// default.
+NSArray<NSArray<NSString*>*>* ListCameras() {
+  NSString* daemon = [[NSBundle mainBundle] pathForAuxiliaryExecutable:@"facepalm-daemon"];
+  if (daemon == nil) return @[];
+  NSTask* task = [[NSTask alloc] init];
+  task.executableURL = [NSURL fileURLWithPath:daemon];
+  task.arguments = @[ @"cameras" ];
+  NSPipe* output = [NSPipe pipe];
+  task.standardOutput = output;
+  task.standardError = [NSPipe pipe];
+  NSError* error = nil;
+  if (![task launchAndReturnError:&error]) return @[];
+  NSData* data = [output.fileHandleForReading readDataToEndOfFile];
+  [task waitUntilExit];
+  NSString* text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+  if (text == nil) return @[];
+  NSMutableArray<NSArray<NSString*>*>* devices = [NSMutableArray array];
+  for (NSString* line in [text componentsSeparatedByString:@"\n"]) {
+    NSArray<NSString*>* fields = [line componentsSeparatedByString:@"\t"];
+    if (fields.count == 3) [devices addObject:fields];
+  }
+  return devices;
+}
 }  // namespace
 
 @interface FacepalmApp : NSObject <NSApplicationDelegate, NSMenuDelegate>
@@ -162,6 +191,7 @@ BOOL ServiceIsOn() {
 @property(nonatomic, strong) NSTimer* cameraStatusTimer;
 @property(nonatomic, strong) NSWindow* settingsWindow;
 @property(nonatomic, strong) NSTextField* frameRate;
+@property(nonatomic, strong) NSPopUpButton* camera;
 @property(nonatomic, strong) NSButton* gestures;
 @property(nonatomic, strong) NSButton* expressions;
 @property(nonatomic, strong) NSMutableArray<NSTextField*>* advanced;
@@ -311,6 +341,28 @@ BOOL ServiceIsOn() {
   self.loadedMissing = missing;
   if (self.settingsWindow == nil) [self createSettingsWindow];
   self.frameRate.integerValue = config->frames_per_second;
+  [self.camera removeAllItems];
+  [self.camera addItemWithTitle:@"Default (built-in camera)"];
+  self.camera.lastItem.representedObject = @"";
+  NSString* wanted = [NSString stringWithUTF8String:config->camera_device_id.c_str()];
+  BOOL foundWanted = wanted.length == 0;
+  for (NSArray<NSString*>* device in ListCameras()) {
+    NSString* deviceId = device[0];
+    NSString* name = device[1];
+    const BOOL builtIn = [device[2] isEqualToString:@"1"];
+    [self.camera addItemWithTitle:builtIn ? [name stringByAppendingString:@" (built-in)"] : name];
+    self.camera.lastItem.representedObject = deviceId;
+    if ([deviceId isEqualToString:wanted]) foundWanted = YES;
+  }
+  if (!foundWanted) {
+    // Kept as its own item so saving without changing the picker does not
+    // silently fall back to the default while the chosen camera is away
+    // (item 10 of #61, #13).
+    [self.camera addItemWithTitle:[NSString stringWithFormat:@"%@ (not connected)", wanted]];
+    self.camera.lastItem.representedObject = wanted;
+  }
+  const NSInteger cameraIndex = [self.camera indexOfItemWithRepresentedObject:wanted];
+  [self.camera selectItemAtIndex:cameraIndex == -1 ? 0 : cameraIndex];
   self.gestures.state = config->gestures_enabled ? NSControlStateValueOn : NSControlStateValueOff;
   self.expressions.state =
       config->expressions_enabled ? NSControlStateValueOn : NSControlStateValueOff;
@@ -343,7 +395,9 @@ BOOL ServiceIsOn() {
   // rows below "Advanced tuning"; every row above that keeps its original
   // distance from the top, shifted up by the extra height, and the config
   // path and Save button keep their original distance from the bottom.
-  constexpr CGFloat kExtraHeight = 256;
+  // Choosing the camera (item 10 of #61, #13) adds two more rows the same
+  // way, just above "Looking away".
+  constexpr CGFloat kExtraHeight = 256 + 64;
   const NSRect bounds = NSMakeRect(0, 0, 560, 610 + kExtraHeight);
   self.settingsWindow =
       [[NSWindow alloc] initWithContentRect:bounds
@@ -392,6 +446,16 @@ BOOL ServiceIsOn() {
     [self.advanced addObject:field];
     [content addSubview:field];
   }
+  NSTextField* cameraTitle = [NSTextField labelWithString:@"Camera (item 10 of #61)"];
+  cameraTitle.frame = NSMakeRect(24, 472, 350, 24);
+  cameraTitle.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
+  [content addSubview:cameraTitle];
+  NSTextField* cameraLabel = [NSTextField labelWithString:@"Camera (next start)"];
+  cameraLabel.frame = NSMakeRect(24, 440, 350, 24);
+  [content addSubview:cameraLabel];
+  self.camera = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(220, 440, 290, 24)];
+  self.camera.accessibilityLabel = @"Camera";
+  [content addSubview:self.camera];
   NSTextField* lookingAwayTitle = [NSTextField labelWithString:@"Looking away (#35)"];
   lookingAwayTitle.frame = NSMakeRect(24, 408, 350, 24);
   lookingAwayTitle.font = [NSFont boldSystemFontOfSize:[NSFont systemFontSize]];
@@ -467,6 +531,7 @@ BOOL ServiceIsOn() {
   std::string error;
   facepalm::MenuSettings settings{
       .frames_per_second = static_cast<int>(fps),
+      .camera_device_id = Utf8Bytes((NSString*)self.camera.selectedItem.representedObject),
       .gestures_enabled = self.gestures.state == NSControlStateValueOn,
       .expressions_enabled = self.expressions.state == NSControlStateValueOn,
       .gesture_confidence = Utf8Bytes(self.advanced[0].stringValue),

@@ -34,15 +34,19 @@ std::string* Field(DaemonOptions& options, std::string_view option) {
   return nullptr;
 }
 
-// Reads approve NAME or revoke NAME at the front of `arguments` into
-// `options`, and returns how many arguments it took, or nullopt when the
-// command has no name.
+// Reads approve NAME, revoke NAME or cameras at the front of `arguments`
+// into `options`, and returns how many arguments it took, or nullopt for
+// approve or revoke with no name.
 std::optional<std::size_t> ReadCommand(std::span<const char* const> arguments,
                                        DaemonOptions& options) {
   if (arguments.empty()) {
     return 0;
   }
   const std::string_view first(arguments.front());
+  if (first == "cameras") {
+    options.command = DaemonOptions::Command::kCameras;
+    return 1;
+  }
   if (first != "approve" && first != "revoke") {
     return 0;
   }
@@ -59,6 +63,9 @@ std::optional<std::size_t> ReadCommand(std::span<const char* const> arguments,
 bool ReadOptions(std::span<const char* const> arguments, std::size_t next,
                  DaemonOptions& options) {
   const bool running = options.command == DaemonOptions::Command::kRun;
+  const bool takes_clients =
+      options.command == DaemonOptions::Command::kApprove ||
+      options.command == DaemonOptions::Command::kRevoke;
   for (; next < arguments.size(); ++next) {
     const std::string_view option(arguments[next]);
     if (option == "--consent" && running && !options.consent) {
@@ -67,7 +74,8 @@ bool ReadOptions(std::span<const char* const> arguments, std::size_t next,
     }
     std::string* const value = Field(options, option);
     if (value == nullptr || !value->empty() || next + 1 >= arguments.size() ||
-        *arguments[next + 1] == '\0' || (!running && option != "--clients")) {
+        *arguments[next + 1] == '\0' ||
+        (!running && (!takes_clients || option != "--clients"))) {
       return false;
     }
     *value = arguments[++next];
