@@ -13,7 +13,9 @@
 #include <string>
 
 #include "src/feed.h"
+#include "src/feed_clients.h"
 #include "src/feelings.h"
+#include "src/screen_context.h"
 #include "src/tuner.h"
 
 namespace facepalm {
@@ -29,9 +31,27 @@ namespace facepalm {
 class ReactionFeed : public Feed {
  public:
   using Clock = std::function<std::chrono::steady_clock::time_point()>;
+  // Milliseconds since the Unix epoch (src/feed_clients.h's own
+  // UnixMilliseconds, the default): the clock a beat's own start and end
+  // are marked on for GazeWindowFn below (#142), the same basis a
+  // reading's published_at_ms already uses, kept apart from `clock_`
+  // above since that one never needs to agree with a camera frame's own
+  // sample time, only with itself across a feeling's five-minute window.
+  using NowMs = std::function<std::int64_t()>;
+  // Reads the majority gaze, and, given a content rectangle, whether it
+  // was mostly inside it, over [start_ms, end_ms) (#142, #144):
+  // src/screen_context_reporter.h's Between in the daemon, mocked in
+  // tests. nullptr (the default) answers every beat Gaze::kUnknown with
+  // no content, for a daemon with screen context disabled, or a test
+  // with no gaze source to give.
+  using GazeWindowFn =
+      std::function<GazeWindow(std::int64_t start_ms, std::int64_t end_ms,
+                               const std::optional<ContentRect>& content)>;
 
   ReactionFeed(int capacity, Tuner& tuner,
-               Clock clock = std::chrono::steady_clock::now);
+               Clock clock = std::chrono::steady_clock::now,
+               NowMs now_ms = UnixMilliseconds,
+               GazeWindowFn gaze_window = nullptr);
 
   // Connect: a client starts with no backlog. False, changing nothing, when
   // the name is already connected (specs/Service.tla's UniqueNames).
@@ -57,9 +77,15 @@ class ReactionFeed : public Feed {
                                std::chrono::milliseconds timeout) override;
   // Beat: FeelingBeat!Mark, then FeelingBeat!EndBeat once `window` has
   // passed. nullopt when not connected, already waiting, or disconnected
-  // during the beat (FeelingBeat!Disconnect).
+  // during the beat (FeelingBeat!Disconnect). The interpretation's own
+  // gaze and content (#142, #144) come from gaze_window_, asked for
+  // [start, end) on now_ms_'s own clock; a question beat gaze_window_
+  // reads as averted at the end reads unknown however the cues went
+  // (FeelingBeat.tla's GuardAvertedUnknown, the thinking guard), never
+  // any other feeling gaze would not otherwise have given.
   std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
-                               std::chrono::milliseconds window) override;
+                               std::chrono::milliseconds window,
+                               std::optional<ContentRect> content) override;
   // Whether the client is waiting or in a beat.
   [[nodiscard]] bool Waiting(const std::string& client);
   // Disconnects an ephemeral identity and removes its history. An older
@@ -120,6 +146,8 @@ class ReactionFeed : public Feed {
   const int capacity_;
   Tuner& tuner_;
   const Clock clock_;
+  const NowMs now_ms_;
+  const GazeWindowFn gaze_window_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::deque<Entry> timeline_;  // Oldest first.

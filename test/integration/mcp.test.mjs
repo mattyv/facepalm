@@ -79,7 +79,7 @@ test('MCP reads, reads a beat and tells its feeling to the real synthetic servic
   const beaten = unpack(await beat);
   assert.deepEqual(beaten.readings.map((reading) => reading.id), [2]);
   const feelings = ['agreement', 'disagreement', 'engagement', 'annoyance', 'confused', 'unknown'];
-  assert.deepEqual(beaten.interpretation, { id: 1, feeling: 'agreement', beat: 'question', feelings });
+  assert.deepEqual(beaten.interpretation, { id: 1, feeling: 'agreement', beat: 'question', gaze: 'unknown', feelings });
 
   // The person says how they felt: taken once, and kept in their own file.
   assert.notEqual((await tell(first, 1, 'engagement')).isError, true);
@@ -92,7 +92,7 @@ test('MCP reads, reads a beat and tells its feeling to the real synthetic servic
     name: 'wait_for_reaction', arguments: { beat: 'proposal', timeout_ms: 1 },
   }));
   assert.equal((await lines.next()).value, 'beat');
-  assert.deepEqual(quiet.interpretation, { id: 2, feeling: 'unknown', beat: 'proposal', feelings });
+  assert.deepEqual(quiet.interpretation, { id: 2, feeling: 'unknown', beat: 'proposal', gaze: 'unknown', feelings });
 
   const second = await session();
   assert.deepEqual(unpack(await wait(second, 0)).readings, []);

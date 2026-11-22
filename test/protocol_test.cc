@@ -95,12 +95,21 @@ TEST(ParseTest, ReadsABeat) {
   EXPECT_THAT(std::get<BeatRequest>(question).kind, Eq(BeatKind::kQuestion));
   EXPECT_THAT(std::get<BeatRequest>(question).window,
               Eq(std::chrono::milliseconds(1500)));
+  EXPECT_THAT(std::get<BeatRequest>(question).content, Eq(std::nullopt));
 
   const Request proposal = Parsed("beat proposal 10000");
   ASSERT_TRUE(std::holds_alternative<BeatRequest>(proposal));
   EXPECT_THAT(std::get<BeatRequest>(proposal).kind, Eq(BeatKind::kProposal));
   EXPECT_THAT(std::get<BeatRequest>(Parsed("beat question 1")).window,
               Eq(std::chrono::milliseconds(1)));
+}
+
+TEST(ParseTest, ReadsABeatsContentRectangle) {
+  const Request request = Parsed("beat question 1500 10 20 300 400");
+
+  ASSERT_TRUE(std::holds_alternative<BeatRequest>(request));
+  EXPECT_THAT(std::get<BeatRequest>(request).content,
+              Eq(ContentRect{.x = 10, .y = 20, .width = 300, .height = 400}));
 }
 
 TEST(ParseTest, ReadsACalibrateStart) {
@@ -190,14 +199,30 @@ TEST(ParseTest, RefusesABadWait) {
 
 TEST(ParseTest, RefusesABadBeat) {
   constexpr auto kBadBeat =
-      "beat takes question or proposal and 1 to 10000 milliseconds";
+      "beat takes question or proposal, 1 to 10000 milliseconds, and an "
+      "optional content rectangle: x y width height";
   EXPECT_THAT(Refused("beat"), Eq(kBadBeat));
   EXPECT_THAT(Refused("beat question"), Eq(kBadBeat));
   EXPECT_THAT(Refused("beat answer 1500"), Eq(kBadBeat));
   EXPECT_THAT(Refused("beat question 0"), Eq(kBadBeat));
   EXPECT_THAT(Refused("beat question 10001"), Eq(kBadBeat));
   EXPECT_THAT(Refused("beat question 1.5s"), Eq(kBadBeat));
+  // Neither the plain nor the with-rectangle word count.
   EXPECT_THAT(Refused("beat question 1500 1"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 1 2 3"), Eq(kBadBeat));
+}
+
+TEST(ParseTest, RefusesABadContentRectangle) {
+  constexpr auto kBadBeat =
+      "beat takes question or proposal, 1 to 10000 milliseconds, and an "
+      "optional content rectangle: x y width height";
+  EXPECT_THAT(Refused("beat question 1500 x 20 300 400"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 10 y 300 400"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 10 20 w 400"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 10 20 300 h"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 10 20 0 400"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 10 20 300 0"), Eq(kBadBeat));
+  EXPECT_THAT(Refused("beat question 1500 10 20 -1 400"), Eq(kBadBeat));
 }
 
 TEST(ParseTest, RefusesABadFeel) {
@@ -268,8 +293,22 @@ TEST(JsonTest, WritesABeatsInterpretation) {
       DeliveryJson(delivery),
       Eq(R"({"readings":[{"id":7,"summary":"Gesture: nod","detail":{}}],)"
          R"("missed":0,"interpretation":{"id":2,"feeling":"agreement",)"
-         R"("beat":"question","feelings":["agreement","disagreement",)"
-         R"("engagement","annoyance","confused","unknown"]}})"));
+         R"("beat":"question","gaze":"unknown","feelings":["agreement",)"
+         R"("disagreement","engagement","annoyance","confused","unknown"]}})"));
+}
+
+TEST(JsonTest, WritesTheInterpretationsGazeAndContent) {
+  const Feed::Delivery delivery{
+      .readings = {},
+      .missed = 0,
+      .interpretation = Feed::Interpretation{.id = 2,
+                                             .feeling = Feeling::kUnknown,
+                                             .beat = BeatKind::kQuestion,
+                                             .gaze = Gaze::kOtherScreen,
+                                             .content = ContentHit::kYes}};
+
+  EXPECT_THAT(DeliveryJson(delivery),
+              ::testing::HasSubstr(R"("gaze":"averted","content":"yes")"));
 }
 
 TEST(JsonTest, EscapesASummary) {

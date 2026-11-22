@@ -16,8 +16,13 @@
 
 namespace facepalm {
 
-ReactionFeed::ReactionFeed(int capacity, Tuner& tuner, Clock clock)
-    : capacity_(capacity), tuner_(tuner), clock_(std::move(clock)) {}
+ReactionFeed::ReactionFeed(int capacity, Tuner& tuner, Clock clock,
+                           NowMs now_ms, GazeWindowFn gaze_window)
+    : capacity_(capacity),
+      tuner_(tuner),
+      clock_(std::move(clock)),
+      now_ms_(std::move(now_ms)),
+      gaze_window_(std::move(gaze_window)) {}
 
 ReactionFeed::Client* ReactionFeed::Ready(const std::string& name) {
   const auto found = clients_.find(name);
@@ -144,8 +149,8 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Wait(
 // (FeelingFeedback!Give), and read as the person's picks say, outside the
 // feed's lock, since the tuner may be saving.
 std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
-    const std::string& client, BeatKind kind,
-    std::chrono::milliseconds window) {
+    const std::string& client, BeatKind kind, std::chrono::milliseconds window,
+    std::optional<ContentRect> content) {
   std::unique_lock lock(mutex_);
   Client* entry = Ready(client);
   if (entry == nullptr) {
@@ -154,6 +159,7 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
   // The window opens at the next reading (GuardWindowStart); the cursor
   // stays, so the reply tells the backlog too (GuardKeepBacklog).
   const std::int64_t start = next_;
+  const std::int64_t started_ms = now_ms_();
   entry->waiting = true;
   const auto canceled = std::make_shared<bool>(false);
   entry->wait_canceled = canceled;
@@ -164,17 +170,30 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
   // FeelingBeat!EndBeat: one answer, and the beat closed (GuardCloseBeat).
   entry->waiting = false;
   entry->wait_canceled.reset();
+  const std::int64_t ended_ms = now_ms_();
   const Window shown = Answer(start, kind);
   Delivery delivery = Tell(*entry);
   const std::int64_t id = next_interpretation_++;
   Expire(*entry);
   entry->given[id] = {.given_at = clock_(), .evidence = shown.evidence};
   lock.unlock();
-  const Feeling feeling = shown.evidence
+  const Feeling generic = shown.evidence
                               ? tuner_.Read(*shown.evidence, shown.generic)
                               : shown.generic;
+  const GazeWindow gaze_window =
+      gaze_window_ ? gaze_window_(started_ms, ended_ms, content) : GazeWindow{};
+  // FeelingBeat.tla's GuardAvertedUnknown, the thinking guard (#142): a
+  // question's own gaze averted at the end is read unknown however the
+  // cues went -- "eyes never decide a feeling by rule" otherwise, which
+  // is why gaze plays no other part in `feeling` here.
+  const bool thinking_guard =
+      kind == BeatKind::kQuestion && gaze_window.gaze == Gaze::kOtherScreen;
   delivery.interpretation =
-      Interpretation{.id = id, .feeling = feeling, .beat = kind};
+      Interpretation{.id = id,
+                     .feeling = thinking_guard ? Feeling::kUnknown : generic,
+                     .beat = kind,
+                     .gaze = gaze_window.gaze,
+                     .content = gaze_window.content};
   return delivery;
 }
 

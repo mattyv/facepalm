@@ -43,9 +43,10 @@ class AnnouncingFeed : public facepalm::Feed {
                                std::chrono::milliseconds timeout) override {
     return feed_.Wait(client, timeout);
   }
-  std::optional<Delivery> Beat(const std::string& client,
-                               facepalm::BeatKind kind,
-                               std::chrono::milliseconds window) override {
+  std::optional<Delivery> Beat(
+      const std::string& client, facepalm::BeatKind kind,
+      std::chrono::milliseconds window,
+      std::optional<facepalm::ContentRect> content) override {
     {
       const std::scoped_lock lock(mutex_);
       beating_ = client;
@@ -54,7 +55,7 @@ class AnnouncingFeed : public facepalm::Feed {
       const std::scoped_lock lock(output_);
       std::cout << "beat" << '\n' << std::flush;
     }
-    auto delivery = feed_.Beat(client, kind, window);
+    auto delivery = feed_.Beat(client, kind, window, content);
     const std::scoped_lock lock(mutex_);
     beating_.clear();
     return delivery;

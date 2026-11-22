@@ -103,7 +103,7 @@ test('wait_for_reaction records an interpretation id and its read so tell_feelin
   const session = {
     request: async () => ({
       readings: [], missed: 0,
-      interpretation: { id: 7, feeling: 'agreement', beat: 'question', feelings: ['agreement', 'unknown'] },
+      interpretation: { id: 7, feeling: 'agreement', beat: 'question', gaze: 'unknown', feelings: ['agreement', 'unknown'] },
     }),
     noteInterpretation: (id, read) => noted.push([id, read]),
   };
@@ -296,7 +296,7 @@ test('a beat marks the window after a question and returns its interpretation', 
   const reply = {
     readings: [{ id: 3, summary: 'Gesture: nod', detail: { gesture: 'nod' } }], missed: 0,
     interpretation: {
-      id: 1, feeling: 'agreement', beat: 'question',
+      id: 1, feeling: 'agreement', beat: 'question', gaze: 'on_content',
       feelings: ['agreement', 'disagreement', 'engagement', 'annoyance', 'confused', 'unknown'],
     },
   };
@@ -308,11 +308,36 @@ test('a beat marks the window after a question and returns its interpretation', 
     const description = (await client.listTools()).tools.find((tool) => tool.name === 'wait_for_reaction').description;
     assert.match(description, /beat/);
     assert.match(description, /never.*answer/i);
+    assert.match(description, /gaze/);
+    assert.match(description, /content_rect/);
     const result = await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'question' } });
     assert.deepEqual(JSON.parse(result.content[0].text), reply);
     const proposal = await client.callTool({ name: 'wait_for_reaction', arguments: { beat: 'proposal', timeout_ms: 10000 } });
     assert.notEqual(proposal.isError, true);
     assert.deepEqual(commands, [['beat question 1500', 6500], ['beat proposal 10000', 15000]]);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('a beats content_rect reaches the daemon and the reply carries content (#144)', async () => {
+  const commands = [];
+  const reply = {
+    readings: [], missed: 0,
+    interpretation: {
+      id: 1, feeling: 'unknown', beat: 'question', gaze: 'on_content', content: 'yes',
+      feelings: ['agreement', 'disagreement', 'engagement', 'annoyance', 'confused', 'unknown'],
+    },
+  };
+  const { server, client } = await connected({ request: async (command, signal, timeout) => {
+    commands.push([command, timeout]);
+    return reply;
+  }});
+  try {
+    const result = await client.callTool({
+      name: 'wait_for_reaction',
+      arguments: { beat: 'question', content_rect: { x: 10, y: 20, width: 300, height: 400 } },
+    });
+    assert.deepEqual(JSON.parse(result.content[0].text), reply);
+    assert.deepEqual(commands, [['beat question 1500 10 20 300 400', 6500]]);
   } finally { await client.close(); await server.close(); }
 });
 
@@ -330,11 +355,29 @@ test('a beat outside 1 to 10000 milliseconds or of another kind is refused unsen
   } finally { await client.close(); await server.close(); }
 });
 
+test('a content_rect with no beat is refused unsent (#144)', async () => {
+  const commands = [];
+  const { server, client } = await connected({ request: async (command) => { commands.push(command); return {}; } });
+  try {
+    const result = await client.callTool({
+      name: 'wait_for_reaction',
+      arguments: { content_rect: { x: 0, y: 0, width: 1, height: 1 } },
+    });
+    assert.equal(result.isError, true);
+    assert.equal(result.content[0].text, 'content_rect only means something with a beat.');
+    assert.deepEqual(commands, []);
+  } finally { await client.close(); await server.close(); }
+});
+
 test('a beat reply without an interpretation closes the session', async () => {
   const feelings = ['agreement', 'unknown'];
   for (const interpretation of [
-    undefined, { id: 1, feeling: 'Agreement!', beat: 'question', feelings }, { id: 0, feeling: 'agreement', beat: 'question', feelings },
-    { id: 1, feeling: 'agreement', beat: 'question' }, { id: 1, feeling: 'agreement', beat: 'question', feelings: [] },
+    undefined, { id: 1, feeling: 'Agreement!', beat: 'question', gaze: 'unknown', feelings },
+    { id: 0, feeling: 'agreement', beat: 'question', gaze: 'unknown', feelings },
+    { id: 1, feeling: 'agreement', beat: 'question', gaze: 'unknown' },
+    { id: 1, feeling: 'agreement', beat: 'question', gaze: 'unknown', feelings: [] },
+    { id: 1, feeling: 'agreement', beat: 'question', feelings },
+    { id: 1, feeling: 'agreement', beat: 'question', gaze: 'sideways', feelings },
   ]) {
     let closed = false;
     const { server, client } = await connected({

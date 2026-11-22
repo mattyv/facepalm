@@ -346,7 +346,17 @@ class Engine : public DaemonController, public DaemonPipeline {
                 .blink_threshold = config.eye_gaze_blink_threshold,
                 .median_ms = config.eye_gaze_median_ms,
                 .resting_ms = config.eye_gaze_resting_ms,
-                .gap_ms = config.eye_gaze_gap_ms}),
+                .gap_ms = config.eye_gaze_gap_ms},
+            // Every frame, regardless of whether it carries a reaction
+            // (#142): SampleScreenContext is declared below, but this
+            // callback only runs once the whole App is built, by which
+            // time it exists.
+            [this](const std::optional<HeadRotation>& pose,
+                   const std::optional<HeadRotation>& resting,
+                   const std::optional<EyeSignal>& eye,
+                   const std::optional<EyeSignal>& eye_resting) {
+              SampleScreenContext(pose, resting, eye, eye_resting);
+            }),
         // std::in_place, not a temporary moved in: ScreenContextReporter
         // holds a mutex (SetProfile's own, #137), so it is neither
         // copyable nor movable.
@@ -367,7 +377,14 @@ class Engine : public DaemonController, public DaemonPipeline {
         calibration_profile_(CopyProfile(calibration_profile)),
         feelings_(std::move(feelings)),
         status_path_(std::move(status_path)),
-        feed_(kFeedCapacity, *feelings_),
+        feed_(kFeedCapacity, *feelings_, std::chrono::steady_clock::now,
+              UnixMilliseconds,
+              // #142, #144: BeatGazeWindow is declared below, already
+              // built by the time a beat ever calls this.
+              [this](std::int64_t start_ms, std::int64_t end_ms,
+                     const std::optional<ContentRect>& content) {
+                return BeatGazeWindow(start_ms, end_ms, content);
+              }),
         clients_(
             [this](std::string summary, std::string detail,
                    std::int64_t published_ms,
@@ -555,6 +572,30 @@ class Engine : public DaemonController, public DaemonPipeline {
     if (reporter_) {
       reporter_->SetProfile(&*calibration_profile_);
     }
+  }
+
+  // screen_context_reader_'s own OnSample callback (#142): every frame,
+  // regardless of whether it carries a reaction, so a beat's window
+  // holds every frame's gaze. A named method, not the lambda itself, so
+  // its own branch does not count toward Engine's constructor (where the
+  // lambda is built)'s cognitive complexity.
+  void SampleScreenContext(const std::optional<HeadRotation>& pose,
+                           const std::optional<HeadRotation>& resting,
+                           const std::optional<EyeSignal>& eye,
+                           const std::optional<EyeSignal>& eye_resting) {
+    if (reporter_) {
+      reporter_->Sample(pose, resting, eye, eye_resting, UnixMilliseconds());
+    }
+  }
+
+  // feed_'s own GazeWindowFn (#142, #144): what a beat's reply reports
+  // for gaze and content. GazeWindow{} (Gaze::kUnknown, no content) with
+  // screen context disabled.
+  [[nodiscard]] GazeWindow BeatGazeWindow(
+      std::int64_t start_ms, std::int64_t end_ms,
+      const std::optional<ContentRect>& content) const {
+    return reporter_ ? reporter_->Between(start_ms, end_ms, content)
+                     : GazeWindow{};
   }
 
   FramePipeline::Analyzers MakeAnalyzers(std::string& error) {

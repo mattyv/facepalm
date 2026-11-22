@@ -33,7 +33,8 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
-| `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none | holds | 3,815,485 |
+| `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none, #142's gaze inert (`MaxLooks = 0`, one kind) | holds | 3,815,485 |
+| `FeelingBeat_Gaze.cfg` | one client, two readings, up to two Look steps, both kinds and every zone reachable (#142, #144) | holds | 20,352 |
 | `FeelingFeedback.cfg` | two clients, two interpretations, two feelings, one reset, one restart | holds | 264,176 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
@@ -990,6 +991,36 @@ Disconnecting during a beat ends it with no answer. `during` and `lost` are
 ghost variables recording what really happened while the beat was open, and
 each answer is checked against them as it is given.
 
+Where the person looked (#142, #144): a beat's reply also carries the
+majority gaze over its window, as context, never as the generic rule's
+input -- `Rule` and `Applied` never take gaze, so the feeling they give is
+unaffected by this. `gaze` is the ambient zone the person is looking in
+right now (`Look` changes it, standing for a camera frame's own composed
+gaze, src/screen_context.h's `Gaze`); `gazeDuring[c]` is the ghost a beat's
+reply reports, reset to `gaze` when a client marks a beat and overwritten
+by every `Look` while that beat stays open, so it ends up holding the zone
+the beat *ends* with -- the model's own stand-in for "the majority over the
+window" (the real code, `ScreenContextReporter::Between`, tallies one; a
+short window's gaze rarely flips, #137's own median filter and dwell
+already damp that, so the last sample is a reasonable proxy for the two
+properties below). `kind[c]` is the kind a client marked its current beat
+with (`Mark` now takes one); `Kinds`, like `Cues`, is a CONSTANT, so
+`FeelingBeat.cfg` holds it to one element and leaves `MaxLooks = 0` --
+`FeelingBeat_Gaze.cfg` is the one config that spends the branching both
+kinds and a real `Look` would otherwise cost every config. The one
+exception that does read gaze is `GuardAvertedUnknown`, the thinking guard:
+a question beat that ends with gaze averted is read unknown however the
+cues went (#142: "eyes never decide a feeling by rule", #137's own
+comment). `Averted(c)` names that trigger on its own, apart from the
+guard, so a mutation that skips or over-applies it is caught by an
+invariant that does not just restate its own formula.
+
+Its own content rectangle (#144) -- whether gaze was mostly inside one a
+client gives alongside a beat -- is not modeled here, the same way
+`src/screen_context.h`'s own comment already excuses `CoarseGazeFrom` from
+a spec entry: it is a stateless computation with no lifecycle of its own,
+tested directly instead (`ContentHitFromTest` in `test/screen_context_test.cc`).
+
 The config leaves the puzzled face out: the rule treats it exactly as a nod or
 a shake, so two feelings are enough for a conflict, and a fourth cue made the
 state space too large to check in CI. A timeline keeping two is the smallest in
@@ -1006,10 +1037,15 @@ incomplete window.
 | `NoSilentGap` | Marking a beat skips no reading: each is shown or counted as missed. | `ReadsOnlyTheBeatTest.AReadingBeforeTheBeatIsToldButNotRead` |
 | `NoRepeat` | No reading is shown to the same client twice, the beat's reply included. | `ReadsOnlyTheBeatTest.AReadingAfterTheBeatGoesToTheNextRead` |
 | `CanAgree` | Something must happen: a beat in which the person only nodded can end read as agreement. | `CanAgreeTest` |
+| `ContextNeverChangesFeeling` | Gaze never changes the feeling a beat reports, except through the one guarded exception (#142). | `GazeContextTest.NoGazeSourceAnswersUnknownWithNoContent`, `.TheInterpretationCarriesTheWindowsGaze`, `.AProposalEndingAvertedKeepsItsCuesFeeling` |
+| `ThinkingGuardFires` | The thinking guard fires exactly when it should: a question beat ending averted, with the guard on, always reads unknown. | `GazeContextTest.AQuestionEndingAvertedReadsUnknown` |
 | `BeatEnds` | Every beat ends, answered or abandoned. | `BeatEndsTest`, `OneAnswerPerBeatTest.DisconnectingEndsTheBeatUnanswered` |
 
 Each mutation, and what TLC found. The invariant mutations ran without
-`BeatEnds`, so the check stops at the first violation:
+`BeatEnds`, so the check stops at the first violation. The last two rows
+are `FeelingBeat_Gaze.cfg`'s own, since `FeelingBeat.cfg`'s `MaxLooks = 0`
+holds `ContextNeverChangesFeeling` and `ThinkingGuardFires` vacuously true
+there (`gaze` never moves, so neither can ever trigger):
 
 | Mutation | Broke |
 |---|---|
@@ -1023,6 +1059,8 @@ Each mutation, and what TLC found. The invariant mutations ran without
 | A beat answers a value that is not a feeling | `TypeOK`, 6 states |
 | The beat's reply leaves the cursor where it was | `NoRepeat`, 6 states |
 | No fairness on `EndBeat` | `BeatEnds`, 10 states |
+| `GuardAvertedUnknown = FALSE` (on `FeelingBeat_Gaze.cfg`): the thinking guard never fires | `ThinkingGuardFires`, 6 states |
+| `EndBeat`'s own gate moved off `Averted(c)` -- widened to also fire on `kind[c] = "question"` alone, or on gaze away too (on `FeelingBeat_Gaze.cfg`; the mutation itself, never checked in, since `Averted(c)` is the one gate the real code follows) | `ContextNeverChangesFeeling`, 6 states |
 
 `src/reaction_feed.cc` implements `Mark`, `EndBeat` and `Answer` in
 `ReactionFeed::Beat` and `ReactionFeed::Answer`, and `src/feelings.cc` the
@@ -1038,6 +1076,8 @@ stand for the properties they break:
 | Disconnecting does not end the beat | `OneAnswerPerBeatTest.DisconnectingEndsTheBeatUnanswered` |
 | Every beat reads as unknown | `CanAgreeTest.ANodDuringTheBeatIsAgreement`, and five others |
 | A reading ends the beat before its window | `BeatEndsTest.ABeatEndsWhenItsWindowDoes`, and two others |
+| The thinking guard never fires | `GazeContextTest.AQuestionEndingAvertedReadsUnknown` |
+| Gaze changes the feeling outside the thinking guard (such as applying it to a proposal too) | `GazeContextTest.AProposalEndingAvertedKeepsItsCuesFeeling` |
 
 A beat's tests make their readings once the beat is seen open, inside a 500 ms
 window, and fail rather than hang when the beat ends before it is seen open.
