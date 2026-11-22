@@ -12,11 +12,11 @@ a line saying which entry replaced it.
     property-based testing with shrinking on their own, and it keeps one
     dependency, in GoogleTest's own style, rather than two different ones
     doing overlapping jobs. `CMakeLists.txt` fetches it with `FetchContent`
-    behind a new `FACEPALM_FUZZTEST` option (default off), pinned to the
-    `2026-06-29` release's commit
-    (`704efb341c23011cab2a750efcdd16ad04882c80`) by a SHA-256 checksum on
-    its source archive, not a bare `GIT_TAG` (which carries no checksum of
-    its own). Every fuzz or property test is a GoogleTest executable
+    behind a new `FACEPALM_FUZZTEST` option (default off), pinned past the
+    `2026-06-29` release to commit `39e5d587af63` (2026-10-21; no tagged
+    release carries it yet — see the real bug below) by a SHA-256 checksum
+    on its source archive, not a bare `GIT_TAG` (which carries no checksum
+    of its own). Every fuzz or property test is a GoogleTest executable
     FuzzTest also drives, `test/fuzz/<name>_fuzz_test.cc` built as
     `<name>_fuzz`, registered through `facepalm_fuzz_test` in
     `CMakeLists.txt`.
@@ -77,6 +77,28 @@ a line saying which entry replaced it.
     `scripts/fetch_mediapipe_c.sh`'s own fetch already is: a warm run only
     compiles facepalm's own sources and the fuzz targets, not FuzzTest's
     dependency tree over again.
+-   **A real bug the new `fuzzing` CI job found, on its first real run,
+    in FuzzTest itself, not facepalm's code:** every target crashed
+    `--fuzz_for`'s first input with an AddressSanitizer stack-overflow, a
+    few thousand frames deep, entirely inside
+    `fuzztest::internal::ExecutionCoverage::IsTracing` and
+    `std::atomic<bool>::load`, never reaching any facepalm frame. Read:
+    `IsTracing`'s `std::atomic<bool>::load(std::memory_order_relaxed)`
+    (added 2026-01-29 to fix a ThreadSanitizer warning) compiles, under
+    `-fsanitize-coverage=trace-cmp`, to a libstdc++ branch on the memory
+    order that is itself instrumented, calling back into `IsTracing`
+    through `TraceCmp` — the exact bootstrapping problem sanitizer
+    coverage runtimes exist to avoid in their own code. GoogleTest's own
+    brief replay mode (every other job) never reaches
+    `FUZZTEST_FUZZING_MODE`'s instrumented build, so this was invisible
+    until the `fuzzing` job's own first real run; verified by reading
+    `fuzztest/internal/coverage.h` at the pinned commit against the
+    crash's stack trace. Fixed by moving the pin to `39e5d587af63`
+    (2026-10-21), where FuzzTest replaces that `std::atomic<bool>` with
+    the raw `__atomic_load_n`/`__atomic_store_n` builtins, which compile
+    to no instrumentable branch; confirmed against that commit's own diff.
+    No facepalm regression test applies — the bug is in FuzzTest's own
+    source, fixed by moving to the commit that already fixes it there.
 -   **Two build-integration problems found and fixed, not FuzzTest's own
     bugs:** Abseil, FuzzTest's own dependency, defines a raw CMake target
     literally named `config`, colliding with facepalm's own `config` unit;

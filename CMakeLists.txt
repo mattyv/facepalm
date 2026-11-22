@@ -47,14 +47,26 @@ if(FACEPALM_FUZZTEST)
   # runtime libraries land in dist/ at the repository root rather than the
   # build directory.
   set(ANTLR_BUILD_CPP_TESTS OFF CACHE BOOL "" FORCE)
-  # Pinned to the 2026-06-29 release's commit, with FetchContent's own
-  # checksum verification of the archive (a GIT_REPOSITORY/GIT_TAG fetch has
-  # none): the commit a GIT_TAG names can be force-pushed over, but this
-  # archive's bytes cannot change without failing URL_HASH.
+  # Pinned past the 2026-06-29 release, to the commit that fixes a
+  # self-instrumentation infinite recursion the release still has: under
+  # FUZZTEST_FUZZING_MODE's -fsanitize-coverage=trace-cmp,
+  # ExecutionCoverage::IsTracing's std::atomic<bool>::load (added for a
+  # 2026-01-29 ThreadSanitizer fix) recurses into itself through
+  # libstdc++'s own instrumented comparison on the memory-order argument,
+  # overflowing the stack on the very first fuzzed input on Linux/GCC's
+  # libstdc++ (found running this PR's own `fuzzing` CI job: every target
+  # crashed the same way, GoogleTest's brief replay mode never hits this
+  # path, so it was not seen locally). 39e5d587af63's own fix drops
+  # std::atomic for the raw __atomic_load_n/__atomic_store_n builtins,
+  # which compile to no instrumentable branch. No tagged release carries
+  # it yet. With FetchContent's own checksum verification of the archive
+  # (a GIT_REPOSITORY/GIT_TAG fetch has none): the commit a GIT_TAG names
+  # can be force-pushed over, but this archive's bytes cannot change
+  # without failing URL_HASH.
   FetchContent_Declare(
     fuzztest
-    URL https://github.com/google/fuzztest/archive/704efb341c23011cab2a750efcdd16ad04882c80.tar.gz
-    URL_HASH SHA256=80cc221bd9e0d7d4b4a336b710ae20b29faeb5df9e8164bee0700dc166ae8530
+    URL https://github.com/google/fuzztest/archive/39e5d587af63ba6209e0958a3141460ce003409c.tar.gz
+    URL_HASH SHA256=32dd48a81d5d318110f9192ec52cdf191ebd403764aec64f62ba04b980297421
     # FuzzTest's own CMakeLists.txt hard-codes `set(CMAKE_CXX_STANDARD 17)`,
     # a plain (non-cache) variable that overrides this project's 20 for it
     # and the Abseil and RE2 it fetches, however this project's own
