@@ -30,6 +30,17 @@ namespace facepalm {
 // `+defaultDeviceWithMediaType:` might otherwise hand back. A non-empty
 // `device_id` is matched by AVCaptureDevice's own uniqueID, built-in or
 // not, across every discoverable type.
+//
+// This constructor registers only the runtime-error observer, which is
+// scoped to this session's own `AVCaptureSession` (`object:`) and so
+// cannot fire before `Start` makes that session run, well after
+// construction. `on_disconnected` and `on_connected` are only kept; a new
+// `StartWatching` registers the observers for those, since
+// `AVCaptureDeviceWasConnectedNotification`/`WasDisconnectedNotification`
+// are posted with `object:nil` and could otherwise fire for any device as
+// soon as the constructor runs, which usually closes over a sibling
+// member not yet constructed at that point, such as Engine's `camera_` in
+// tools/daemon/main.cc (#121).
 class AvFoundationSession : public CaptureSession {
  public:
   AvFoundationSession(std::string device_id,
@@ -40,6 +51,12 @@ class AvFoundationSession : public CaptureSession {
   ~AvFoundationSession() override;
   AvFoundationSession(const AvFoundationSession&) = delete;
   AvFoundationSession& operator=(const AvFoundationSession&) = delete;
+
+  // Registers the device-change observers, with the callbacks the
+  // constructor was given (#121): separate from the constructor so the
+  // caller can call it once every sibling those callbacks may reach is
+  // itself constructed. Called at most once.
+  void StartWatching();
 
   Permission CurrentPermission() override;
   void RequestPermission(std::function<void(bool granted)> done) override;
@@ -52,6 +69,10 @@ class AvFoundationSession : public CaptureSession {
  private:
   struct Impl;
   std::string device_id_;
+  // Kept by the constructor, used only once StartWatching registers the
+  // observers that call them (#121).
+  std::function<void(const std::string&)> on_disconnected_;
+  std::function<void(const std::string&)> on_connected_;
   std::unique_ptr<Impl> impl_;
 };
 

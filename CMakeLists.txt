@@ -275,10 +275,26 @@ if(APPLE)
     "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo"
     "-framework Foundation")
 
-  # AppKit calls alone (#61 item 11), needing a real desktop session like
-  # avfoundation_session above; it has no unit tests or coverage floor for
-  # the same reason. ScreenContextReporter, which is tested, takes it
-  # behind ScreenSource.
+  # StartWatching's own device-change observers (#121), through real
+  # NSNotificationCenter posts: avfoundation_session_checks follows
+  # preview_jpeg_checks' own pattern below for a real-framework round trip
+  # rather than facepalm_unit's mocked, coverage-floored kind, since
+  # AvFoundationSession has no seam to mock NSNotificationCenter behind.
+  # It needs no camera, open or otherwise, so it has no coverage floor,
+  # the same as preview_jpeg_checks and menu_store_checks above.
+  if(BUILD_TESTING)
+    add_executable(avfoundation_session_checks test/avfoundation_session_check.mm)
+    target_compile_options(avfoundation_session_checks PRIVATE -fobjc-arc)
+    target_link_libraries(avfoundation_session_checks PRIVATE avfoundation_session
+      GTest::gmock GTest::gtest_main "-framework AVFoundation" "-framework Foundation")
+    add_test(NAME avfoundation_session_checks COMMAND avfoundation_session_checks)
+  endif()
+
+  # AppKit calls alone (#61 item 11), needing a real desktop session:
+  # unlike avfoundation_session above, which StartWatching's own check
+  # exercises without one, screen_context_macos has no unit tests or
+  # coverage floor for that reason. ScreenContextReporter, which is
+  # tested, takes it behind ScreenSource.
   add_library(screen_context_macos src/macos/screen_context_macos.mm)
   target_compile_options(screen_context_macos PRIVATE -fobjc-arc)
   target_include_directories(screen_context_macos PUBLIC ${PROJECT_SOURCE_DIR})
@@ -428,6 +444,7 @@ endif()
 file(GLOB_RECURSE FACEPALM_CXX_FILES CONFIGURE_DEPENDS
   ${PROJECT_SOURCE_DIR}/src/*.cc ${PROJECT_SOURCE_DIR}/src/*.h
   ${PROJECT_SOURCE_DIR}/src/*.mm ${PROJECT_SOURCE_DIR}/test/*.cc
+  ${PROJECT_SOURCE_DIR}/test/*.mm
   ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.cc ${PROJECT_SOURCE_DIR}/tools/gesture_replay/*.h
   ${PROJECT_SOURCE_DIR}/tools/calibrate_cli/*.cc ${PROJECT_SOURCE_DIR}/tools/*.h
   ${PROJECT_SOURCE_DIR}/tools/menu/*.cc ${PROJECT_SOURCE_DIR}/tools/menu/*.mm
