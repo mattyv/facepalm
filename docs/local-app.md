@@ -147,7 +147,14 @@ calibrate_cli cancel # Instead of next, to give up.
 
 Any client already speaking the protocol can send the same `calibrate start
 [screens]|next|cancel` line directly, with its own name and token. The daemon
-itself is not yet wired to a calibration session or the camera's lifecycle
-(that is item 7's follow-up, so `calibrate_cli` has nothing to talk to on a
-running daemon until it lands); until then, every `calibrate` request gets
-`{"error":"calibration is not available"}`.
+is wired to a real session and the camera's lifecycle (#116): a session can
+only start, or keep running, while the camera is actually open, and is
+cancelled the moment the camera closes or is lost, the same guarantee
+`specs/Calibration.tla` makes. The profile a finished session saves feeds
+the coarse gaze item 11's `context` reports (#92): a daemon run that starts
+after a profile exists locates the nearest screen from its calibrated
+points instead of guessing from the screen's edges alone. That profile is
+loaded once, at startup, so finishing a session only changes coarse gaze
+from the daemon's next run, not the one the session ran against. No menu
+entry starts a session yet; that is tracked on its own
+([#118](https://github.com/mattyv/facepalm/issues/118)).

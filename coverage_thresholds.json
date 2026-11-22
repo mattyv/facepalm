@@ -167,6 +167,13 @@
       "functions": 100
     }
   },
+  "src/daemon_calibration.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/look_away_reader.cc": {
     "unit": {
       "lines": 100,
