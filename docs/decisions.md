@@ -5,6 +5,36 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: Calibration is wired to the daemon; the menu entry is its own issue
+
+-   **Decision:** `tools/daemon/main.cc`'s `Engine` now gives `Service` a
+    real `CalibrationController`, adds a `CalibrationReader` to every
+    camera session's readers, and forwards the camera's own lifecycle to
+    it, through a new tested class, `src/daemon_calibration.h`'s
+    `DaemonCalibration` (#116, #64: the nullptr-check kind of decision
+    stays out of `main.cc`, in a source with its own test file).
+    `Engine::Open` calls `OnCameraUp` exactly when the frame pipeline's
+    model is created (the camera is really open by then), `Engine::Close`
+    calls `OnCameraLost` before it is destroyed, and `Engine::Start` calls
+    `OnCameraLost` once more at startup, before either has run: without
+    it, `CalibrationSession`'s own default of an up camera (right for
+    #96's tests, which gave it no camera signal at all) would let a
+    `calibrate start` through before any client has ever subscribed.
+-   **Also decided:** the menu gets no calibration entry in this fix. The
+    daemon side (`Service`, `MakeFaceReaders`, the camera's lifecycle) is
+    what #116 names; a stepped wizard in both platforms' Settings windows,
+    with a socket client the menu does not have today, is real UI work
+    with a lifecycle of its own to track, not a composition-root wiring
+    bug. Filed as [#118](https://github.com/mattyv/facepalm/issues/118).
+-   **No new spec:** `specs/Calibration.tla` already models `CameraLost`
+    and `CameraBack`; this change implements the actions it already
+    specifies, in the composition root that was the one piece missing, not
+    a new piece of lifecycle.
+-   **Evidence:** [#116](https://github.com/mattyv/facepalm/issues/116),
+    [#64](https://github.com/mattyv/facepalm/issues/64),
+    [#96](https://github.com/mattyv/facepalm/issues/96),
+    [#92](https://github.com/mattyv/facepalm/issues/92).
+
 ## 2026-11-22: The preview window and the Linux encoder close #108, no new spec
 
 -   **Decision:** the menu's own window for the camera preview (#108, the

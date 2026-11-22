@@ -31,6 +31,7 @@
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/config.h"
+#include "src/daemon_calibration.h"
 #include "src/daemon_control.h"
 #include "src/daemon_options.h"
 #include "src/daemon_status.h"
@@ -187,6 +188,15 @@ std::string PreviewFramePath(
   return daemon_paths ? daemon_paths->preview_frame : std::string{};
 }
 
+// Where a finished calibration session saves its profile (#116): empty,
+// the same as a daemon run with no resolvable --home, leaves calibration
+// unavailable, the way DaemonCalibration (src/daemon_calibration.h)
+// already treats a nullptr controller.
+std::string CalibrationStorePath(
+    const std::optional<facepalm::UserPaths>& daemon_paths) {
+  return daemon_paths ? daemon_paths->calibration : std::string{};
+}
+
 // The daemon owns all queues and resources until DaemonControl exits. Its
 // methods only forward: the logic is in DaemonControl, which follows
 // specs/DaemonAdmission.tla, and in the sources it wires together.
@@ -201,7 +211,8 @@ class Engine : public DaemonController, public DaemonPipeline {
          const CalibrationProfile* calibration_profile, Post control,
          Post camera, Post inference, std::string status_path = {},
          std::string preview_request_path = {},
-         std::string preview_frame_path = {})
+         std::string preview_frame_path = {},
+         std::string calibration_store_path = {})
       : control_queue_(std::move(control)),
         model_(std::move(model)),
         config_(config),
@@ -280,8 +291,21 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
             }),
+        // Calibration (#116): empty with no --home, like the preview
+        // paths above. CalibrationSession takes its store by reference, so
+        // both are owned here, kept alive as long as calibration_ forwards
+        // to the controller they make together.
+        calibration_store_(calibration_store_path.empty()
+                               ? nullptr
+                               : std::make_unique<CalibrationFileStore>(
+                                     std::move(calibration_store_path))),
+        calibration_session_(
+            calibration_store_ != nullptr
+                ? std::make_unique<CalibrationSession>(*calibration_store_)
+                : nullptr),
+        calibration_(calibration_session_.get()),
         service_(std::move(listener), approved_, approvals,
-                 /*calibration=*/nullptr, &capture_),
+                 calibration_.Controller(), &capture_),
         control_(
             *this, *this, [this] { service_.Stop(); },
             [](bool failed) {
@@ -333,9 +357,14 @@ class Engine : public DaemonController, public DaemonPipeline {
 
   // CameraStatus!Restart: republishes off before the service can take any
   // subscription (#37 item 8), so a status file left stale by a previous
-  // crash does not linger once this one takes over.
+  // crash does not linger once this one takes over. Calibration.tla's
+  // CameraLost (#116): the camera is not yet open at startup, the way
+  // CameraController's own kClosed is, overriding CalibrationSession's
+  // default of an up camera, which is right only for a session built with
+  // no camera signal at all (#96).
   void Start() {
     PublishStatus(false);
+    calibration_.OnCameraLost();
     service_.Start();
   }
   void Stop() { control_.Stop(); }
@@ -352,8 +381,19 @@ class Engine : public DaemonController, public DaemonPipeline {
   [[nodiscard]] CameraController::State State() const override {
     return controller_.CurrentState();
   }
-  void Open() override { pipeline_.OnCameraOpen(); }
+  // Calibration.tla's CameraBack (#116): the model is only created once
+  // the camera is really open, which is exactly when a session can start
+  // capturing poses again.
+  void Open() override {
+    calibration_.OnCameraUp();
+    pipeline_.OnCameraOpen();
+  }
+  // Calibration.tla's CameraLost (#116): signaled before the model that
+  // fed CalibrationReader its poses is destroyed, so a session in
+  // progress is cancelled rather than left running with nothing left to
+  // capture.
   void Close(std::function<void()> done) override {
+    calibration_.OnCameraLost();
     pipeline_.OnCameraClosed(std::move(done));
   }
 
@@ -367,7 +407,8 @@ class Engine : public DaemonController, public DaemonPipeline {
     analyzers.push_back(std::make_unique<FaceAnalyzer>(
         std::move(model),
         MakeFaceReaders(config_,
-                        screen_source_ ? &screen_context_reader_ : nullptr)));
+                        screen_source_ ? &screen_context_reader_ : nullptr,
+                        calibration_.Controller())));
     return analyzers;
   }
 
@@ -400,6 +441,14 @@ class Engine : public DaemonController, public DaemonPipeline {
   ReactionFeed feed_;
   FeedClients clients_;
   ApprovedFeed approved_;
+  // Calibration (#116): nullptr/nullptr when no store path was resolved
+  // (the same shape screen_source_ above already has for its own config
+  // flag); CalibrationSession takes its store by reference, so both are
+  // owned here. Declared, in order, before calibration_ (built from
+  // calibration_session_) and service_ (given calibration_.Controller()).
+  std::unique_ptr<CalibrationFileStore> calibration_store_;
+  std::unique_ptr<CalibrationSession> calibration_session_;
+  DaemonCalibration calibration_;
   Service service_;
   DaemonControl control_;
 #ifdef __linux__
@@ -576,7 +625,8 @@ int main(int argc, char** argv) {
                           control.Poster(), camera.Poster(), inference.Poster(),
                           options->status,
                           facepalm::PreviewRequestPath(daemon_paths),
-                          facepalm::PreviewFramePath(daemon_paths));
+                          facepalm::PreviewFramePath(daemon_paths),
+                          facepalm::CalibrationStorePath(daemon_paths));
   engine.Start();
   int signal_number = 0;
   if (sigwait(&signals, &signal_number) != 0) {
@@ -602,7 +652,8 @@ int main(int argc, char** argv) {
       facepalm::OnQueue(
           dispatch_queue_create("facepalm.inference", DISPATCH_QUEUE_SERIAL)),
       options->status, facepalm::PreviewRequestPath(daemon_paths),
-      facepalm::PreviewFramePath(daemon_paths));
+      facepalm::PreviewFramePath(daemon_paths),
+      facepalm::CalibrationStorePath(daemon_paths));
   for (int const sig : {SIGINT, SIGTERM}) {
     signal(sig, SIG_IGN);
     dispatch_source_t source =
