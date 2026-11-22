@@ -38,6 +38,9 @@ TEST(UserPathsTest, MacOsKeepsThemInApplicationSupport) {
   EXPECT_THAT(paths.preview_frame,
               Eq("/Users/person/Library/Application Support/Facepalm/"
                  "preview_frame.jpg"));
+  EXPECT_THAT(paths.preview_readings,
+              Eq("/Users/person/Library/Application Support/Facepalm/"
+                 "preview_readings.txt"));
 }
 
 TEST(UserPathsTest, LinuxKeepsThemInTheStateDirectory) {
@@ -54,6 +57,8 @@ TEST(UserPathsTest, LinuxKeepsThemInTheStateDirectory) {
               Eq("/home/person/.local/state/facepalm/preview_request"));
   EXPECT_THAT(paths.preview_frame,
               Eq("/home/person/.local/state/facepalm/preview_frame.jpg"));
+  EXPECT_THAT(paths.preview_readings,
+              Eq("/home/person/.local/state/facepalm/preview_readings.txt"));
 }
 
 TEST(UserPathsTest, TheRootCanBeAHome) {

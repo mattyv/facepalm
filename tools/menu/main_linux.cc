@@ -109,6 +109,15 @@ QString PreviewFramePath() {
   return paths ? QString::fromStdString(paths->preview_frame) : QString();
 }
 
+// `preview_readings`'s own text (#134): the readings as they happen and
+// the latest beat's feeling, beside `preview_frame` under the same
+// rules.
+QString PreviewReadingsPath() {
+  const std::optional<facepalm::UserPaths> paths = facepalm::PathsFor(
+      QDir::homePath().toStdString(), facepalm::Platform::kLinux);
+  return paths ? QString::fromStdString(paths->preview_readings) : QString();
+}
+
 // The single-instance guard's own state, next to the daemon's socket
 // (#98): a QLockFile for the exclusive claim, and a QLocalServer name for
 // forwarding a Settings request to whichever launch holds it.
@@ -663,13 +672,22 @@ class SettingsDialog : public QDialog {
 class CameraPreview {
  public:
   CameraPreview(QWidget* parent, QAction* action)
-      : window_(parent), label_(new QLabel(&window_)), action_(action) {
+      : window_(parent),
+        label_(new QLabel(&window_)),
+        status_(new QLabel(&window_)),
+        action_(action) {
     constexpr int kSide = 480;
     window_.setWindowTitle(QStringLiteral("Camera Preview"));
     window_.resize(kSide, kSide);
     auto* layout = new QVBoxLayout(&window_);
     label_->setAlignment(Qt::AlignCenter);
     layout->addWidget(label_);
+    // The readings as they happen, and the latest beat's feeling
+    // (#134): a diagnostic only, so plain, word-wrapped text below the
+    // image, not styled as a control.
+    status_->setAlignment(Qt::AlignCenter);
+    status_->setWordWrap(true);
+    layout->addWidget(status_);
     // Closing by the window's own close button emits rejected, so both
     // ways of closing end the preview the same way.
     QObject::connect(&window_, &QDialog::rejected, &window_,
@@ -748,6 +766,7 @@ class CameraPreview {
     RemoveRequest();
     window_.hide();
     action_->setText(QStringLiteral("Show Camera Preview"));
+    status_->clear();
   }
 
   // PreviewLease!Poll: also stops the preview once the camera goes off,
@@ -768,6 +787,19 @@ class CameraPreview {
       label_->setPixmap(pixmap.scaled(label_->size(), Qt::KeepAspectRatio,
                                       Qt::SmoothTransformation));
     }
+    RefreshReadings();
+  }
+
+  // The readings as they happen, and the latest beat's feeling (#134):
+  // read and shown the same way as the frame, so it is blank once the
+  // file is gone (not streaming, or nothing has happened yet) rather
+  // than left showing whatever it said last. Its own method, apart from
+  // Refresh, keeps that one's cognitive complexity down (#64).
+  void RefreshReadings() {
+    QFile file(readings_path_);
+    status_->setText(file.open(QIODevice::ReadOnly | QIODevice::Text)
+                         ? QString::fromUtf8(file.readAll())
+                         : QString());
   }
 
   void Warn(const QString& text) {
@@ -777,10 +809,12 @@ class CameraPreview {
 
   QDialog window_;
   QLabel* label_;
+  QLabel* status_;
   QAction* action_;
   QTimer timer_;
   const QString request_path_ = PreviewRequestPath();
   const QString frame_path_ = PreviewFramePath();
+  const QString readings_path_ = PreviewReadingsPath();
 };
 
 }  // namespace

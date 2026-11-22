@@ -22,8 +22,15 @@ namespace facepalm {
 // last one leaves (GuardFirstLast).
 class ApprovedFeed : public Feed {
  public:
-  ApprovedFeed(Feed& feed, std::function<void(bool)> changed,
-               std::function<void(const std::string&)> retire);
+  // `on_beat`, when given, hears every interpretation a Beat resolves
+  // with (#134): the camera preview's own "latest beat's feeling" is the
+  // one caller today (src/preview_readings.h's OnBeat), so this stays
+  // optional rather than every other use of ApprovedFeed having to pass
+  // one that does nothing.
+  ApprovedFeed(
+      Feed& feed, std::function<void(bool)> changed,
+      std::function<void(const std::string&)> retire,
+      std::function<void(const Feed::Interpretation&)> on_beat = nullptr);
   // DaemonAdmission!Join.
   bool Connect(const std::string& client) override;
   // DaemonAdmission!Disconnect.
@@ -44,6 +51,7 @@ class ApprovedFeed : public Feed {
   Feed& feed_;
   std::function<void(bool)> changed_;
   std::function<void(const std::string&)> retire_;
+  std::function<void(const Feed::Interpretation&)> on_beat_;
   std::mutex mutex_;
   std::map<std::string, std::string> sessions_;  // Under mutex_.
   std::uint64_t next_session_ = 0;               // Under mutex_.
