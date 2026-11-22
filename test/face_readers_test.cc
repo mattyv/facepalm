@@ -149,7 +149,11 @@ TEST(FaceReadersTest, ScreenContextAndCalibrationBothAppendedWhenGiven) {
 TEST(FaceReadersTest, LookAwayReaderIsAppendedWhenGiven) {
   LookAwayReader reader{ExpressionTracker::Settings{},
                        EyeGazeTracker::Settings{},
-                       LookAwayDetector::Settings{.degrees = 1000}};
+                       LookAwayDetector::Settings{.degrees = 1000,
+                                                  .hold_ms = 0,
+                                                  .averted_ms = 0,
+                                                  .other_screen_margin_degrees =
+                                                      0}};
   const std::vector<std::unique_ptr<FaceReader>> readers =
       MakeFaceReaders(Config{}, /*screen_context_reader=*/nullptr,
                       /*calibration=*/nullptr, &reader);
