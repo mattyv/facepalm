@@ -5,6 +5,38 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: AvFoundationSession's device-change observers wait for StartWatching too (#121)
+
+-   **Decision:** `AvFoundationSession`'s constructor no longer registers
+    the `AVCaptureDeviceWasConnectedNotification`/
+    `WasDisconnectedNotification` observers itself; a new `StartWatching`
+    does, called from `Engine::Start()` in `tools/daemon/main.cc`
+    alongside the Linux `StartWatching()` call #115 already added, once
+    every member those callbacks reach, `camera_` among them, is
+    constructed. Before, those two observers, posted with `object:nil`,
+    could fire for any device as soon as the constructor ran, and the
+    blocks they ran, `on_connected`/`on_disconnected`, close over
+    `camera_` in `Engine`, which `capture_` (the `AvFoundationSession`) is
+    declared, and so constructed, before. The runtime-error observer is
+    unaffected and stays in the constructor: it is scoped to this
+    session's own `AVCaptureSession` (`object:`), which cannot run before
+    `Start`, well after construction.
+-   **Also decided:** `avfoundation_session_checks`
+    (`test/avfoundation_session_check.mm`) is a new real-framework check,
+    following `preview_jpeg_checks`' and `menu_store_checks`' own pattern,
+    since `AvFoundationSession` has no seam to mock `NSNotificationCenter`
+    behind, and posting a notification needs no camera, open or
+    otherwise. It has no coverage floor, the same as those two. The
+    `format-check` target's file glob in `CMakeLists.txt` was missing
+    `test/*.mm`, so it never checked those two existing files either;
+    fixed in the same change, found while adding a third.
+-   **Spec:** no change to `specs/CameraLifecycle.tla`: the construction
+    order is not part of the device lifecycle it models, the same call
+    #115 made for the identical hazard on Linux.
+-   **Evidence:** [#121](https://github.com/mattyv/facepalm/issues/121),
+    filed from reading #122's Linux fix for #115, the same hazard's
+    macOS analog.
+
 ## 2026-11-22: A preview request must be fresh, and must be a menu's own, closing #114
 
 -   **Decision:** `specs/PreviewLease.tla` now also models the request
