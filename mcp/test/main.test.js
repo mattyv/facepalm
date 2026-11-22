@@ -132,11 +132,45 @@ test('rejects a malformed command line before touching any socket', { timeout: 5
   }
 });
 
-test('with no arguments and no approval, names how to approve it', { timeout: 5000 }, async () => {
+test('with no arguments and no approval, starts anyway and a tool says Facepalm is off (#117)', { timeout: 7000 }, async () => {
   // /tmp keeps the socket path under the 104 bytes macOS allows.
   const home = await mkdtemp('/tmp/fp-home-');
   try {
     const child = spawn(process.execPath, [main], { env: { ...process.env, HOME: home } });
+    const exited = once(child, 'exit');
+    const replies = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    try {
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+        protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
+      } }) + '\n');
+      assert.equal(JSON.parse((await replies.next()).value).id, 1);
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+        name: 'wait_for_reaction', arguments: {},
+      } }) + '\n');
+      const result = JSON.parse((await replies.next()).value).result;
+      assert.equal(result.isError, true);
+      assert.match(result.content[0].text, /Facepalm is off/);
+    } finally {
+      child.stdin.end();
+      assert.deepEqual(await exited, [0, null]);
+    }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('with no arguments, a default token file that is not private still exits', { timeout: 5000 }, async () => {
+  const home = await mkdtemp('/tmp/fp-home-');
+  try {
+    const directory = path.join(home, '.local', 'state', 'facepalm', 'clients');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(path.join(directory, 'mcp'), 'a'.repeat(64), { mode: 0o644 });
+    const preload = path.join(home, 'platform.mjs');
+    await writeFile(preload, "Object.defineProperty(process, 'platform', { value: 'linux' });\n");
+    const child = spawn(process.execPath, [`--import=${preload}`, main], {
+      env: { ...process.env, HOME: home },
+    });
     const stderr = [];
     child.stderr.on('data', (data) => stderr.push(data));
     assert.deepEqual(await once(child, 'exit'), [1, null]);
@@ -192,6 +226,46 @@ for (const platform of ['darwin', 'linux']) {
     }
   });
 }
+
+test('a token approved after startup is picked up, with no restart (#117)', { timeout: 7000 }, async () => {
+  const home = await mkdtemp('/tmp/fp-home-');
+  const directory = path.join(home, '.local', 'state', 'facepalm');
+  await mkdir(path.join(directory, 'clients'), { recursive: true, mode: 0o700 });
+  const token = 'd'.repeat(64);
+  let greeted;
+  const hello = new Promise((resolve) => { greeted = resolve; });
+  const f = await fixture((line, socket) => socket.write('{"readings":[],"missed":0}\n'), (line) => {
+    greeted(line);
+    return '{"ok":true}\n';
+  }, path.join(directory, 'service.sock'));
+  const preload = path.join(home, 'platform.mjs');
+  await writeFile(preload, "Object.defineProperty(process, 'platform', { value: 'linux' });\n");
+  const child = spawn(process.execPath, [`--import=${preload}`, main], {
+    env: { ...process.env, HOME: home },
+  });
+  const exited = once(child, 'exit');
+  const replies = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+  try {
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+      protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
+    } }) + '\n');
+    assert.equal(JSON.parse((await replies.next()).value).id, 1);
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    // Approved only now, after main.js already started with no token file.
+    await writeFile(path.join(directory, 'clients', 'mcp'), `${token}\n`, { mode: 0o600 });
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: {
+      name: 'wait_for_reaction', arguments: { timeout_ms: 1000 },
+    } }) + '\n');
+    assert.match(await hello, new RegExp(`^hello mcp-[0-9a-f-]{36} ${token}$`));
+    const result = JSON.parse((await replies.next()).value).result;
+    assert.notEqual(result.isError, true);
+  } finally {
+    child.stdin.end();
+    await exited;
+    await f.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
 
 test('starts the hook broker only when FACEPALM_HOOK_SOCKET is set, and keeps the MCP server up when it fails', async () => {
   const f = await fixture(() => {});

@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { registerFeelingElicitation } from '../feeling-elicitation.js';
+import { OfflineError } from '../session.js';
 
 const feelings = ['agreement', 'disagreement', 'engagement', 'annoyance', 'confused', 'unknown'];
 
@@ -96,6 +97,16 @@ test('a refused or failed feeling, and an elicitation the host refuses, are erro
   try {
     const result = await client.callTool({ name: 'ask_feeling', arguments: { id: 1, feeling: 'confused', feelings } });
     assert.equal(result.isError, true);
+  } finally { await client.close(); await server.close(); }
+});
+
+test('a session that is not connected right now says Facepalm is off (#117)', async () => {
+  const session = { request: async () => { throw new OfflineError('offline'); } };
+  const { server, client } = await connected(session, () => ({ action: 'accept', content: { feeling: 'confused' } }));
+  try {
+    const result = await client.callTool({ name: 'ask_feeling', arguments: { id: 1, feeling: 'confused', feelings } });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /Facepalm is off/);
   } finally { await client.close(); await server.close(); }
 });
 

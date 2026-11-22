@@ -4,7 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { SocketSession } from '../session.js';
+import { SocketSession, OfflineError } from '../session.js';
 
 async function fixture(handler, hello = '{"ok":true}\n', address = undefined) {
   const dir = address ? undefined : await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
@@ -35,6 +35,24 @@ async function fixture(handler, hello = '{"ok":true}\n', address = undefined) {
   } };
 }
 
+// A clock a test can move forward by hand, so backoff never needs a real
+// wait; starts at an arbitrary, nonzero instant, as Date.now() would.
+function fakeClock(start = 1_700_000_000_000) {
+  let now = start;
+  const clock = () => now;
+  clock.advance = (ms) => { now += ms; };
+  return clock;
+}
+
+// One real timer tick: disconnect()'s own socket.destroy() tears down its
+// file descriptor on a later tick of the real event loop, not the fake
+// clock's; without this, a reconnect attempted on the very same tick can
+// find the old socket's teardown still pending and never reach the
+// fixture at all.
+function settle() {
+  return new Promise((resolve) => { setTimeout(resolve, 0); });
+}
+
 test('serializes requests on one uniquely named connection', async () => {
   const commands = [];
   const f = await fixture((line, socket) => { commands.push(line); socket.write('{"ok":true}\n'); });
@@ -55,6 +73,35 @@ test('sends a token with hello when one is given, and omits it otherwise', async
   try {
     await session.request('feel 1 agreement');
     assert.deepEqual(hellos, [`hello ${session.name} a-private-token`]);
+  } finally { session.close(); await f.close(); }
+});
+
+test('a token given as a function is read fresh for every connection attempt (#117)', async () => {
+  const hellos = [];
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'), (line) => {
+    hellos.push(line);
+    return line.split(' ').length === 3 ? '{"ok":true}\n' : '{"error":"client not approved"}\n';
+  });
+  let token;
+  const clock = fakeClock();
+  const session = new SocketSession(f.address, () => token, clock);
+  try {
+    await assert.rejects(session.request('feel 1 agreement'));
+    clock.advance(session.backoffMs);
+    await settle();
+    token = 'approved-later';
+    await session.request('feel 2 agreement');
+    assert.deepEqual(hellos, [`hello ${session.name}`, `hello ${session.name} approved-later`]);
+  } finally { session.close(); await f.close(); }
+});
+
+test('a token function that throws is treated as no token, not a crash', async () => {
+  const hellos = [];
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'), (line) => { hellos.push(line); return '{"ok":true}\n'; });
+  const session = new SocketSession(f.address, () => { throw new Error('not there yet'); });
+  try {
+    await session.request('feel 1 agreement');
+    assert.deepEqual(hellos, [`hello ${session.name}`]);
   } finally { session.close(); await f.close(); }
 });
 
@@ -92,16 +139,20 @@ test('active cancellation is terminal and never reconnects', async () => {
     await assert.rejects(call);
     await assert.rejects(session.request('feel 1 agreement'));
     assert.equal(f.connections.length, 1);
+    assert.equal(session.closed, true);
   } finally { session.close(); await f.close(); }
 });
 
-test('invalid, extra and oversized replies end the session', async () => {
+test('invalid, extra and oversized replies disconnect, but do not close, the session (#117)', async () => {
   for (const reply of ['not-json\n', '{}\n{}\n', 'x'.repeat(1024 * 1024 + 1)]) {
     const f = await fixture((line, socket) => socket.write(reply));
     const session = new SocketSession(f.address);
     try {
-      await assert.rejects(session.request('wait 0'));
-      await assert.rejects(session.request('wait 0'));
+      await assert.rejects(session.request('wait 0'), OfflineError);
+      assert.equal(session.closed, false);
+      // Still backing off: the retry does not even try to dial again.
+      await assert.rejects(session.request('wait 0'), OfflineError);
+      assert.equal(f.connections.length, 1);
     } finally { session.close(); await f.close(); }
   }
 });
@@ -131,23 +182,24 @@ test('accepts a fragmented reply', async () => {
   finally { session.close(); await f.close(); }
 });
 
-test('timed-out request closes the session without reconnecting', async () => {
+test('a timed-out request disconnects, but does not close, the session (#117)', async () => {
   const f = await fixture(() => {});
   const session = new SocketSession(f.address);
   try {
-    await assert.rejects(session.request('wait 0', undefined, 25));
-    await assert.rejects(session.request('feel 1 agreement'));
+    await assert.rejects(session.request('wait 0', undefined, 25), OfflineError);
+    assert.equal(session.closed, false);
+    await assert.rejects(session.request('feel 1 agreement'), OfflineError);
     assert.equal(f.connections.length, 1);
   } finally { session.close(); await f.close(); }
 });
 
-
-test('a socket error, such as nothing listening, closes the session', async () => {
+test('a socket error, such as nothing listening, disconnects without closing the session (#117)', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'facepalm-mcp-'));
   const session = new SocketSession(path.join(directory, 'nothing-listens-here.sock'));
   try {
-    await assert.rejects(session.request('wait 0'));
-    await assert.rejects(session.request('feel 1 agreement'));
+    await assert.rejects(session.request('wait 0'), OfflineError);
+    assert.equal(session.closed, false);
+    await assert.rejects(session.request('feel 1 agreement'), OfflineError);
   } finally { session.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -156,12 +208,100 @@ test('refused hello and pre-cancelled calls do not send requests', async () => {
   const f = await fixture((line) => commands.push(line), '{"error":"refused"}\n');
   const session = new SocketSession(f.address);
   try {
-    await assert.rejects(session.request('wait 0'));
-    await assert.rejects(session.request('feel 1 agreement'));
+    await assert.rejects(session.request('wait 0'), OfflineError);
+    assert.equal(session.closed, false);
+    await assert.rejects(session.request('feel 1 agreement'), OfflineError);
     assert.deepEqual(commands, []);
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(session.request('wait 0', controller.signal));
     await assert.rejects(session.exchange('wait 0', controller.signal, 100));
+  } finally { session.close(); await f.close(); }
+});
+
+test('reconnects once its backoff has run out, without the caller doing anything (#117)', async () => {
+  const commands = [];
+  let healthy = false;
+  const f = await fixture((line, socket) => {
+    if (!healthy) return socket.end();
+    commands.push(line);
+    socket.write('{"ok":true}\n');
+  });
+  const clock = fakeClock();
+  const session = new SocketSession(f.address, undefined, clock);
+  try {
+    await assert.rejects(session.request('feel 1 agreement'), OfflineError);
+    assert.equal(session.closed, false);
+    // Still inside the backoff window: no new connection is attempted.
+    await assert.rejects(session.request('feel 2 agreement'), OfflineError);
+    assert.equal(f.connections.length, 1);
+    healthy = true;
+    clock.advance(1000);
+    await settle();
+    assert.deepEqual(await session.request('feel 3 agreement'), { ok: true });
+    assert.deepEqual(commands, ['feel 3 agreement']);
+    assert.equal(f.connections.length, 2);
+  } finally { session.close(); await f.close(); }
+});
+
+test('backoff grows on each failure in a row, and resets once a connection succeeds (#117)', async () => {
+  let healthy = false;
+  const f = await fixture(
+    (line, socket) => socket.write('{"ok":true}\n'),
+    () => (healthy ? '{"ok":true}\n' : '{"error":"not approved yet"}\n'),
+  );
+  const clock = fakeClock();
+  const session = new SocketSession(f.address, undefined, clock);
+  try {
+    await assert.rejects(session.request('feel 1 agreement'));
+    clock.advance(999);
+    await assert.rejects(session.request('feel 2 agreement')); // Still too soon: no new attempt.
+    assert.equal(f.connections.length, 1);
+    clock.advance(1);
+    await settle();
+    await assert.rejects(session.request('feel 3 agreement')); // Backoff doubles to 2000ms.
+    assert.equal(f.connections.length, 2);
+    clock.advance(1999);
+    await assert.rejects(session.request('feel 4 agreement')); // Still too soon for the doubled wait.
+    assert.equal(f.connections.length, 2);
+    clock.advance(1);
+    await settle();
+    healthy = true;
+    await session.request('feel 5 agreement');
+    assert.equal(f.connections.length, 3);
+    // Backoff reset: a later failure waits the minimum again, not the
+    // doubled 4000ms it would be without the reset. The link itself has
+    // to drop first: an already-open connection keeps exchanging over it
+    // regardless of `healthy`, which only the next hello sees.
+    healthy = false;
+    f.connections.at(-1).end();
+    await settle();
+    // Blocked immediately: the link just dropped, backing off from its
+    // own reset minimum, so no new connection is even attempted yet.
+    await assert.rejects(session.request('feel 6 agreement'));
+    assert.equal(f.connections.length, 3);
+    clock.advance(999);
+    await assert.rejects(session.request('feel 7 agreement')); // Still too soon for the reset (minimum) wait.
+    assert.equal(f.connections.length, 3);
+    clock.advance(1);
+    await settle();
+    await assert.rejects(session.request('feel 8 agreement')); // The reset wait has now passed.
+    assert.equal(f.connections.length, 4);
+  } finally { session.close(); await f.close(); }
+});
+
+test('offline never bounds beyond its own cap', async () => {
+  const f = await fixture((line, socket) => socket.write('{"ok":true}\n'), () => '{"error":"refused"}\n');
+  const clock = fakeClock();
+  const session = new SocketSession(f.address, undefined, clock);
+  try {
+    let attempts = 1;
+    await assert.rejects(session.request('feel 1 agreement'));
+    for (let doublings = 0; doublings < 10; doublings++) {
+      clock.advance(session.backoffMs);
+      await settle();
+      await assert.rejects(session.request(`feel ${++attempts} agreement`));
+    }
+    assert.equal(session.backoffMs, 30000);
   } finally { session.close(); await f.close(); }
 });
