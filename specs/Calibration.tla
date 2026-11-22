@@ -13,6 +13,17 @@
 \* reader simply gets no frames, which this model turns into the camera
 \* interplay below. MaxOutages bounds how many times the camera can be lost,
 \* this model's form of "the camera eventually comes back".
+\*
+\* Every action below is one indivisible step, which is only true of the
+\* code (#128) because CalibrationSession (src/calibration.h) guards its
+\* own state -- step, captured, the running sample, the saved profile's
+\* in-progress points, camera_up_ -- with one mutex, taken for the whole
+\* body of Start, Next, Cancel, Update, OnCameraLost and OnCameraUp alike:
+\* whichever of those a connection's own thread (Start, Next, Cancel),
+\* the inference queue (Update) or the daemon's control queue
+\* (OnCameraLost, OnCameraUp) calls next waits for the one already in
+\* progress to finish first, the same serialization this spec's own
+\* single next-action-at-a-time semantics already assumes.
 EXTENDS Naturals
 CONSTANTS GuardCapture, GuardStartCamera, GuardCameraLost, GuardCancelDiscards,
           Steps, MaxOutages

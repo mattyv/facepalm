@@ -1,5 +1,6 @@
 #include "src/calibration_flow.h"
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <vector>
@@ -28,11 +29,17 @@ class MockCalibrateClientIo : public CalibrateClientIo {
 
 class CalibrationFlowTest : public ::testing::Test {
  protected:
+  // `wait` defaults to one that counts its own calls without really
+  // sleeping, so a test exercising Start's camera-wait retry (#128) runs
+  // at once; a test wanting the real duration passed instead gives its
+  // own.
   CalibrationFlow Make(const std::string& token = "") {
-    return {kSocketPath, token, io_};
+    return {kSocketPath, token, io_,
+            [this](std::chrono::milliseconds wait) { waits_.push_back(wait); }};
   }
 
   std::vector<std::string> Sent() const { return sent_; }
+  const std::vector<std::chrono::milliseconds>& Waits() const { return waits_; }
 
   // Records every WriteLine call and, by default, lets Connect succeed.
   void RecordWrites() {
@@ -46,6 +53,7 @@ class CalibrationFlowTest : public ::testing::Test {
 
  private:
   std::vector<std::string> sent_;
+  std::vector<std::chrono::milliseconds> waits_;
 };
 
 // -- Start -------------------------------------------------------------
@@ -164,6 +172,84 @@ TEST_F(CalibrationFlowTest,
   EXPECT_THAT(flow.CurrentView().error, HasSubstr("closed"));
 }
 
+// -- Start's camera-wait retry (CalibrationMenu.tla's OpenWaitsForCamera, --
+// -- RetrySucceeds, RetryWaits, RetryGivesUp; #128's first finding) ------
+
+TEST_F(CalibrationFlowTest,
+       StartRetriesWhenRefusedOnlyForTheCameraThenReachesPrompting) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillOnce(Return(R"({"error":"the camera is not available"})"))
+      .WillOnce(Return(R"({"error":"the camera is not available"})"))
+      .WillOnce(Return(
+          R"({"ok":true,"calibration":{"state":"running","index":0,"total":6,"step":"resting"}})"));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  EXPECT_THAT(Sent(), ElementsAre("hello calibrate", "calibrate start 1",
+                                  "calibrate start 1", "calibrate start 1"));
+  EXPECT_THAT(Waits(), ElementsAre(CalibrationFlow::kCameraWaitInterval,
+                                   CalibrationFlow::kCameraWaitInterval));
+  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kPrompting));
+}
+
+TEST_F(CalibrationFlowTest,
+       StartGivesUpAfterMaxCameraWaitsWithTheCameraStillDown) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillRepeatedly(Return(R"({"error":"the camera is not available"})"));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  // One hello, then one "calibrate start" per attempt (kMaxCameraWaits
+  // retries plus the first try).
+  EXPECT_THAT(
+      Sent().size(),
+      Eq(1U + static_cast<std::size_t>(CalibrationFlow::kMaxCameraWaits + 1)));
+  EXPECT_THAT(Waits().size(),
+              Eq(static_cast<std::size_t>(CalibrationFlow::kMaxCameraWaits)));
+  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(flow.CurrentView().error, Eq("the camera is not available"));
+}
+
+// The real default (std::this_thread::sleep_for), used outside a test
+// double, actually sleeps between retries rather than only being wired up
+// to do so.
+TEST_F(CalibrationFlowTest, StartsDefaultWaitReallySleeps) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillOnce(Return(R"({"error":"the camera is not available"})"))
+      .WillOnce(Return(
+          R"({"ok":true,"calibration":{"state":"running","index":0,"total":6,"step":"resting"}})"));
+  CalibrationFlow flow{kSocketPath, "", io_};
+
+  flow.Start(1);
+
+  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kPrompting));
+}
+
+TEST_F(CalibrationFlowTest, StartDoesNotRetryARefusalUnrelatedToTheCamera) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillOnce(
+          Return(R"({"error":"a calibration session is already running"})"));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  EXPECT_THAT(Sent(), ElementsAre("hello calibrate", "calibrate start 1"));
+  EXPECT_THAT(Waits(), IsEmpty());
+  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(flow.CurrentView().error,
+              Eq("a calibration session is already running"));
+}
+
 // -- Next ----------------------------------------------------------------
 
 TEST_F(CalibrationFlowTest, NextTransitionsToPromptingOnARunningReply) {
@@ -203,13 +289,41 @@ TEST_F(CalibrationFlowTest, NextTransitionsToDoneOnADoneReply) {
   EXPECT_THAT(flow.CurrentView().error, IsEmpty());
 }
 
-TEST_F(CalibrationFlowTest, NextTransitionsToFailedOnAnErrorReply) {
+// CalibrationMenu.tla's NextRefused/SessionEndsWithFlow: a refused "next"
+// always sends "calibrate cancel" before reporting the failure (#128), so
+// a session the daemon still has (the usual case this test's own error
+// means) is never left running with nobody left to answer for it.
+TEST_F(CalibrationFlowTest, NextSendsCancelAndReportsItsOwnErrorOnARefusal) {
   RecordWrites();
   EXPECT_CALL(io_, ReadLine)
       .WillOnce(Return(R"({"ok":true})"))
       .WillOnce(Return(
           R"({"ok":true,"calibration":{"state":"running","index":0,"total":6,"step":"resting"}})"))
-      .WillOnce(Return(R"({"error":"no calibration session is running"})"));
+      .WillOnce(Return(R"({"error":"no pose captured yet for this step"})"))
+      .WillOnce(Return(R"({"ok":true})"));
+  CalibrationFlow flow = Make();
+  flow.Start(1);
+
+  flow.Next();
+
+  EXPECT_THAT(Sent(), ElementsAre("hello calibrate", "calibrate start 1",
+                                  "calibrate next", "calibrate cancel"));
+  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(flow.CurrentView().error,
+              Eq("no pose captured yet for this step"));
+}
+
+// The cancel sent to clean up a refusal can itself fail or hang up; the
+// person still sees the original refusal, not a second error about the
+// cleanup they never asked for.
+TEST_F(CalibrationFlowTest, NextKeepsItsOwnErrorEvenWhenTheCleanupCancelFails) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillOnce(Return(
+          R"({"ok":true,"calibration":{"state":"running","index":0,"total":6,"step":"resting"}})"))
+      .WillOnce(Return(R"({"error":"no pose captured yet for this step"})"))
+      .WillOnce(Return(std::nullopt));
   CalibrationFlow flow = Make();
   flow.Start(1);
 
@@ -217,10 +331,13 @@ TEST_F(CalibrationFlowTest, NextTransitionsToFailedOnAnErrorReply) {
 
   EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kFailed));
   EXPECT_THAT(flow.CurrentView().error,
-              Eq("no calibration session is running"));
+              Eq("no pose captured yet for this step"));
 }
 
-TEST_F(CalibrationFlowTest, NextTransitionsToFailedOnAHangUp) {
+// A hang-up, unlike a refusal, means the connection -- and whatever
+// session the daemon had -- is already gone: there is nothing left to
+// send a cancel to, so Next does not try.
+TEST_F(CalibrationFlowTest, NextTransitionsToFailedOnAHangUpWithoutACancel) {
   RecordWrites();
   EXPECT_CALL(io_, ReadLine)
       .WillOnce(Return(R"({"ok":true})"))
@@ -232,6 +349,8 @@ TEST_F(CalibrationFlowTest, NextTransitionsToFailedOnAHangUp) {
 
   flow.Next();
 
+  EXPECT_THAT(Sent(), ElementsAre("hello calibrate", "calibrate start 1",
+                                  "calibrate next"));
   EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kFailed));
   EXPECT_THAT(flow.CurrentView().error, HasSubstr("closed"));
 }

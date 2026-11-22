@@ -1,10 +1,12 @@
 #include "src/calibration_flow.h"
 
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #include "src/calibration.h"
@@ -100,40 +102,46 @@ std::optional<CalibrationController::Status> ParseCalibrationReply(
 
 }  // namespace
 
+void CalibrationFlow::DefaultWait(std::chrono::milliseconds duration) {
+  std::this_thread::sleep_for(duration);
+}
+
 CalibrationFlow::CalibrationFlow(std::string socket_path, std::string token,
-                                 CalibrateClientIo& io)
-    : socket_path_(std::move(socket_path)), token_(std::move(token)), io_(io) {}
+                                 CalibrateClientIo& io, Wait wait)
+    : socket_path_(std::move(socket_path)),
+      token_(std::move(token)),
+      io_(io),
+      wait_(std::move(wait)) {}
 
 void CalibrationFlow::Fail(std::string error) {
   view_ = View{.state = State::kFailed, .error = std::move(error)};
 }
 
-void CalibrationFlow::ApplyReply(const std::optional<std::string>& reply) {
+std::optional<CalibrationController::Status> CalibrationFlow::ReadStatus(
+    std::string& error) {
+  const std::optional<std::string> reply = io_.ReadLine();
   if (!reply) {
-    Fail("connection closed before a reply arrived");
-    return;
+    error = "connection closed before a reply arrived";
+    return std::nullopt;
   }
-  std::string error;
-  const std::optional<CalibrationController::Status> status =
-      ParseCalibrationReply(*reply, error);
-  if (!status) {
-    Fail(error);
-    return;
-  }
-  if (status->done) {
+  return ParseCalibrationReply(*reply, error);
+}
+
+void CalibrationFlow::ApplyStatus(const CalibrationController::Status& status) {
+  if (status.done) {
     view_ = View{.state = State::kDone, .error = {}};
     return;
   }
-  if (!status->running) {
+  if (!status.running) {
     Fail("the daemon ended the session unexpectedly");
     return;
   }
   view_ = View{.state = State::kPrompting,
-               .resting_step = status->resting_step,
-               .screen = status->screen,
-               .point = status->point,
-               .index = status->index,
-               .total = status->total,
+               .resting_step = status.resting_step,
+               .screen = status.screen,
+               .point = status.point,
+               .index = status.index,
+               .total = status.total,
                .error = {}};
 }
 
@@ -147,18 +155,38 @@ void CalibrationFlow::Start(int screens) {
     hello_line += " " + token_;
   }
   io_.WriteLine(hello_line);
-  const std::optional<std::string> hello = io_.ReadLine();
-  if (!hello) {
-    Fail("connection closed before a reply arrived");
+  std::string hello_error;
+  if (!ReadStatus(hello_error).has_value()) {
+    Fail(hello_error);
     return;
   }
-  std::string error;
-  if (!ParseCalibrationReply(*hello, error)) {
-    Fail(error);
-    return;
+  const std::string start_line = "calibrate start " + std::to_string(screens);
+  // specs/CalibrationMenu.tla's OpenWaitsForCamera, RetrySucceeds,
+  // RetryWaits and RetryGivesUp, all within this one call: a cold start's
+  // "calibrate start" is refused only because this flow's own hello,
+  // above, is what starts opening the daemon's camera, asynchronously
+  // (#128's first finding), so a refusal naming exactly that is retried
+  // kCameraWaitInterval apart rather than failing the first time it is
+  // simply too early; any other refusal (a session already running, say)
+  // fails at once, as before.
+  // Every attempt returns, through ApplyStatus or Fail, once it is the
+  // kMaxCameraWaits'th: the loop's own condition never ends it, so it is
+  // not given one.
+  for (int attempt = 0;; ++attempt) {
+    io_.WriteLine(start_line);
+    std::string error;
+    const std::optional<CalibrationController::Status> status =
+        ReadStatus(error);
+    if (status) {
+      ApplyStatus(*status);
+      return;
+    }
+    if (error != kCameraUnavailableError || attempt == kMaxCameraWaits) {
+      Fail(error);
+      return;
+    }
+    wait_(kCameraWaitInterval);
   }
-  io_.WriteLine("calibrate start " + std::to_string(screens));
-  ApplyReply(io_.ReadLine());
 }
 
 void CalibrationFlow::Next() {
@@ -166,7 +194,33 @@ void CalibrationFlow::Next() {
     return;
   }
   io_.WriteLine("calibrate next");
-  ApplyReply(io_.ReadLine());
+  const std::optional<std::string> reply = io_.ReadLine();
+  if (!reply) {
+    // The connection is already gone: nothing is left to send a cancel
+    // to, unlike the refusal below.
+    Fail("connection closed before a reply arrived");
+    return;
+  }
+  std::string error;
+  const std::optional<CalibrationController::Status> status =
+      ParseCalibrationReply(*reply, error);
+  if (!status) {
+    // specs/CalibrationMenu.tla's NextRefused: the daemon's own session
+    // may still be running (no pose captured yet, or its save failed,
+    // src/calibration.cc's Next) with nobody left to finish it once this
+    // flow reports the failure below and stops calling Next; telling it
+    // to cancel first, in this same call, is what keeps
+    // SessionEndsWithFlow (state \in {failed, done} => ~sessionLive) true
+    // regardless of what was refused for -- the attempt costs nothing
+    // when the daemon already has no session of its own to cancel
+    // (#128). Its own reply is not worth failing over a second time: the
+    // refusal already decided what the person sees.
+    io_.WriteLine("calibrate cancel");
+    io_.ReadLine();
+    Fail(error);
+    return;
+  }
+  ApplyStatus(*status);
 }
 
 void CalibrationFlow::SendCancelAndClose() {

@@ -5,6 +5,65 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: The wizard waits for the camera, not the daemon, closing #128
+
+-   **Decision:** of the two ways #128's first finding could be fixed --
+    the wizard waiting for the camera to come up, or the daemon starting
+    calibration itself once it does -- `CalibrationFlow::Start` is the one
+    that waits: a `calibrate start` refused only for
+    `kCameraUnavailableError` is retried, `kCameraWaitInterval` apart, up
+    to `kMaxCameraWaits` times, before failing. The daemon's own
+    synchronous, one-request-one-reply protocol (`src/service.cc`) has no
+    way to hold a request open across an asynchronous camera open and
+    answer it later; the wizard already blocks its caller's thread for
+    the length of one `Start` call (`tools/menu/main.mm`,
+    `main_linux.cc`'s button handlers), so stretching that one call across
+    a few bounded retries costs nothing structural, where teaching the
+    daemon to queue a request would.
+-   **Spec:** `specs/CalibrationMenu.tla` gains the retry as a new
+    `"opening"` state (`OpenWaitsForCamera`, `RetrySucceeds`, `RetryWaits`,
+    `RetryGivesUp`, against an environment `CameraComesUp` on its own
+    schedule) and a liveness property, `CameraWaitResolves`, whose
+    mutation (no fairness on the three retry actions) shows a flow stuck
+    in `"opening"` forever. `"opening"` is never observed through
+    `CalibrationFlow::CurrentView()`: the whole retry loop runs inside one
+    call to `Start`, the same reasoning that already makes `ClosingCompletes`
+    hold without needing its own fairness assumption to be a real one.
+-   **The second finding (the orphaned session) has two separate causes,
+    fixed separately, each with its own guard:** `ApplyReply` treating any
+    refused `calibrate next` as simply failed, with no cancel sent, is
+    `specs/CalibrationMenu.tla`'s new `NextRefused` action and
+    `GuardCancelOnRefusal`, proved against a new invariant,
+    `SessionEndsWithFlow` (`state \in {failed, done} => ~sessionLive`);
+    `CalibrationFlow::Next` now sends `calibrate cancel` and reads its
+    reply before reporting the original failure, regardless of what the
+    refusal said, since the alternative -- parsing the daemon's error text
+    to tell a session still running apart from one already gone -- is
+    fragile where "always try" costs nothing. The daemon never tying the
+    session to its connection, so a menu crash orphans it the same way, is
+    instead `specs/Service.tla`'s new `calibOwner`, `CalibrateStart`,
+    `CalibrateEnds` and `Closed`'s own `GuardCalibCancelOnClose`, against a
+    new invariant, `NoDanglingCalibOwner`: `Service::CalibrateReply` ties a
+    successful `calibrate start` to its connection, and `LeaveCalibration`,
+    called from `Serve` as that connection's thread ends, cancels the
+    session it still owns, if any, before its slot can be reused.
+-   **The third finding (the data race) is fixed with one mutex,** not a
+    new spec: `specs/Calibration.tla`'s actions were already modeled as
+    atomic steps: `CalibrationSession` now guards `Start`, `Next`,
+    `Cancel`, `Update`, `OnCameraLost` and `OnCameraUp` alike with one
+    `mutex_`, taken for each one's whole body, which is what makes the
+    model's atomicity true of the code rather than merely assumed; a
+    two-thread stress test exercises it under ThreadSanitizer.
+-   **The fourth finding (macOS SIGPIPE and the unbounded `recv`)** is
+    fixed in `tools/posix_calibrate_client_io.h` the way `src/unix_socket.cc`
+    already fixes it on the daemon's own side: `SO_NOSIGPIPE` on the
+    socket (macOS) or `MSG_NOSIGNAL` on each `send` (Linux), and
+    `SO_RCVTIMEO` so a daemon that stops answering, rather than closing
+    the socket, ends `ReadLine` the same way a hang-up does, instead of
+    blocking the menu's UI thread forever. Left untested by this repo's
+    own convention for this file (untested POSIX glue, the same as
+    `tools/calibrate_cli/main.cc`'s own use of it).
+
 ## 2026-11-22: A menu entry for calibration, with its own small spec, closing #118
 
 -   **Decision:** `tools/menu/main.mm` and `tools/menu/main_linux.cc` each
