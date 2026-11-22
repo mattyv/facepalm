@@ -181,11 +181,12 @@ QString StepPrompt(const facepalm::CalibrationFlow::View& view) {
       break;
   }
   QScreen* screen = ScreenAt(view.screen);
-  const QString screenName = screen != nullptr
-                                 ? ScreenDescription(screen)
-                                 : QStringLiteral("screen %1").arg(view.screen + 1);
-  return QStringLiteral("Look at %1 of %2, the way you normally would, then "
-                       "click Next.")
+  const QString screenName =
+      screen != nullptr ? ScreenDescription(screen)
+                        : QStringLiteral("screen %1").arg(view.screen + 1);
+  return QStringLiteral(
+             "Look at %1 of %2, the way you normally would, then "
+             "click Next.")
       .arg(where, screenName);
 }
 
@@ -244,9 +245,8 @@ void CalibrationWindow::MoveToScreenForStep(
     return;
   }
   const QRect visible = screen->availableGeometry();
-  const QPoint origin(
-      visible.x() + (visible.width() - window_.width()) / 2,
-      visible.y() + (visible.height() - window_.height()) / 2);
+  const QPoint origin(visible.x() + (visible.width() - window_.width()) / 2,
+                      visible.y() + (visible.height() - window_.height()) / 2);
   window_.move(origin);
 }
 

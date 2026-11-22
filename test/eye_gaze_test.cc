@@ -80,8 +80,7 @@ TEST(EyeSignalFromTest, LookingDownReadsPositiveVertical) {
 }
 
 TEST(EyeSignalFromTest, LookingUpReadsNegativeVertical) {
-  const Face face =
-      FaceWithEyes({.look_up_left = 0.4F, .look_up_right = 0.4F});
+  const Face face = FaceWithEyes({.look_up_left = 0.4F, .look_up_right = 0.4F});
   const EyeSignal signal = EyeSignalFrom(face, kBlinkThreshold);
   EXPECT_LT(signal.vertical, 0);
 }
@@ -97,8 +96,8 @@ TEST(EyeSignalFromTest, HalfOpenEyesAreNotABlink) {
 }
 
 HeadRotation Head(double yaw, double pitch) {
-  return HeadRotation{.yaw_degrees = yaw, .pitch_degrees = pitch,
-                      .roll_degrees = 3};
+  return HeadRotation{
+      .yaw_degrees = yaw, .pitch_degrees = pitch, .roll_degrees = 3};
 }
 
 TEST(ComposeGazeTest, AddsTheGainedOffsetFromRestingPerAxis) {

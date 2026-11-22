@@ -41,8 +41,8 @@ EyeSignal EyeSignalFrom(const Face& face, double blink_threshold) {
   const double in_minus_out_right =
       static_cast<double>(face.blendshapes[kEyeLookInRight]) -
       static_cast<double>(face.blendshapes[kEyeLookOutRight]);
-  const double down =
-      Mean(face.blendshapes[kEyeLookDownLeft], face.blendshapes[kEyeLookDownRight]);
+  const double down = Mean(face.blendshapes[kEyeLookDownLeft],
+                           face.blendshapes[kEyeLookDownRight]);
   const double up =
       Mean(face.blendshapes[kEyeLookUpLeft], face.blendshapes[kEyeLookUpRight]);
   const double blink =
@@ -56,7 +56,8 @@ HeadRotation ComposeGaze(const HeadRotation& head,
                          const std::optional<EyeSignal>& eye,
                          const std::optional<EyeSignal>& eye_resting,
                          const EyeGains& gains, double head_only_yaw_degrees) {
-  if (!eye || !eye_resting || std::abs(head.yaw_degrees) > head_only_yaw_degrees) {
+  if (!eye || !eye_resting ||
+      std::abs(head.yaw_degrees) > head_only_yaw_degrees) {
     return head;
   }
   return HeadRotation{
@@ -105,7 +106,7 @@ void EyeGazeTracker::Update(const std::optional<Face>& face,
     recent_.emplace_back(timestamp_ms, signal);
   }
   while (!recent_.empty() &&
-        timestamp_ms - recent_.front().first > settings_.median_ms) {
+         timestamp_ms - recent_.front().first > settings_.median_ms) {
     recent_.pop_front();
   }
   last_ms_ = timestamp_ms;
@@ -126,7 +127,8 @@ std::optional<EyeSignal> EyeGazeTracker::Signal() const {
   }
   const auto median = [](std::vector<double>& values) {
     const std::size_t middle = values.size() / 2;
-    std::ranges::nth_element(values, values.begin() + static_cast<std::ptrdiff_t>(middle));
+    std::ranges::nth_element(
+        values, values.begin() + static_cast<std::ptrdiff_t>(middle));
     return values[middle];
   };
   return EyeSignal{.horizontal = median(horizontal),
@@ -202,9 +204,9 @@ std::optional<double> EstimateOneAxis(std::span<const double> head,
 // practice: every call site passes both from CalibrationSettings' own
 // named fields, never a bare literal in either position.
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
-std::optional<EstimatedGains> EstimateGains(std::span<const GainsSample> samples,
-                                            double min_travel_degrees,
-                                            double min_axis_degrees) {
+std::optional<EstimatedGains> EstimateGains(
+    std::span<const GainsSample> samples, double min_travel_degrees,
+    double min_axis_degrees) {
   // NOLINTEND(bugprone-easily-swappable-parameters)
   std::vector<double> head_yaw;
   std::vector<double> head_pitch;
@@ -228,8 +230,7 @@ std::optional<EstimatedGains> EstimateGains(std::span<const GainsSample> samples
     return std::nullopt;
   }
   return EstimatedGains{
-      .horizontal =
-          EstimateOneAxis(head_yaw, eye_horizontal, min_axis_degrees),
+      .horizontal = EstimateOneAxis(head_yaw, eye_horizontal, min_axis_degrees),
       .vertical = EstimateOneAxis(head_pitch, eye_vertical, min_axis_degrees)};
 }
 

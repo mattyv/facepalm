@@ -310,7 +310,8 @@ std::optional<CalibrationProfile> ParseCalibrationProfile(std::string_view text,
   if (!gains_vertical) {
     return std::nullopt;
   }
-  profile.gains = {.horizontal = *gains_horizontal, .vertical = *gains_vertical};
+  profile.gains = {.horizontal = *gains_horizontal,
+                   .vertical = *gains_vertical};
   const std::optional<int> screens = ReadField<int>(text, "screens", error);
   if (!screens) {
     return std::nullopt;

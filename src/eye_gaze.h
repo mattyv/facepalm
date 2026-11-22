@@ -113,7 +113,7 @@ class EyeGazeTracker {
 // rather than averaged into one.
 struct GainsSample {
   HeadRotation head;  // Only yaw_degrees and pitch_degrees are read.
-  EyeSignal eye;       // Only horizontal and vertical are read.
+  EyeSignal eye;      // Only horizontal and vertical are read.
 };
 
 // Gains #137's fixate-and-turn step estimates, per axis; either may be
@@ -146,9 +146,9 @@ struct EstimatedGains {
 // practice: every call site passes both from CalibrationSettings' own
 // named fields, never a bare literal in either position.
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
-std::optional<EstimatedGains> EstimateGains(std::span<const GainsSample> samples,
-                                            double min_travel_degrees,
-                                            double min_axis_degrees);
+std::optional<EstimatedGains> EstimateGains(
+    std::span<const GainsSample> samples, double min_travel_degrees,
+    double min_axis_degrees);
 // NOLINTEND(bugprone-easily-swappable-parameters)
 
 }  // namespace facepalm

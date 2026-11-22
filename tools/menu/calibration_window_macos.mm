@@ -120,8 +120,9 @@ NSString* StepPrompt(const facepalm::CalibrationFlow::View& view) {
   NSScreen* screen = ScreenAt(view.screen);
   NSString* screenName = screen != nil ? ScreenDescription(screen)
                                        : [NSString stringWithFormat:@"screen %d", view.screen + 1];
-  return [NSString stringWithFormat:@"Look at %@ of %@, the way you normally would, then click Next.",
-                                    where, screenName];
+  return
+      [NSString stringWithFormat:@"Look at %@ of %@, the way you normally would, then click Next.",
+                                 where, screenName];
 }
 
 // "Calibrated 1 screen." or "Calibrated 3 screens." (#135, #137): the
@@ -205,7 +206,7 @@ NSString* ResultText(int screens) {
   const NSRect frame = self.window.frame;
   const NSPoint origin =
       NSMakePoint(visible.origin.x + (visible.size.width - frame.size.width) / 2,
-                 visible.origin.y + (visible.size.height - frame.size.height) / 2);
+                  visible.origin.y + (visible.size.height - frame.size.height) / 2);
   [self.window setFrameOrigin:origin];
 }
 

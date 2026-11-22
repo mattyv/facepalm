@@ -193,7 +193,8 @@ TEST(ScreenContextReporterTest, EyeSignalComposesIntoTheGazeReading) {
   const EyeSignal eye{.horizontal = 1};
   const EyeSignal eye_resting{};
 
-  EXPECT_EQ(reporter.Json(kRest, kRest, eye, eye_resting), R"({"gaze":"away"})");
+  EXPECT_EQ(reporter.Json(kRest, kRest, eye, eye_resting),
+            R"({"gaze":"away"})");
 }
 
 // A profile's own gains take over from the constructor's default once one
@@ -219,7 +220,9 @@ TEST(ScreenContextReporterTest, AProfilesOwnGainsTakeOverFromTheDefault) {
 
 TEST(ScreenContextReporterTest, SetProfileSwapsWhatNextCallReads) {
   MockScreenSource source;
-  EXPECT_CALL(source, CurrentApp(false)).Times(2).WillRepeatedly(Return(std::nullopt));
+  EXPECT_CALL(source, CurrentApp(false))
+      .Times(2)
+      .WillRepeatedly(Return(std::nullopt));
   EXPECT_CALL(source, Mouse()).Times(2).WillRepeatedly(Return(std::nullopt));
   EXPECT_CALL(source, Screens())
       .Times(2)

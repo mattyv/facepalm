@@ -87,10 +87,10 @@ class CalibrationController {
     int total = 0;              // Steps this session has, while running.
     bool resting_step = false;  // Whether the running step is the resting pose.
     bool gains_step = false;    // Whether the running step is #137's gains
-                                 // step (fixate a dot, turn the head slowly).
-    int screen = 0;       // 0-based, when neither resting nor gains.
+                                // step (fixate a dot, turn the head slowly).
+    int screen = 0;             // 0-based, when neither resting nor gains.
     CalibrationPoint point = CalibrationPoint::kCentre;  // When a screen step.
-    int screens = 0;      // Screens just calibrated; set only when done.
+    int screens = 0;  // Screens just calibrated; set only when done.
   };
 
   virtual ~CalibrationController() = default;
@@ -198,7 +198,8 @@ class CalibrationSession : public CalibrationController {
   // step, Advance's next one, or a Refuse's retry does.
   void ResetStep();
   [[nodiscard]] int Total() const {
-    return kFixedSteps + (screens_ * static_cast<int>(kCalibrationPoints.size()));
+    return kFixedSteps +
+           (screens_ * static_cast<int>(kCalibrationPoints.size()));
   }
   [[nodiscard]] Status CurrentStatus() const;
   // Next's own body once a sample is captured: nullopt, with `error`, for
@@ -232,7 +233,7 @@ class CalibrationSession : public CalibrationController {
   HeadRotation sample_;  // The running step's head average so far.
   int eye_sample_count_ = 0;
   EyeSignal eye_sample_;  // The running step's eye average so far (blinks
-                         // excluded).
+                          // excluded).
   std::vector<GainsSample> gains_samples_;  // The gains step's own buffer.
   HeadRotation resting_;
   EyeSignal resting_eye_;

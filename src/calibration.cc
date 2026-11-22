@@ -48,8 +48,7 @@ void Accumulate(HeadRotation& sample, int& sample_count,
 // As Accumulate, for the running mean of a step's eye signal (#137):
 // blink frames never reach this, so sample_count here is the count of
 // non-blink frames alone.
-void AccumulateEye(EyeSignal& sample, int& sample_count,
-                   const EyeSignal& eye) {
+void AccumulateEye(EyeSignal& sample, int& sample_count, const EyeSignal& eye) {
   ++sample_count;
   const double weight = 1.0 / sample_count;
   sample.horizontal += (eye.horizontal - sample.horizontal) * weight;
@@ -176,9 +175,9 @@ std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
     resting_ = sample_;
     resting_eye_ = eye_sample_count_ > 0 ? eye_sample_ : EyeSignal{};
   } else if (GainsStep()) {
-    const std::optional<EstimatedGains> estimated = EstimateGains(
-        gains_samples_, settings_.min_head_travel_degrees,
-        settings_.min_axis_degrees);
+    const std::optional<EstimatedGains> estimated =
+        EstimateGains(gains_samples_, settings_.min_head_travel_degrees,
+                      settings_.min_axis_degrees);
     if (!estimated) {
       error = "turn your head further while you keep looking at the dot";
       ResetStep();
@@ -199,7 +198,7 @@ std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
                                           settings_.head_only_yaw_degrees);
     if (point != static_cast<std::size_t>(CalibrationPoint::kCentre) &&
         GazeDistance(gaze, points_[screen].points[static_cast<std::size_t>(
-                              CalibrationPoint::kCentre)]) <
+                               CalibrationPoint::kCentre)]) <
             settings_.min_spread_degrees) {
       error = "look further toward that corner, away from the centre";
       ResetStep();

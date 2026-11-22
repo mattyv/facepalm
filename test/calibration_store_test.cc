@@ -151,9 +151,10 @@ TEST(ParseCalibrationProfileTest, RefusesAMissingRestingEyeField) {
 
 TEST(ParseCalibrationProfileTest, RefusesAMissingGainsField) {
   std::string error;
-  const std::string text = "version = 2\nresting.yaw = 0\nresting.pitch = 0\n"
-                           "resting.roll = 0\nresting_eye.horizontal = 0\n"
-                           "resting_eye.vertical = 0\n";
+  const std::string text =
+      "version = 2\nresting.yaw = 0\nresting.pitch = 0\n"
+      "resting.roll = 0\nresting_eye.horizontal = 0\n"
+      "resting_eye.vertical = 0\n";
   EXPECT_THAT(ParseCalibrationProfile(text, error), Eq(std::nullopt));
   EXPECT_THAT(error, Eq("expected gains.horizontal = a number"));
 }

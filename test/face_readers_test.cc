@@ -67,7 +67,8 @@ TEST(FaceReadersTest, NoReaderTheConfigTurnsOff) {
 // a real face through the last reader is enough to show the given
 // ScreenContextReader is the one fed.
 TEST(FaceReadersTest, ScreenContextReaderIsAppendedWhenGiven) {
-  ScreenContextReader reader{ExpressionTracker::Settings{}, EyeGazeTracker::Settings{}};
+  ScreenContextReader reader{ExpressionTracker::Settings{},
+                             EyeGazeTracker::Settings{}};
   const std::vector<std::unique_ptr<FaceReader>> readers =
       MakeFaceReaders(Config{}, &reader);
 
@@ -97,7 +98,8 @@ TEST(FaceReadersTest, NoScreenContextReaderGivenIsNoReader) {
 TEST(FaceReadersTest, ScreenContextDisabledSkipsItEvenWhenGiven) {
   Config config;
   config.screen_context_enabled = false;
-  ScreenContextReader reader{ExpressionTracker::Settings{}, EyeGazeTracker::Settings{}};
+  ScreenContextReader reader{ExpressionTracker::Settings{},
+                             EyeGazeTracker::Settings{}};
 
   EXPECT_THAT(MakeFaceReaders(config, &reader), SizeIs(3));
 }
@@ -132,7 +134,8 @@ TEST(FaceReadersTest, NoCalibrationControllerGivenIsNoReader) {
 }
 
 TEST(FaceReadersTest, ScreenContextAndCalibrationBothAppendedWhenGiven) {
-  ScreenContextReader reader{ExpressionTracker::Settings{}, EyeGazeTracker::Settings{}};
+  ScreenContextReader reader{ExpressionTracker::Settings{},
+                             EyeGazeTracker::Settings{}};
   MockCalibrationController calibration;
 
   EXPECT_THAT(MakeFaceReaders(Config{}, &reader, &calibration), SizeIs(5));

@@ -239,7 +239,8 @@ std::string PreviewReadingsPath(
 // CalibrationSession's own tunable thresholds and gains, from Config
 // (#137): pulled out of Engine's constructor so its own cognitive
 // complexity (#64) stays under the project's threshold.
-facepalm::CalibrationSettings CalibrationSettingsFor(const facepalm::Config& config) {
+facepalm::CalibrationSettings CalibrationSettingsFor(
+    const facepalm::Config& config) {
   return facepalm::CalibrationSettings{
       .default_gains = {.horizontal = config.eye_gaze_horizontal_gain,
                         .vertical = config.eye_gaze_vertical_gain},
@@ -357,7 +358,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                       config.screen_context_window_titles_enabled,
                       calibration_profile,
                       EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
-                              .vertical = config.eye_gaze_vertical_gain},
+                               .vertical = config.eye_gaze_vertical_gain},
                       config.eye_gaze_head_only_yaw_degrees)
                 : std::nullopt),
         calibration_profile_(CopyProfile(calibration_profile)),

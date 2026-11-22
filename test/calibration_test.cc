@@ -181,7 +181,7 @@ TEST_F(NoSaveWithWeakStepTest, RefusesAGainsStepWithTooLittleHeadTravel) {
   std::string error;
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
   EXPECT_THAT(error,
-             Eq("turn your head further while you keep looking at the dot"));
+              Eq("turn your head further while you keep looking at the dot"));
 }
 
 TEST_F(NoSaveWithWeakStepTest, ARefusedGainsStepCanBeRetried) {
@@ -221,7 +221,8 @@ TEST_F(NoSaveWithWeakStepTest, RefusesACornerTooCloseToItsOwnCentre) {
 
   std::string error;
   EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
-  EXPECT_THAT(error, Eq("look further toward that corner, away from the centre"));
+  EXPECT_THAT(error,
+              Eq("look further toward that corner, away from the centre"));
 }
 
 TEST_F(NoSaveWithWeakStepTest, ARefusedCornerCanBeRetried) {
@@ -524,10 +525,10 @@ TEST_F(CalibrationSessionTest,
   // a passing sample, which is exactly the kind of flakiness a test
   // should not carry.
   ON_CALL(store_, Save).WillByDefault(Return(true));
-  CalibrationSession session(
-      store_, CalibrationSettings{.min_head_travel_degrees = 0,
-                                           .min_axis_degrees = 0,
-                                           .min_spread_degrees = 0});
+  CalibrationSession session(store_,
+                             CalibrationSettings{.min_head_travel_degrees = 0,
+                                                 .min_axis_degrees = 0,
+                                                 .min_spread_degrees = 0});
   std::atomic<bool> stop{false};
   std::thread frames([&session, &stop] {
     int step = -10;
