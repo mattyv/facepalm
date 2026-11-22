@@ -5,6 +5,75 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: A preview request must be fresh, and must be a menu's own, closing #114
+
+-   **Decision:** `specs/PreviewLease.tla` now also models the request
+    the menu makes (`requested`) as needing to be fresh
+    (`age <= StaleAge`), not merely present, and a menu that is gone
+    (`menu_alive = FALSE`, a crash, a quit that skipped cleanup, or a
+    session logging out) as never able to refresh one again. The code
+    follows: `src/preview_request.cc`'s `IsFreshPreviewRequest` is the
+    `requested` callback `tools/daemon/main.cc` now gives
+    `PreviewPublisher` in place of the plain file-existence check #114
+    found insufficient, so a request a dead menu left behind is treated
+    as gone once its last touch is more than `kPreviewRequestStaleMs`
+    (2 s) old; the menu's own 0.5 s refresh timer
+    (`tools/menu/main.mm`'s `refreshPreviewFrame`,
+    `tools/menu/main_linux.cc`'s `CameraPreview::Refresh`) now also
+    re-touches the request file on every tick, not only the first write,
+    which is what keeps a live menu's own request from ever reaching
+    that age; and both menus remove the request file outright at launch
+    and on a clean quit (`applicationWillTerminate:`,
+    `QCoreApplication::aboutToQuit`), rather than leaving even a clean
+    exit to the freshness check's own grace period.
+-   **Also decided:** three findings from the same review
+    (#61 item 8's Fable review, #114) are fixed in the same branch,
+    small enough not to need issues of their own:
+    -   The frame is written 0600
+        (`tools/daemon/main.cc`'s `WriteFileAtomically`, now POSIX
+        `open()` with an explicit mode rather than an `ofstream`, whose
+        own default leaks the process umask) and removed once streaming
+        stops, through `PreviewLease`'s own `streaming_changed` hook
+        (`src/preview_lease.h`), a no-op until now.
+    -   The state folder is put back to 0700 even when it was already
+        there: `src/client_approvals.cc`'s `MakePrivateDirectory` used to
+        accept an existing directory of any mode, and
+        `tools/menu/main_linux.cc`'s own `QDir().mkpath()` calls relied
+        on the process umask the same way; both now chmod the directory
+        they are asked to secure, whether they made it or found it.
+    -   Neither menu opens a preview window, or starts its timer, with
+        the camera off: both now check the camera-in-use file first
+        (the same one their own indicator reads) and show a message
+        instead, closing the gap where the window, and
+        `tools/menu/main.mm`'s own timer, would otherwise flash into
+        existence only to close themselves again on their first poll.
+-   **Also decided:** `src/preview_lease.cc`'s `camera_session_` and
+    `started_session_`, the same review's fourth finding, are removed
+    rather than given a real read somewhere to justify keeping them:
+    `CameraOpened` and `CameraClosed` already force `streaming` off
+    directly, on every transition, so no grant from before either one
+    ever has a session number left to be stale against by the time a
+    later `Start` could compare one. `specs/PreviewLease.tla` drops the
+    counters the same way, and `NeverStreamsWithoutAFreshStart` -- the
+    review's fifth finding, a property with no mutation row -- goes with
+    them, its concern folded into `NeverStreamsOnAStaleRequest`, which
+    does have one.
+-   **Why:** the review (#61 item 8, #114) found the daemon kept
+    encoding and writing frames from a request file nothing had removed,
+    across the menu quitting, crashing, or its session logging out, with
+    no window left to show them; and, separately, that `PreviewLease`'s
+    session bookkeeping was dead weight the fix should not carry forward
+    unexamined.
+-   **Rejected:** adding a real grant-level session check to make
+    `camera_session_`/`started_session_` "real", the review's other
+    offered option: the only readings or assignments of
+    `started_session_` were in service of a comparison that `CameraOpened`
+    and `CameraClosed`'s own direct reset already made redundant, so
+    inventing one would have protected against nothing a design that
+    never had it was not already safe from.
+-   **Evidence:** [#114](https://github.com/mattyv/facepalm/issues/114),
+    [#61 item 8](https://github.com/mattyv/facepalm/issues/61).
+
 ## 2026-11-22: The MCP session reconnects, with a bounded backoff, instead of dying (#117)
 
 -   **Decision:** `mcp/session.js`'s `SocketSession` no longer treats a lost

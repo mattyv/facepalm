@@ -8,6 +8,10 @@
 #include <dispatch/dispatch.h>
 #endif
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -57,6 +61,7 @@
 #include "src/feeling_store.h"
 #include "src/preview_lease.h"
 #include "src/preview_publisher.h"
+#include "src/preview_request.h"
 #include "src/reaction_feed.h"
 #include "src/service.h"
 #include "src/session_camera.h"
@@ -148,16 +153,26 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 // Replaces `path` with `bytes` atomically (#37 item 8), as
 // DaemonStatus::Publish does for the camera-in-use indicator: a
 // temporary file in the same directory, renamed over it, so a reader
-// never sees a half-written frame.
+// never sees a half-written frame. Opened with an explicit 0600 (#114),
+// not through an ofstream, whose own default mode leaks whatever the
+// process umask allows: the preview frame is a snapshot of the camera,
+// private to the user the same as every other file src/user_paths.h
+// names.
 bool WriteFileAtomically(const std::string& path, std::string_view bytes) {
+  constexpr mode_t kPrivateFile = 0600;
   const std::string temporary = path + ".tmp";
-  {
-    std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-    file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    if (!file.good()) {
-      std::remove(temporary.c_str());
-      return false;
-    }
+  const int fd =
+      open(temporary.c_str(),
+           O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, kPrivateFile);
+  if (fd < 0) {
+    return false;
+  }
+  const bool written = write(fd, bytes.data(), bytes.size()) ==
+                       static_cast<ssize_t>(bytes.size());
+  close(fd);
+  if (!written) {
+    std::remove(temporary.c_str());
+    return false;
   }
   if (std::rename(temporary.c_str(), path.c_str()) != 0) {
     std::remove(temporary.c_str());
@@ -166,12 +181,26 @@ bool WriteFileAtomically(const std::string& path, std::string_view bytes) {
   return true;
 }
 
-// Whether `path` names a file that exists, for the preview's request
-// file (#37 item 8): the menu's own explicit ask, polled on every
-// captured frame.
-bool FileExists(const std::string& path) {
-  std::error_code ignored;
-  return std::filesystem::exists(path, ignored);
+// The request file's own last-modified time, in milliseconds since the
+// epoch, or nullopt when it cannot be read -- missing, same as any other
+// error (#114): IsFreshPreviewRequest's own `modified_ms`, the one real
+// collaborator that function is tested with a fake for.
+std::optional<std::int64_t> FileModifiedMs(const std::string& path) {
+  struct stat info{};
+  if (stat(path.c_str(), &info) != 0) {
+    return std::nullopt;
+  }
+#ifdef __APPLE__
+  const auto seconds = info.st_mtimespec.tv_sec;
+  const auto nanoseconds = info.st_mtimespec.tv_nsec;
+#else
+  const auto seconds = info.st_mtim.tv_sec;
+  const auto nanoseconds = info.st_mtim.tv_nsec;
+#endif
+  constexpr std::int64_t kMsPerSecond = 1000;
+  constexpr std::int64_t kNsPerMs = 1000000;
+  return (static_cast<std::int64_t>(seconds) * kMsPerSecond) +
+         (static_cast<std::int64_t>(nanoseconds) / kNsPerMs);
 }
 
 // `daemon_paths` is empty only when `--home` names a directory
@@ -218,11 +247,24 @@ class Engine : public DaemonController, public DaemonPipeline {
         config_(config),
         preview_request_path_(std::move(preview_request_path)),
         preview_frame_path_(std::move(preview_frame_path)),
-        preview_lease_([](bool) {}),
+        // PreviewLease!streaming_changed (#114): once streaming stops,
+        // the last frame published is cleared, so it never answers the
+        // menu's next poll as though the camera were still being shown.
+        preview_lease_([this](bool streaming) {
+          if (!streaming && !preview_frame_path_.empty()) {
+            std::remove(preview_frame_path_.c_str());
+          }
+        }),
         preview_publisher_(
             [this] {
+              // specs/PreviewLease.tla's Fresh (#114): the request must
+              // not only exist but have been touched recently, so a menu
+              // that quit without cleaning up, crashed, or whose session
+              // logged out, stops streaming soon after, rather than
+              // forever.
               return !preview_request_path_.empty() &&
-                     FileExists(preview_request_path_);
+                     IsFreshPreviewRequest(preview_request_path_,
+                                           UnixMilliseconds(), FileModifiedMs);
             },
             [](const Frame& frame) -> std::optional<std::string> {
               constexpr float kPreviewQuality = 0.6F;

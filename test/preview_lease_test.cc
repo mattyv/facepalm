@@ -36,7 +36,7 @@ TEST_F(StartTest, StreamsOnceTheCameraIsOpen) {
   EXPECT_THAT(changes_, ElementsAre(true));
 }
 
-TEST_F(StartTest, AskingAgainForTheSameSessionChangesNothing) {
+TEST_F(StartTest, AskingAgainWhileAlreadyStreamingChangesNothing) {
   lease_.CameraOpened();
   ASSERT_TRUE(lease_.Start());
   changes_.clear();
@@ -45,7 +45,8 @@ TEST_F(StartTest, AskingAgainForTheSameSessionChangesNothing) {
   EXPECT_THAT(changes_, IsEmpty());
 }
 
-TEST_F(StartTest, ANewSessionWithNoCloseFirstStillEndsAnyActivePreview) {
+TEST_F(StartTest,
+       AnotherCameraOpenedWithNoCloseFirstStillEndsAnyActivePreview) {
   // Defensive: a second CameraOpened without a CameraClosed in between
   // should never happen in practice (DaemonAdmission.tla's own open/close
   // already alternate), but if it did, the stale grant must not survive.
@@ -96,11 +97,11 @@ TEST_F(NeverStreamsWithoutCameraTest, ClosingWithNoPreviewChangesNothing) {
   EXPECT_THAT(changes_, IsEmpty());
 }
 
-using NeverStreamsWithoutAFreshStartTest = PreviewLeaseTest;
+using NeverStreamsOnAStaleRequestTest = PreviewLeaseTest;
 
-// GuardStartNeedsCamera: a grant from a session that has since closed and
-// reopened does not carry over; Start must be asked again.
-TEST_F(NeverStreamsWithoutAFreshStartTest, AReopenedCameraNeedsANewStart) {
+// GuardStartNeedsCamera: a grant from before the camera closed does not
+// carry over once it reopens; Start must be asked again.
+TEST_F(NeverStreamsOnAStaleRequestTest, AReopenedCameraNeedsANewStart) {
   lease_.CameraOpened();
   ASSERT_TRUE(lease_.Start());
   lease_.CameraClosed();
