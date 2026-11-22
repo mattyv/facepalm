@@ -849,6 +849,33 @@ TEST_F(ServiceWithCalibrationTest, StepsAndFinishesWithNext) {
   service_.Stop();
 }
 
+// A "next" that moves on to another step, rather than finishing, leaves
+// the session's tie to its starting connection alone (#128): only the
+// last step, or an explicit cancel, is CalibrateEnds.
+TEST_F(ServiceWithCalibrationTest, ANextThatOnlyContinuesLeavesTheOwnerTied) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Start(1, _))
+      .WillOnce(Return(CalibrationController::Status{.running = true}));
+  EXPECT_CALL(calibration_, Next)
+      .WillOnce(Return(CalibrationController::Status{.running = true}));
+  std::promise<void> cancelled;
+  EXPECT_CALL(calibration_, Cancel).WillOnce([&](std::string&) {
+    cancelled.set_value();
+    return true;
+  });
+  const auto peer = Named("agent");
+  peer->Send("calibrate start");
+  ASSERT_THAT(peer->Replies(2), testing::SizeIs(2));
+  peer->Send("calibrate next");
+  ASSERT_THAT(peer->Replies(3), testing::SizeIs(3));
+
+  peer->HangUp();
+
+  EXPECT_THAT(cancelled.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+  service_.Stop();
+}
+
 TEST_F(ServiceWithCalibrationTest, ReportsAFailedNext) {
   service_.Start();
   EXPECT_CALL(calibration_, Next).WillOnce([](std::string& error) {
@@ -887,6 +914,92 @@ TEST_F(ServiceWithCalibrationTest, ReportsAFailedCancel) {
 
   EXPECT_THAT(peer->Reply(2),
               Eq(R"({"error":"no calibration session is running"})"));
+  service_.Stop();
+}
+
+// specs/Service.tla's Closed, GuardCalibCancelOnClose: the connection that
+// started a session is the only one left who can tell the daemon it is
+// gone, so its own disconnect cancels the session it still owns (#128,
+// a menu crash mid-wizard being the motivating case), rather than leaving
+// it running for a later wizard to find "already running" until the
+// camera cycles.
+TEST_F(ServiceWithCalibrationTest, ADisconnectCancelsTheSessionItStarted) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Start(1, _))
+      .WillOnce(Return(CalibrationController::Status{.running = true}));
+  std::promise<void> cancelled;
+  EXPECT_CALL(calibration_, Cancel).WillOnce([&](std::string&) {
+    cancelled.set_value();
+    return true;
+  });
+  const auto peer = Named("agent");
+  peer->Send("calibrate start");
+  ASSERT_THAT(peer->Replies(2), testing::SizeIs(2));
+
+  peer->HangUp();
+
+  EXPECT_THAT(cancelled.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+  service_.Stop();
+}
+
+// A connection that never started a session has none to cancel: its own
+// disconnect never reaches into another connection's live one.
+TEST_F(ServiceWithCalibrationTest,
+       ADisconnectWithNoSessionStartedCancelsNothing) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Cancel).Times(0);
+  const auto peer = Named("agent");
+
+  peer->HangUp();
+
+  testing::Mock::VerifyAndClearExpectations(&calibration_);
+  service_.Stop();
+}
+
+// Once the session has already finished, its owning connection's later
+// disconnect must not cancel whatever unrelated session is running by
+// then.
+TEST_F(ServiceWithCalibrationTest,
+       ADisconnectAfterItsOwnSessionAlreadyFinishedCancelsNothing) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Start(1, _))
+      .WillOnce(Return(CalibrationController::Status{.running = true}));
+  EXPECT_CALL(calibration_, Next)
+      .WillOnce(Return(
+          CalibrationController::Status{.running = false, .done = true}));
+  EXPECT_CALL(calibration_, Cancel).Times(0);
+  const auto peer = Named("agent");
+  peer->Send("calibrate start");
+  ASSERT_THAT(peer->Replies(2), testing::SizeIs(2));
+  peer->Send("calibrate next");
+  ASSERT_THAT(peer->Replies(3), testing::SizeIs(3));
+
+  peer->HangUp();
+
+  testing::Mock::VerifyAndClearExpectations(&calibration_);
+  service_.Stop();
+}
+
+// Another connection cancelling the session that this one started also
+// clears the tie: this connection's own later disconnect must not try to
+// cancel it a second time.
+TEST_F(ServiceWithCalibrationTest,
+       ADisconnectAfterAnotherConnectionCancelledItCancelsNothing) {
+  service_.Start();
+  EXPECT_CALL(calibration_, Start(1, _))
+      .WillOnce(Return(CalibrationController::Status{.running = true}));
+  EXPECT_CALL(calibration_, Cancel).WillOnce(Return(true));
+  const auto starter = Named("starter");
+  starter->Send("calibrate start");
+  ASSERT_THAT(starter->Replies(2), testing::SizeIs(2));
+  const auto canceller = Named("canceller");
+  canceller->Send("calibrate cancel");
+  ASSERT_THAT(canceller->Replies(2), testing::SizeIs(2));
+
+  starter->HangUp();
+
+  testing::Mock::VerifyAndClearExpectations(&calibration_);
   service_.Stop();
 }
 

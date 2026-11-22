@@ -28,7 +28,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
 | `Calibration.cfg` | six steps, one camera outage | holds | 30 |
-| `CalibrationMenu.cfg` | one menu flow against one daemon session, every guard on | holds, with `ClosingCompletes` | 7 |
+| `CalibrationMenu.cfg` | one menu flow against one daemon session, a cold start's camera bounded to 2 retries, every guard on | holds, with `ClosingCompletes` and `CameraWaitResolves` | 29 |
 | `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,864 |
 | `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
@@ -42,7 +42,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 19 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
-| `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 1,040 |
+| `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 9,776 |
 | `SingleInstance.cfg` | two launches, each free to run with or without `--settings` | holds, with `LaunchSettles` and `RequestServed` | 77 |
 | `UserService.cfg` | the menu, the service manager, one daemon and a session that may log out and in | holds, with `TurnOffStops` and `OnRuns` | 15 |
 | `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
@@ -1059,6 +1059,15 @@ window ends or the client is disconnected, so `Wait` and `Answered` stand for
 it too, and `StopWakesWaitersTest.StoppingEndsABeatAndTheConnection` checks
 that stopping ends one. The model itself is unchanged.
 
+`calibOwner` is the one connection, if any, that owns the daemon's single
+live calibration session (`specs/Calibration.tla`), tied to it by
+`CalibrateStart` the way `src/service.cc`'s `CalibrateReply` ties it to
+whichever connection's `calibrate start` opened it (#128): `CalibrateEnds`
+clears it once any connected client finishes or cancels the session (`a
+calibrate request needs no client identity`, its own comment says), but
+`Closed`, that connection going away itself, is the one chance left to
+clear it when nobody else does, cancelling the session along with it.
+
 | Property | What it says | Test |
 |---|---|---|
 | `UniqueNames` | No two connections speak for the same client. | `UniqueNamesTest` in `test/service_test.cc`; `ConnectingANameAlreadyConnectedIsRefused` in `test/reaction_feed_test.cc`; `HangUpEndsTest.AHangUpDuringAWaitDisconnectsTheClientOnlyOnce`, `AHangUpDuringABeatDisconnectsTheClientOnlyOnce` (#115) |
@@ -1068,6 +1077,7 @@ that stopping ends one. The model itself is unchanged.
 | `StopWakesWaiters` | Once stopping, no thread is left blocked in a wait. | `StopWakesWaitersTest` |
 | `NothingAfterStop` | Once stopped, every connection is closed. | `NothingAfterStopTest`, `NothingAfterStopLateTest` |
 | `CanAccept` | Something must happen: a running service can accept a connection into a free slot. | `CanAcceptTest` |
+| `NoDanglingCalibOwner` | The calibration session's owner, when it has one, is never a slot that has already gone free (#128). | `ServiceWithCalibrationTest.ADisconnectCancelsTheSessionItStarted`, `...WithNoSessionStartedCancelsNothing`, `...AfterItsOwnSessionAlreadyFinishedCancelsNothing`, `...AfterAnotherConnectionCancelledItCancelsNothing` |
 | `StopEnds` | Stopping always finishes. | `StopEndsTest` |
 | `HangUpEnds` | A connection whose peer hung up is closed, and its client gone from the feed, even in the middle of a wait or a beat. | `HangUpEndsTest` in `test/service_test.cc`; `AHangUpEndsAnAwaitInAnotherThread` and the other `AwaitHangUp` tests in `test/unix_socket_test.cc`; `approval.test.mjs`'s adapter killed mid-wait |
 
@@ -1084,6 +1094,7 @@ Each mutation, and what TLC found:
 | `GuardRefuseWhenStopping = FALSE`: connections are accepted while stopping | `StopEnds`: new ones can keep it from finishing |
 | `Accept` never enabled | `CanAccept`, in the initial state |
 | `Accept` writes a connection state outside the type | `TypeOK`, 2 states |
+| `GuardCalibCancelOnClose = FALSE`: a closed connection leaves `calibOwner` naming a slot about to go free | `NoDanglingCalibOwner`, 490 states |
 | `GuardHangUpWakes = FALSE`: a hang-up during a wait is noticed only when the wait ends, the design before | `HangUpEnds` |
 | No fairness on `Noticed` | `HangUpEnds` |
 | No fairness on `Closed` | `StopEnds` |
@@ -1091,10 +1102,12 @@ Each mutation, and what TLC found:
 | `Noticed` also removes the name from `feed`, as the code did before #115 | `FeedMatchesConns`, 6 states; `UniqueNames`, 8 states |
 
 `src/service.cc` implements the spec, and each of its methods names the
-action it implements. `src/unix_socket.cc` gives it a Unix domain socket,
-whose file only its user can open; its tests run on real sockets. The same
-mutations, made to the service's code, fail the tests that stand for the
-properties they break:
+action it implements: `CalibrateReply` is `CalibrateStart`/`CalibrateEnds`,
+and `LeaveCalibration`, called from `Serve` once a connection's own loop
+ends, is `Closed`'s own `calibOwner` clause. `src/unix_socket.cc` gives it
+a Unix domain socket, whose file only its user can open; its tests run on
+real sockets. The same mutations, made to the service's code, fail the
+tests that stand for the properties they break:
 
 | Mutation to `Service` | Fails |
 |---|---|
@@ -1104,6 +1117,7 @@ properties they break:
 | A closed connection's client stays in the feed | `FeedMatchesConnsTest.AHangUpTakesTheClientOutOfTheFeed` |
 | Stopping does not disconnect the clients, so a wait runs on | `StopWakesWaitersTest.StoppingEndsAWaitAndTheConnection` |
 | A connection arriving while stopping is served | `NothingAfterStopLateTest.AConnectionArrivingWhileStoppingIsShut` |
+| `LeaveCalibration` never cancels the session a disconnecting connection started (#128) | `ServiceWithCalibrationTest.ADisconnectCancelsTheSessionItStarted` |
 | The watcher does not disconnect a client that hung up | `HangUpEndsTest.AHangUpDuringAWaitDisconnectsTheClient`, `AHangUpDuringABeatDisconnectsTheClient` |
 | A line arriving counts as a hang-up (`UnixStream`) | `UnixSocketTest.ALineArrivingEndsAnAwaitAndIsStillRead` |
 | Nothing is ever accepted | Twelve tests, every one that connects |
@@ -1207,7 +1221,18 @@ Each mutation, and what TLC found:
 `src/calibration.h`'s `CalibrationController::Start`, `Next` and `Cancel`
 implement the spec's `Start`, `Advance`/`Finish` and `Cancel`;
 `CalibrationSession::Update` is `Capture`, and `OnCameraLost` and
-`OnCameraUp` are `CameraLost` and `CameraBack`. `src/calibration_store.cc`
+`OnCameraUp` are `CameraLost` and `CameraBack`. Every one of those runs
+under `CalibrationSession`'s own `mutex_` (#128's third finding), taken
+for the whole body of each: `Start`, `Next` and `Cancel` reach it from a
+connection's own thread (`src/service.cc`), `Update` from the inference
+queue, and `OnCameraLost`/`OnCameraUp` from the daemon's control queue
+(`src/daemon_calibration.h`), with no other ordering between any two of
+them otherwise, so this is what makes each one the single indivisible
+step this spec's own actions already assume it is; a two-thread stress test,
+`CalibrationSessionTest.UpdateRunsSafelyAlongsideStartAndNextOnAnotherThread`,
+walks a full session while `Update` floods it with poses the whole time,
+caught by ThreadSanitizer (CI's `thread-sanitizer` job) before this fix's
+mutex existed. `src/calibration_store.cc`
 saves the profile atomically (write, sync, rename, sync the directory) to a
 private file (mode 0600), exactly once, on `Finish`; a failed save leaves
 the capture in place so `Next` can be retried, which the model does not
@@ -1244,19 +1269,25 @@ the session `specs/Calibration.tla` already models in the daemon, since
 `CalibrationFlow` only ever learns what the daemon's reply to its own last
 request said -- it gets no push when the daemon's session ends on its own
 (a camera loss, say). `state` is the flow's own view: `"closed"` (no window,
-or a previous outcome dismissed), `"prompting"` (a step is shown),
-`"closing"` (Cancel or the window's own close button sent `calibrate cancel`
-and is waiting for its reply), `"done"` or `"failed"`. `sessionLive`
-abstracts whether the daemon still has a session this flow owns.
-`CalibrationMenu.cfg` checks one flow against one daemon session, every
-guard on: 7 distinct states, every property holds.
+or a previous outcome dismissed), `"opening"` (hello succeeded but
+`calibrate start` was refused only because the camera is not up yet, #128,
+and this is retrying), `"prompting"` (a step is shown), `"closing"` (Cancel
+or the window's own close button sent `calibrate cancel` and is waiting for
+its reply), `"done"` or `"failed"`. `sessionLive` abstracts whether the
+daemon still has a session this flow owns; `cameraUp` and `cameraWaits`
+(bounded by `MaxCameraWaits`) abstract the daemon's own camera and how many
+retries this flow has already spent waiting for it. `CalibrationMenu.cfg`
+checks one flow against one daemon session, a cold start bounded to 2
+retries, every guard on: 29 distinct states, every property holds.
 
 | Property | What it says | Test |
 |---|---|---|
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
-| `NoStalePrompt` | Whatever the wizard shows as "prompting" is backed by a session the daemon still has. | `CalibrationFlowTest.NextTransitionsToFailedOnAnErrorReply`, `...OnAHangUp` |
+| `NoStalePrompt` | Whatever the wizard shows as "prompting" is backed by a session the daemon still has. | `CalibrationFlowTest.NextTransitionsToFailedOnAnUnexpectedIdleReply`, `...OnAHangUpWithoutACancel` |
 | `NoOrphanOnClose` | Closing the window never leaves a session running with nobody left to answer for it. | `CalibrationFlowTest.WindowClosedSendsCancelWhilePrompting`, `...IsANoOpOutsidePrompting` |
+| `SessionEndsWithFlow` | A flow that has reported done or failed never still has a session the daemon thinks is running (#128): whatever ended this flow's own view also ended, or already found ended, the one it was responsible for. | `CalibrationFlowTest.NextSendsCancelAndReportsItsOwnErrorOnARefusal`, `...KeepsItsOwnErrorEvenWhenTheCleanupCancelFails` |
 | `ClosingCompletes` | Something must happen: once Cancel or the window's close button has asked the daemon to end the session, that always finishes. | Every `CalibrationFlowTest` case that calls `Cancel()` or `WindowClosed()` observes a terminal `View()` before returning, since `CalibrateClientIo::ReadLine` is synchronous in the real POSIX and Qt glue (`tools/posix_calibrate_client_io.h`, `tools/menu/main_linux.cc`'s `QtCalibrateClientIo`) and in every mock |
+| `CameraWaitResolves` | Something must happen: a cold start that keeps the wizard waiting for the camera always resolves, once the camera comes up or the wait is spent (#128). | `CalibrationFlowTest.StartRetriesWhenRefusedOnlyForTheCameraThenReachesPrompting`, `...GivesUpAfterMaxCameraWaitsWithTheCameraStillDown` |
 
 Each mutation, and what TLC found:
 
@@ -1264,20 +1295,36 @@ Each mutation, and what TLC found:
 |---|---|
 | `GuardFailOnDisconnect = FALSE`: a failed or hung-up `calibrate next` leaves the wizard showing the step that is no longer real | `NoStalePrompt`, 5 states |
 | `GuardCancelOnClose = FALSE`: the window's close button tears the window down without ever sending `calibrate cancel` | `NoOrphanOnClose`, 8 states |
+| `GuardCancelOnRefusal = FALSE`: a refused `calibrate next` reports the failure without ever sending `calibrate cancel`, the design `ApplyReply` had before this fix | `SessionEndsWithFlow`, 22 states |
 | No fairness on `CancelSucceeds`/`CancelFails` | `ClosingCompletes`: a flow stuck in `"closing"` forever, stuttering once its own cancel request is on the wire |
+| No fairness on `RetrySucceeds`/`RetryWaits`/`RetryGivesUp` | `CameraWaitResolves`: a flow stuck in `"opening"` forever, stuttering once the camera comes up |
 
-`CalibrationFlow::Start` is `OpenSucceeds`/`OpenFails`, `Next` is
-`NextContinues`/`NextFinishes`/`NextFails`, `Cancel` is `UserCancel` and
-`WindowClosed` is `WindowClosed`, each followed eventually by
-`CancelSucceeds` or `CancelFails`; `CalibrationFlow`'s own synchronous
-`ReadLine` call (not an async callback) is exactly what makes
+`CalibrationFlow::Start` is `OpenSucceeds`/`OpenFails`/`OpenWaitsForCamera`,
+retried as `RetrySucceeds`/`RetryWaits`/`RetryGivesUp` while
+`CameraComesUp` is the daemon's own camera coming up on its own schedule;
+`Next` is `NextContinues`/`NextFinishes`/`NextFails`/`NextRefused`, `Cancel`
+is `UserCancel` and `WindowClosed` is `WindowClosed`, each followed
+eventually by `CancelSucceeds` or `CancelFails`; `CalibrationFlow`'s own
+synchronous `ReadLine` call (not an async callback) is exactly what makes
 `ClosingCompletes` true in the code without needing the model's fairness
 assumption to be a real one: a call that blocks until the daemon answers,
 or the socket ends, can never be stuck in `"closing"` with nothing further
 enabled, unlike a design that fired the cancel and returned immediately.
-The model does not cover the socket, hello or approval mechanics
-themselves (`src/calibrate_cli.h`'s `CalibrateClientIo`, already modeled
-by nothing more than "succeeds or fails", is the seam `calibrate_cli_test.cc`
-and `calibration_flow_test.cc` both mock), nor the daemon's own session,
-which `specs/Calibration.tla` already proves; only a hand check on a real
-Mac and Ubuntu, against a live daemon, shows the window itself.
+The same synchronicity is why `"opening"` is never itself observed through
+`CurrentView()`: `Start`'s retry loop (`kMaxCameraWaits` attempts,
+`kCameraWaitInterval` apart, a real `std::this_thread::sleep_for` by
+default) runs to a `"prompting"` or `"failed"` conclusion inside the one
+call `tools/menu/main.mm`'s and `main_linux.cc`'s button handlers already
+make synchronously, so what the model sees as several steps is, in the
+code, one. `NextRefused` is likewise one call: a refused `calibrate next`
+sends `calibrate cancel` and reads its reply before `Next` returns, rather
+than the window ever showing an intermediate state, which is what lets
+`GuardCancelOnRefusal`'s fix set `sessionLive' = FALSE` unconditionally
+within the one action, matching the code exactly. The model does not cover
+the socket, hello or approval mechanics themselves (`src/calibrate_cli.h`'s
+`CalibrateClientIo`, already modeled by nothing more than "succeeds or
+fails", is the seam `calibrate_cli_test.cc` and `calibration_flow_test.cc`
+both mock), nor the daemon's own session, which `specs/Calibration.tla`
+already proves, nor which connection the daemon ties that session to,
+which `specs/Service.tla` does; only a hand check on a real Mac and
+Ubuntu, against a live daemon, shows the window itself.

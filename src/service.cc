@@ -84,6 +84,11 @@ void Service::Serve(Connection& connection) {
     }
     Leave(connection, *name);
   }
+  // specs/Service.tla's Closed, GuardCalibCancelOnClose (#128): before
+  // this connection's slot can be freed and reused, any live calibration
+  // session it alone still owns is cancelled, never left for a later,
+  // unrelated connection to find still running.
+  LeaveCalibration(connection);
   const std::scoped_lock lock(mutex_);
   connection.done = true;
 }
@@ -180,7 +185,7 @@ bool Service::Answer(Connection& connection, const std::string& name,
   }
   if (const auto* calibrate =
           std::get_if<protocol::CalibrateRequest>(&*request)) {
-    stream.WriteLine(CalibrateReply(*calibrate));
+    stream.WriteLine(CalibrateReply(connection, *calibrate));
     return true;
   }
   // The cameras available now (item 10 of #61, #13), independent of the
@@ -247,10 +252,53 @@ void Service::Leave(Connection& connection, const std::string& name) {
   feed_.Disconnect(name);
 }
 
-// specs/Calibration.tla's Start, Advance, Finish and Cancel, dispatched to
-// calibration_ (item 12 of #61). A calibrate request needs no client
-// identity: any connected client may drive the one session.
-std::string Service::CalibrateReply(const protocol::CalibrateRequest& request) {
+// specs/Calibration.tla's Start (specs/Service.tla's CalibrateStart):
+// ties the session, once it starts, to `connection`, so its own
+// disconnect can find it again in LeaveCalibration below (#128).
+std::string Service::CalibrateStartReply(Connection& connection, int screens,
+                                         std::string& error) {
+  const std::optional<CalibrationController::Status> status =
+      calibration_->Start(screens, error);
+  if (status) {
+    const std::scoped_lock lock(mutex_);
+    calibration_owner_ = &connection;
+  }
+  return CalibrationStatusOrError(status, error);
+}
+
+// specs/Calibration.tla's Advance/Finish (specs/Service.tla's
+// CalibrateEnds, once the last step is finished): any connected client
+// may drive the one session, not only the one CalibrateStartReply tied
+// it to, so finishing it clears that tie no matter who asked (#128).
+std::string Service::CalibrateNextReply(std::string& error) {
+  const std::optional<CalibrationController::Status> status =
+      calibration_->Next(error);
+  if (status && status->done) {
+    const std::scoped_lock lock(mutex_);
+    calibration_owner_ = nullptr;
+  }
+  return CalibrationStatusOrError(status, error);
+}
+
+// specs/Calibration.tla's Cancel (specs/Service.tla's CalibrateEnds):
+// the same as CalibrateNextReply's own tie-clearing, from whichever
+// connection cancels it.
+std::string Service::CalibrateCancelReply(std::string& error) {
+  const bool ok = calibration_->Cancel(error);
+  if (ok) {
+    const std::scoped_lock lock(mutex_);
+    calibration_owner_ = nullptr;
+  }
+  return ok ? std::string(protocol::kOkJson) : protocol::ErrorJson(error);
+}
+
+// The reply to a calibrate request, whether or not calibration_ is set.
+// A calibrate request needs no client identity to be answered: any
+// connected client may drive the one session (CalibrateNextReply,
+// CalibrateCancelReply); only starting it ties it to `connection`
+// (CalibrateStartReply).
+std::string Service::CalibrateReply(Connection& connection,
+                                    const protocol::CalibrateRequest& request) {
   if (calibration_ == nullptr) {
     return protocol::ErrorJson("calibration is not available");
   }
@@ -258,13 +306,30 @@ std::string Service::CalibrateReply(const protocol::CalibrateRequest& request) {
   std::string error;
   switch (request.action) {
     case Action::kStart:
-      return CalibrationStatusOrError(
-          calibration_->Start(request.screens, error), error);
+      return CalibrateStartReply(connection, request.screens, error);
     case Action::kNext:
-      return CalibrationStatusOrError(calibration_->Next(error), error);
+      return CalibrateNextReply(error);
     default:  // Action::kCancel.
-      return calibration_->Cancel(error) ? std::string(protocol::kOkJson)
-                                         : protocol::ErrorJson(error);
+      return CalibrateCancelReply(error);
+  }
+}
+
+void Service::LeaveCalibration(Connection& connection) {
+  bool owns_it = false;
+  {
+    const std::scoped_lock lock(mutex_);
+    owns_it = calibration_owner_ == &connection;
+    if (owns_it) {
+      calibration_owner_ = nullptr;
+    }
+  }
+  // calibration_owner_ is only ever set in CalibrateStartReply, reached
+  // only when calibration_ is not null, so owns_it being true already
+  // means this connection's "calibrate start" went to a real calibration_;
+  // a second null check here is code no run of this service can reach.
+  if (owns_it) {
+    std::string error;
+    calibration_->Cancel(error);
   }
 }
 
