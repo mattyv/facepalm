@@ -217,8 +217,8 @@ TEST_F(V4l2HotplugTest, AddWatchFailureClosesAndStopsWatchingWithoutProbing) {
 TEST_F(V4l2HotplugTest, InitialScanProbesAllFourNodesWithoutFiringAnyCallback) {
   EXPECT_CALL(mock_, InotifyInit1(IN_NONBLOCK | IN_CLOEXEC))
       .WillOnce(Return(kNotifyFd));
-  EXPECT_CALL(mock_,
-              InotifyAddWatch(kNotifyFd, StrEq("/dev"), IN_CREATE | IN_DELETE))
+  EXPECT_CALL(mock_, InotifyAddWatch(kNotifyFd, StrEq("/dev"),
+                                     IN_CREATE | IN_DELETE | IN_ATTRIB))
       .WillOnce(Return(0));
   {
     InSequence order;
@@ -364,7 +364,7 @@ TEST_F(V4l2HotplugTest, AnUnrelatedNameIsIgnored) {
   EXPECT_THAT(disconnected_, IsEmpty());
 }
 
-TEST_F(V4l2HotplugTest, AnEventWithNeitherCreateNorDeleteIsIgnored) {
+TEST_F(V4l2HotplugTest, AnEventWithNoHandledMaskIsIgnored) {
   EXPECT_CALL(mock_, InotifyInit1(_)).WillOnce(Return(kNotifyFd));
   EXPECT_CALL(mock_, InotifyAddWatch(_, _, _)).WillOnce(Return(0));
   {
@@ -376,7 +376,94 @@ TEST_F(V4l2HotplugTest, AnEventWithNeitherCreateNorDeleteIsIgnored) {
       .WillRepeatedly(NothingYet);
   EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
   EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
+      .WillOnce(CountedRead(Delivers(EncodedEvent(IN_MOVED_TO, "video0"))));
+
+  Start();
+  ASSERT_TRUE(WaitForReads(1));
+  Stop();
+
+  EXPECT_THAT(connected_, IsEmpty());
+  EXPECT_THAT(disconnected_, IsEmpty());
+}
+
+// #115: a node IN_CREATE could not open, because udev had not yet applied
+// its permissions, gets a retry when IN_ATTRIB reports that change.
+TEST_F(V4l2HotplugTest,
+       AnAttribAfterACreateThatCouldNotOpenRetriesAndConnects) {
+  EXPECT_CALL(mock_, InotifyInit1(_)).WillOnce(Return(kNotifyFd));
+  EXPECT_CALL(mock_, InotifyAddWatch(_, _, _)).WillOnce(Return(0));
+  {
+    InSequence order;
+    NoneAttachedAtStartup(mock_);
+    // IN_CREATE: udev has not yet applied the node's permissions.
+    EXPECT_CALL(mock_, Open(StrEq("/dev/video0"), _)).WillOnce(Return(-1));
+    // IN_ATTRIB: now readable.
+    EXPECT_CALL(mock_, Open(StrEq("/dev/video0"), _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, QueryCap(kFd, _))
+        .WillOnce(Capability("New Camera", "usb-new"));
+    EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  }
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
+      .WillOnce(Delivers(EncodedEvents({EncodedEvent(IN_CREATE, "video0"),
+                                        EncodedEvent(IN_ATTRIB, "video0")})));
+
+  Start();
+  ASSERT_TRUE(WaitForConnected(1));
+  Stop();
+
+  EXPECT_THAT(connected_, ElementsAre("usb-new"));
+  EXPECT_THAT(disconnected_, IsEmpty());
+}
+
+// #115: the retry itself can also find the node still unreadable; nothing
+// fires, and no camera is opened a third time.
+TEST_F(V4l2HotplugTest, AnAttribThatStillCannotOpenIsIgnored) {
+  EXPECT_CALL(mock_, InotifyInit1(_)).WillOnce(Return(kNotifyFd));
+  EXPECT_CALL(mock_, InotifyAddWatch(_, _, _)).WillOnce(Return(0));
+  {
+    InSequence order;
+    NoneAttachedAtStartup(mock_);
+    EXPECT_CALL(mock_, Open(StrEq("/dev/video0"), _)).WillOnce(Return(-1));
+  }
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
       .WillOnce(CountedRead(Delivers(EncodedEvent(IN_ATTRIB, "video0"))));
+
+  Start();
+  ASSERT_TRUE(WaitForReads(1));
+  Stop();
+
+  EXPECT_THAT(connected_, IsEmpty());
+}
+
+// #115: a node already known is not reopened or told about twice when its
+// attributes change again.
+TEST_F(V4l2HotplugTest, AnAttribOnAnAlreadyKnownNodeDoesNotReopenOrRefire) {
+  EXPECT_CALL(mock_, InotifyInit1(_)).WillOnce(Return(kNotifyFd));
+  EXPECT_CALL(mock_, InotifyAddWatch(_, _, _)).WillOnce(Return(0));
+  {
+    InSequence order;
+    EXPECT_CALL(mock_, Open(StrEq("/dev/video0"), _)).WillOnce(Return(-1));
+    EXPECT_CALL(mock_, Open(StrEq("/dev/video1"), _)).WillOnce(Return(-1));
+    EXPECT_CALL(mock_, Open(StrEq("/dev/video2"), _)).WillOnce(Return(kFd));
+    EXPECT_CALL(mock_, QueryCap(kFd, _))
+        .WillOnce(Capability(kKnownCard, kKnownBusInfo));
+    EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+    EXPECT_CALL(mock_, Open(StrEq("/dev/video3"), _)).WillOnce(Return(-1));
+  }
+  EXPECT_CALL(mock_, Poll(_, _, _))
+      .Times(AnyNumber())
+      .WillRepeatedly(NothingYet);
+  EXPECT_CALL(mock_, Poll(_, _, _)).WillOnce(Return(1)).RetiresOnSaturation();
+  EXPECT_CALL(mock_, Read(kNotifyFd, _, _))
+      .WillOnce(CountedRead(Delivers(EncodedEvent(IN_ATTRIB, "video2"))));
 
   Start();
   ASSERT_TRUE(WaitForReads(1));
