@@ -64,6 +64,18 @@ made since, each with its reason, are in the
     less than a second and are not reported. A pose held for long enough,
     under a minute, becomes the resting pose, so turning back from it reads
     as a look away of its own. `specs/LookAway.tla` models the rule.
+-   `src/eyes_probe`, `src/eyes_replay`: the tooling half of eyes in other
+    reads (#139). `FormatEyesLine`, in `src/eyes_probe`, is what
+    `camera_probe` prints as its `eyes` line: the eye-look, blink, squint
+    and wide blendshapes, then the iris and eye-corner landmarks, numbers
+    only, alongside `head_pose` and under the same degenerate-pose skip.
+    `ParseEyesLine` and `ReplayEyes`, in `src/eyes_replay`, read that line
+    back into an `EyesFrame`, the way `src/gesture_replay` and
+    `src/look_away_replay` read their own lines, so a later issue's eye
+    reader (#140 through #145) can test against `test/fixtures/eyes`'s
+    recordings. Eyes never decide a feeling by rule; gaze is context and a
+    feature the personal read learns from. `scripts/record_eye_fixtures.sh`
+    guides the user through recording those fixtures.
 -   `src/calibration`, `src/calibration_store`, `src/calibration_reader`: an
     optional calibration session (#36, #35, item 12 of #61), started,
     stepped and cancelled over the protocol's `calibrate` line: it records
@@ -586,7 +598,13 @@ Every frame with a face also prints its gesture channels as
 own input), and once that frame's window is ready, its class probabilities
 as `gesture_probs <timestamp_ms> <6 values>` (none, nod, shake, tilt, turn,
 up/down), whether or not `gestures.enabled` is set, so a recording always
-has what a replay needs.
+has what a replay needs. A frame whose pose is not degenerate also prints
+its head pose as `head_pose <timestamp_ms> <yaw> <pitch> <roll>` and,
+alongside it, its eyes as `eyes <timestamp_ms> <32 values>` (#139): the
+eye-look, blink, squint and wide blendshapes, then the iris and eye-corner
+landmarks, in `src/eyes_probe.h`'s order. `src/eyes_replay.h` reads that
+line back; [test/fixtures/eyes's README](test/fixtures/eyes/README.md)
+covers recording fixtures with `scripts/record_eye_fixtures.sh`.
 `face_model_check <model> <image> <frames>` times the model on one image run
 as that many frames, for a face held still in front of the camera.
 `face_model_check --gesture <model> <frame.png>...` runs the head-gesture

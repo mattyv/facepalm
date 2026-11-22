@@ -5,6 +5,41 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-22: camera_probe prints an eyes line, and a replay reader reads it back, for #139's fixtures
+
+-   **Decision (the eyes line's shape):** `camera_probe`'s new `eyes` line
+    (`FormatEyesLine`, `src/eyes_probe.h`) prints the eye-look, blink,
+    squint and wide blendshapes (MediaPipe's indices 9 through 22, left eye
+    then right, confirmed against `src/expressions.cc`'s own
+    `kEyesNarrowed = {19, 20}`), then the iris centres (landmarks 468 and
+    473) and the eye corners (33, 133, 362, 263), each as x, y and z,
+    numbers only. It prints alongside `head_pose`, under the same
+    `IsFiniteRotation` skip, since `GestureProbeReader::OnFace` already
+    holds the rotation when it decides whether to print that line.
+-   **Decision (fixture file shape):** `scripts/record_eye_fixtures.sh`
+    saves each fixture as `camera_probe`'s whole log
+    (`test/fixtures/eyes/<name>.probe`), not a line filtered down to
+    `eyes` alone the way the three `.head_pose` fixtures were. A later
+    issue's reader may want `head_pose` or `gesture_raw` from the same
+    recording, and `ReplayEyes` (`src/eyes_replay.h`) already skips every
+    line it does not read, so filtering at record time would only lose
+    information for no test that needs it.
+-   **Decision (eye corners, unnamed by side):** `EyesFrame`'s four corner
+    fields are named by landmark number (`corner_33`, `corner_133`,
+    `corner_362`, `corner_263`), not inner or outer, left or right: #139
+    groups them as `(33/133, 362/263)` without saying which is which, and
+    nothing else in this repository's code or comments settles it either.
+    The iris centres keep `iris_left`/`iris_right` instead, since
+    MediaPipe's own landmark numbering for the iris (468 left, 473 right)
+    is widely and consistently documented.
+-   **Decision (no eyes replay CLI tool, rejected):** unlike
+    `gesture_replay`'s CLI, the eyes replay reader gets no
+    `tools/eyes_replay` of its own in this change. Nothing yet prints from
+    an `EyesFrame` worth running by hand: #140 through #145 have not yet
+    written the detector whose output such a tool would show. Adding one
+    now would be code no real use can reach, against this repository's
+    rule on overengineering; one can follow once a detector exists to run.
+
 ## 2026-11-22: A publish in flight can no longer outlive the preview, and the MCP adapter now agrees with its own spec, closing #129
 
 -   **Decision (preview frame, #123's own review):** `specs/PreviewLease.tla`
