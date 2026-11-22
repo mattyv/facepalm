@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -216,6 +217,173 @@ TEST(ScreenContextReporterTest, AProfilesOwnGainsTakeOverFromTheDefault) {
 
   EXPECT_EQ(reporter.Json(kRest, kRest, eye, eye_resting),
             R"({"gaze":"away","calibrated_screen":0})");
+}
+
+// The Sample/Between tests below stand for #142's and #144's own beat
+// context: the majority gaze over a window, and whether it was mostly
+// inside a content rectangle.
+
+constexpr ScreenRect kMain = {
+    .x = 0, .y = 0, .width = 1000, .height = 800, .main = true};
+constexpr ContentRect kCentre = {
+    .x = 400, .y = 300, .width = 200, .height = 200};
+constexpr ContentRect kTopLeftCorner = {
+    .x = 0, .y = 0, .width = 50, .height = 50};
+
+TEST(BetweenTest, NoSamplesInRangeIsUnknown) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false);
+
+  const GazeWindow window = reporter.Between(0, 1000, kCentre);
+
+  EXPECT_EQ(window.gaze, Gaze::kUnknown);
+  EXPECT_EQ(window.content, ContentHit::kUnknown);
+}
+
+// With no screen marked main, Between falls back to an empty ScreenRect
+// for ContentHitFrom's own `main` rather than naming one arbitrarily.
+TEST(BetweenTest, NoMainScreenStillAnswersTheMajorityZone) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{
+          {.x = 0, .y = 0, .width = 1000, .height = 800}}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
+
+  const GazeWindow window = reporter.Between(0, 1000, kCentre);
+
+  EXPECT_EQ(window.gaze, Gaze::kThisScreen);
+  EXPECT_EQ(window.content, ContentHit::kNo);
+}
+
+TEST(BetweenTest, NoContentAskedLeavesItOut) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  const ScreenContextReporter reporter(source, kSettings,
+                                       /*titles_enabled=*/false);
+
+  const GazeWindow window = reporter.Between(0, 1000, std::nullopt);
+
+  EXPECT_EQ(window.gaze, Gaze::kUnknown);
+  EXPECT_EQ(window.content, std::nullopt);
+}
+
+TEST(BetweenTest, ASampleInRangeGivesItsZone) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/500);
+
+  const GazeWindow window = reporter.Between(0, 1000, std::nullopt);
+
+  EXPECT_EQ(window.gaze, Gaze::kThisScreen);
+}
+
+TEST(BetweenTest, SamplesOutsideTheRangeAreIgnored) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  // Before the window's start and at or after its end: both sides of the
+  // range check.
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/400);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/2000);
+
+  const GazeWindow window = reporter.Between(500, 1000, std::nullopt);
+
+  EXPECT_EQ(window.gaze, Gaze::kUnknown);
+}
+
+TEST(BetweenTest, TheMajorityZoneWins) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  const std::optional<HeadRotation> away = HeadRotation{.yaw_degrees = 90};
+  reporter.Sample(away, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/200);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/300);
+
+  const GazeWindow window = reporter.Between(0, 1000, std::nullopt);
+
+  EXPECT_EQ(window.gaze, Gaze::kThisScreen);
+}
+
+TEST(BetweenTest, OldSamplesPastMaxWindowMsAreForgotten) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  constexpr std::int64_t kShortMaxWindowMs = 100;
+  ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false, nullptr, EyeGains{},
+      CalibrationSettings::kDefaultHeadOnlyYawDegrees, kShortMaxWindowMs);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/0);
+  // 150ms later, more than max_window_ms past the first sample: it drops.
+  reporter.Sample(std::nullopt, kRest, std::nullopt, std::nullopt,
+                  /*at_ms=*/150);
+
+  const GazeWindow window = reporter.Between(0, 200, std::nullopt);
+
+  EXPECT_EQ(window.gaze, Gaze::kUnknown);
+}
+
+TEST(BetweenTest, TheMajorityContentHitWins) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/200);
+
+  const GazeWindow window = reporter.Between(0, 1000, kCentre);
+
+  EXPECT_EQ(window.content, ContentHit::kYes);
+}
+
+TEST(BetweenTest, SamplesWithNoFaceDoNotCountTowardContent) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  reporter.Sample(std::nullopt, kRest, std::nullopt, std::nullopt,
+                  /*at_ms=*/100);
+
+  const GazeWindow window = reporter.Between(0, 1000, kCentre);
+
+  EXPECT_EQ(window.content, ContentHit::kUnknown);
+}
+
+TEST(BetweenTest, AContentHitOfNoIsCountedTowardTheMajority) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
+
+  const GazeWindow window = reporter.Between(0, 1000, kTopLeftCorner);
+
+  EXPECT_EQ(window.content, ContentHit::kNo);
+}
+
+// A sample with gaze but no resting pose of its own (ScreenContextReader
+// still learning, say) has an angle but no way to read ContentHitFrom's
+// own cone from it: unknown, not yes or no.
+TEST(BetweenTest, ASampleWithNoRestingPoseCountsAsUnknownContent) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  reporter.Sample(kRest, std::nullopt, std::nullopt, std::nullopt,
+                  /*at_ms=*/100);
+
+  const GazeWindow window = reporter.Between(0, 1000, kCentre);
+
+  EXPECT_EQ(window.content, ContentHit::kUnknown);
 }
 
 TEST(ScreenContextReporterTest, SetProfileSwapsWhatNextCallReads) {

@@ -152,5 +152,83 @@ TEST_F(ScreenContextReaderTest, ADegeneratePoseIsSkipped) {
   EXPECT_EQ(reader_.Pose(), std::nullopt);
 }
 
+// The on_sample tests below stand for #142's own per-frame hook into
+// ScreenContextReporter::Sample (main.cc's own wiring): told the same
+// four readings OnFace/OnNoFace just updated, once a frame regardless of
+// whether it carries a reaction.
+struct Sample {
+  std::optional<HeadRotation> pose;
+  std::optional<HeadRotation> resting;
+  std::optional<EyeSignal> eye;
+  std::optional<EyeSignal> eye_resting;
+};
+
+class OnSampleTest : public ::testing::Test {
+ protected:
+  std::int64_t now_ms_ = 1000;
+  std::vector<Sample> samples_;
+  std::vector<Reaction> reactions_;
+  ScreenContextReader reader_{
+      ExpressionTracker::Settings{.rise = 0.06,
+                                  .pose_degrees = 10,
+                                  .pose_range = 3,
+                                  .settle_ms = 600,
+                                  .spreads = 3,
+                                  .hold_ms = 200,
+                                  .eye_look_down_threshold = 0.3,
+                                  .eye_blink_threshold = 0.5},
+      EyeGazeTracker::Settings{.blink_threshold = 0.5,
+                               .median_ms = 250,
+                               .resting_ms = 3000,
+                               .gap_ms = 2000},
+      [this](const std::optional<HeadRotation>& pose,
+             const std::optional<HeadRotation>& resting,
+             const std::optional<EyeSignal>& eye,
+             const std::optional<EyeSignal>& eye_resting) {
+        samples_.push_back({.pose = pose,
+                            .resting = resting,
+                            .eye = eye,
+                            .eye_resting = eye_resting});
+      }};
+};
+
+TEST_F(OnSampleTest, OnFaceTellsItTheFourReadings) {
+  reader_.OnFace(FaceAt({.yaw = 12}), /*width=*/640, /*height=*/480, now_ms_,
+                 reactions_);
+
+  // on_sample_ is told exactly what OnFace just updated: the same four
+  // readings the reader's own accessors give right after (EyeSignal and
+  // HeadRotation carry no operator==, so each is checked by its own
+  // presence and, for pose, its value).
+  ASSERT_THAT(samples_, ::testing::SizeIs(1));
+  const Sample& sample = samples_.at(0);
+  if (!sample.pose.has_value()) {
+    ADD_FAILURE() << "no pose";
+    return;
+  }
+  EXPECT_NEAR(sample.pose->yaw_degrees, 12, 0.01);
+  // Still learning: no resting pose of its own yet.
+  EXPECT_EQ(sample.resting, std::nullopt);
+  EXPECT_EQ(sample.eye.has_value(), reader_.EyeReading().has_value());
+  EXPECT_EQ(sample.eye_resting.has_value(), reader_.EyeResting().has_value());
+}
+
+TEST_F(OnSampleTest, OnNoFaceTellsItNoPoseButKeepsTheRestingLevel) {
+  for (int frame = 0; frame < 60; ++frame) {
+    now_ms_ += kFrameMs;
+    reader_.OnFace(FaceAt({}), /*width=*/640, /*height=*/480, now_ms_,
+                   reactions_);
+  }
+  ASSERT_TRUE(reader_.RestingPose().has_value());
+  samples_.clear();
+
+  reader_.OnNoFace();
+
+  ASSERT_THAT(samples_, ::testing::SizeIs(1));
+  EXPECT_EQ(samples_.at(0).pose, std::nullopt);
+  EXPECT_EQ(samples_.at(0).eye, std::nullopt);
+  EXPECT_TRUE(samples_.at(0).resting.has_value());
+}
+
 }  // namespace
 }  // namespace facepalm

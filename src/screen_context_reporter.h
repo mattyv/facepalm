@@ -1,6 +1,8 @@
 #ifndef FACEPALM_SRC_SCREEN_CONTEXT_REPORTER_H_
 #define FACEPALM_SRC_SCREEN_CONTEXT_REPORTER_H_
 
+#include <cstdint>
+#include <deque>
 #include <mutex>
 #include <optional>
 
@@ -24,6 +26,11 @@ namespace facepalm {
 // restart.
 class ScreenContextReporter {
  public:
+  // protocol.cc's own longest beat window: nothing asks Between about a
+  // window any longer than this, so it is Sample's own buffer's default
+  // bound (#142).
+  static constexpr std::int64_t kDefaultMaxWindowMs = 10000;
+
   // `titles_enabled` is Config's screen_context.window_titles_enabled.
   // `profile`, when given, is an optional calibration profile (#61 item 12)
   // this reporter reads no lifetime claim on, so the caller keeps it
@@ -31,12 +38,20 @@ class ScreenContextReporter {
   // "calibrated_screen" to Json's result, and its own gains (`profile`'s,
   // once given) take over from `default_gains` for every ComposeGaze
   // call Json makes. `head_only_yaw_degrees` is ComposeGaze's own.
+  // `max_window_ms` bounds Sample's own buffer (#142).
+  //
+  // `head_only_yaw_degrees` and `max_window_ms` are never swappable in
+  // practice: every call site passes both from distinct, named sources
+  // (main.cc's own config fields, or a test's own named constant), never
+  // a bare literal in either position.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   ScreenContextReporter(ScreenSource& source, GazeSettings settings,
                         bool titles_enabled,
                         const CalibrationProfile* profile = nullptr,
                         EyeGains default_gains = {},
                         double head_only_yaw_degrees =
-                            CalibrationSettings::kDefaultHeadOnlyYawDegrees);
+                            CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+                        std::int64_t max_window_ms = kDefaultMaxWindowMs);
 
   // {"active_app":"...","window_title":"...","mouse":{"x":..,"y":..},
   // "gaze":"...","calibrated_screen":n}, with active_app, window_title and
@@ -73,14 +88,73 @@ class ScreenContextReporter {
   // constructor's own `profile` carries.
   void SetProfile(const CalibrationProfile* profile);
 
+  // Samples this frame's composed gaze into the window Between can later
+  // ask about (#142): the same four readings Json takes, without
+  // building its JSON. Called once a frame regardless of whether a
+  // reading is made (ScreenContextReader's own OnSample, in the daemon),
+  // so a beat's window holds every frame since, not only the ones a
+  // reaction happened to land on. `at_ms` is the wall clock at the
+  // moment of the call (src/feed_clients.h's own UnixMilliseconds, the
+  // same clock ReactionFeed marks a beat's own start and end on), not
+  // the frame's own capture-clock timestamp, so Between's bounds and
+  // this buffer's timestamps agree.
+  //
+  // See Json's own declaration for why `pose`/`resting` and
+  // `eye`/`eye_resting` are never swappable in practice.
+  // NOLINTBEGIN(bugprone-easily-swappable-parameters)
+  void Sample(const std::optional<HeadRotation>& pose,
+              const std::optional<HeadRotation>& resting,
+              const std::optional<EyeSignal>& eye,
+              const std::optional<EyeSignal>& eye_resting, std::int64_t at_ms);
+  // NOLINTEND(bugprone-easily-swappable-parameters)
+
+  // The majority gaze (#142), and, given `content`, whether gaze was
+  // mostly inside it most of the time (#144), over every Sample call in
+  // [start_ms, end_ms). Gaze::kUnknown, and ContentHit::kUnknown when
+  // `content` is given, with no samples in range -- no screen context,
+  // or a range predating every sample Sample's own `max_window_ms` still
+  // keeps. A tie between zones, or between yes and no, keeps whichever
+  // Sample saw first in the window.
+  [[nodiscard]] GazeWindow Between(
+      std::int64_t start_ms, std::int64_t end_ms,
+      const std::optional<ContentRect>& content) const;
+
  private:
+  // One Sample call's own reading (#142, #144): the zone CoarseGazeFrom
+  // read, and the composed angle and resting pose Between's own
+  // ContentHitFrom needs, had a content rectangle been asked for at this
+  // exact moment.
+  struct GazeSample {
+    std::int64_t at_ms;
+    Gaze zone;
+    std::optional<HeadRotation> angle;
+    std::optional<HeadRotation> resting;
+  };
+
+  // The composed gaze angle (nullopt without `pose`) and its coarse zone:
+  // the pair Json and Sample each derive from the same four readings,
+  // folded into one place so a change to ComposeGaze/CoarseGazeFrom's
+  // own call has one caller to keep in step. Called while already
+  // holding mutex_: reads profile_.
+  struct Zone {
+    Gaze zone;
+    std::optional<HeadRotation> angle;
+  };
+  [[nodiscard]] Zone ZoneOf(const std::optional<HeadRotation>& pose,
+                            const std::optional<HeadRotation>& resting,
+                            const std::optional<EyeSignal>& eye,
+                            const std::optional<EyeSignal>& eye_resting,
+                            ScreenSide side) const;
+
   ScreenSource& source_;
   GazeSettings settings_;
   bool titles_enabled_;
   EyeGains default_gains_;
   double head_only_yaw_degrees_;
+  const std::int64_t max_window_ms_;
   mutable std::mutex mutex_;
   const CalibrationProfile* profile_;
+  std::deque<GazeSample> samples_;  // Oldest first; under mutex_.
 };
 
 }  // namespace facepalm

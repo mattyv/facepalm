@@ -17,6 +17,7 @@
 #include "src/calibration.h"
 #include "src/feed.h"
 #include "src/feelings.h"
+#include "src/screen_context.h"
 
 // Each test stands for the specs/Service.tla property it is named for. The
 // protocol is pure computation, so it runs for real.
@@ -43,7 +44,8 @@ class MockFeed : public Feed {
               (override));
   MOCK_METHOD(std::optional<Delivery>, Beat,
               (const std::string& client, BeatKind kind,
-               std::chrono::milliseconds window),
+               std::chrono::milliseconds window,
+               std::optional<ContentRect> content),
               (override));
   MOCK_METHOD(bool, Feel,
               (const std::string& client, std::int64_t interpretation,
@@ -296,8 +298,9 @@ TEST_F(CanAcceptTest, AClientResetsThePersonsFeelings) {
 
 TEST_F(CanAcceptTest, AClientMarksABeatAndIsToldTheFeeling) {
   service_.Start();
-  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal,
-                          std::chrono::milliseconds(1500)))
+  EXPECT_CALL(
+      feed_, Beat("agent", BeatKind::kProposal, std::chrono::milliseconds(1500),
+                  std::optional<ContentRect>(std::nullopt)))
       .WillOnce(Return(Feed::Delivery{.readings = {},
                                       .missed = 0,
                                       .interpretation = Feed::Interpretation{
@@ -312,9 +315,29 @@ TEST_F(CanAcceptTest, AClientMarksABeatAndIsToldTheFeeling) {
               ElementsAre(R"({"ok":true})",
                           R"({"readings":[],"missed":0,"interpretation":)"
                           R"({"id":1,"feeling":"disagreement",)"
-                          R"("beat":"proposal","feelings":["agreement",)"
+                          R"("beat":"proposal","gaze":"unknown",)"
+                          R"("feelings":["agreement",)"
                           R"("disagreement","engagement","annoyance",)"
                           R"("confused","unknown"]}})"));
+  service_.Stop();
+}
+
+// #144: the content rectangle a beat's own request line carries parses
+// and reaches the feed as one, backward compatibly with a beat that
+// carries none (the test above).
+TEST_F(CanAcceptTest, AClientsContentRectangleReachesTheFeed) {
+  service_.Start();
+  EXPECT_CALL(feed_,
+              Beat("agent", BeatKind::kQuestion, std::chrono::milliseconds(500),
+                   std::optional<ContentRect>(ContentRect{
+                       .x = 10, .y = 20, .width = 300, .height = 400})))
+      .WillOnce(Return(Feed::Delivery{}));
+  const auto peer = Named("agent");
+
+  peer->Send("beat question 500 10 20 300 400");
+
+  EXPECT_THAT(peer->Replies(2),
+              ElementsAre(R"({"ok":true})", R"({"readings":[],"missed":0})"));
   service_.Stop();
 }
 
@@ -462,7 +485,7 @@ TEST_F(HangUpEndsTest, AHangUpDuringABeatDisconnectsTheClient) {
   std::promise<void> disconnected;
   auto woken = disconnected.get_future().share();
   std::once_flag once;
-  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal, _)).WillOnce([&] {
+  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal, _, _)).WillOnce([&] {
     beating.set_value();
     woken.wait_for(2 * kPrompt);
     return std::optional<Feed::Delivery>();
@@ -518,7 +541,7 @@ TEST_F(HangUpEndsTest, AHangUpDuringABeatDisconnectsTheClientOnlyOnce) {
   std::promise<void> disconnected;
   auto woken = disconnected.get_future().share();
   std::once_flag once;
-  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal, _)).WillOnce([&] {
+  EXPECT_CALL(feed_, Beat("agent", BeatKind::kProposal, _, _)).WillOnce([&] {
     beating.set_value();
     woken.wait_for(2 * kPrompt);
     return std::optional<Feed::Delivery>();
@@ -561,7 +584,7 @@ TEST_F(StopWakesWaitersTest, StoppingEndsABeatAndTheConnection) {
   std::promise<void> disconnected;
   auto woken = disconnected.get_future().share();
   std::once_flag once;
-  EXPECT_CALL(feed_, Beat("agent", BeatKind::kQuestion, _)).WillOnce([&] {
+  EXPECT_CALL(feed_, Beat("agent", BeatKind::kQuestion, _, _)).WillOnce([&] {
     beating.set_value();
     woken.wait_for(2 * kPrompt);
     return std::optional<Feed::Delivery>();

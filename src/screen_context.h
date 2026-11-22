@@ -84,6 +84,60 @@ Gaze CoarseGazeFrom(const HeadRotation& gaze,
                     const std::optional<HeadRotation>& resting, ScreenSide side,
                     const GazeSettings& settings);
 
+// on_content, averted, away or unknown: the same four zones Name(Gaze)
+// names, worded for a beat's own reply (#142) -- a beat is about the one
+// thing the client just asked or proposed, so "on the content" reads
+// better there than "this screen" does.
+std::string_view BeatGazeName(Gaze gaze);
+
+// A content rectangle a client's beat may carry (#144): the area on
+// screen its question or proposal occupies, in the same coordinate space
+// as ScreenRect (#36 item 11), consistent across one call, not across
+// platforms.
+struct ContentRect {
+  double x = 0;
+  double y = 0;
+  double width = 0;
+  double height = 0;
+  friend auto operator<=>(const ContentRect&, const ContentRect&) = default;
+};
+
+// Whether gaze was mostly inside a content rectangle (#144): yes, no or
+// unknown -- coarse only, never angles or window titles (#83).
+enum class ContentHit : std::uint8_t { kYes, kNo, kUnknown };
+
+// yes, no or unknown.
+std::string_view Name(ContentHit hit);
+
+// Coarse only (#144, #83): never the angle itself, only whether a point
+// this far inside CoarseGazeFrom's own this_screen cone lands in
+// `content`. kUnknown wherever CoarseGazeFrom would read kUnknown or
+// kAway (no resting pose yet, or too far from it to place at all); past
+// `settings.other_screen_degrees`, nothing is "mostly inside" any
+// rectangle on `main`. Within the cone, the offset from resting, as a
+// fraction of `settings.other_screen_degrees` per axis, is read as the
+// same fraction across `main`'s own rect -- centred (resting looks at
+// `main`'s own centre), and the coarsest reading this model can give
+// without a calibration profile's own corners (#137 has one; nothing
+// here reads it, the same simplification CoarseGazeFrom's own uncalibrated
+// reading already makes) -- and compared to `content`. Positive yaw is a
+// turn to the subject's left (src/reaction.h), which is `main`'s own left
+// (the lower end of its x); positive pitch is looking down, `main`'s own
+// lower end of y.
+//
+ContentHit ContentHitFrom(const HeadRotation& gaze,
+                          const std::optional<HeadRotation>& resting,
+                          const ScreenRect& main, const ContentRect& content,
+                          const GazeSettings& settings);
+
+// What a beat's window showed of where the person looked (#142, #144):
+// the majority coarse gaze, and, given a content rectangle, whether gaze
+// was mostly inside it. No content without one asked for.
+struct GazeWindow {
+  Gaze gaze = Gaze::kUnknown;
+  std::optional<ContentHit> content = std::nullopt;
+};
+
 }  // namespace facepalm
 
 #endif  // FACEPALM_SRC_SCREEN_CONTEXT_H_

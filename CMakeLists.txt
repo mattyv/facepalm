@@ -219,10 +219,11 @@ target_link_libraries(head_gesture_model PUBLIC head_pose)
 facepalm_unit(reaction)
 facepalm_unit(reaction_feed)
 # The feelings and their rule are pure computation, so the feed's tests run
-# them for real.
-target_link_libraries(reaction_feed PUBLIC feelings)
+# them for real. feed_clients is only for UnixMilliseconds, Beat's own
+# NowMs default (#142): declared there already, not duplicated here.
+target_link_libraries(reaction_feed PUBLIC feelings feed_clients)
 facepalm_unit(protocol)
-target_link_libraries(protocol PUBLIC feelings calibration)
+target_link_libraries(protocol PUBLIC feelings calibration screen_context)
 facepalm_unit(service)
 # The protocol is pure computation, so the service's tests run it for real.
 target_link_libraries(service PUBLIC protocol)

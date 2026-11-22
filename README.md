@@ -156,15 +156,27 @@ made since, each with its reason, are in the
     `unknown`) read from `src/eye_gaze`'s composed gaze (#137), with or
     without calibration. `CoarseGazeFrom` and `SideOf`, in
     `src/screen_context`, are the rule, tested directly; it has no
-    lifecycle, so no spec. `ScreenContextReader` is a `FaceReader` that
-    keeps the pose and eye signal (its own `EyeGazeTracker`) behind a
-    mutex, read from a different thread than they are written on.
+    lifecycle, so no spec. The same file's `BeatGazeName` words those four
+    zones for a beat's own reply (`on_content`, `averted`, `away`,
+    `unknown`, #142), and `ContentHitFrom` reads whether gaze was mostly
+    inside a content rectangle a beat may carry (`yes`, `no`, `unknown`,
+    #144), by linear interpolation across `CoarseGazeFrom`'s own
+    uncalibrated cone -- coarse only, never angles or window titles (#83);
+    also tested directly, no lifecycle of its own. `ScreenContextReader`
+    is a `FaceReader` that keeps the pose and eye signal (its own
+    `EyeGazeTracker`) behind a mutex, read from a different thread than
+    they are written on, and, given one, tells an `OnSample` callback the
+    same four readings every frame, reaction or not (#142: main.cc's own
+    hook into `ScreenContextReporter::Sample`, below).
     `ScreenContextReporter` composes gaze with `src/eye_gaze`'s
     `ComposeGaze` and builds the `context` JSON from `ScreenSource`, the
     mockable seam its tests take in place of
     `src/macos/screen_context_macos` (AppKit) and
     `src/linux/screen_context_linux` (X11, through XWayland where a
-    Wayland session runs one). Window titles need macOS's Screen Recording
+    Wayland session runs one); its own `Sample`/`Between` keep a short,
+    time-bounded buffer of composed gaze for a beat's window to ask about
+    (#142, #144), independent of whether any reading was made in it.
+    Window titles need macOS's Screen Recording
     permission and can hold private text, so they default off. The
     platform sources need a real desktop session and have no unit tests or
     coverage floor, following `src/macos/avfoundation_session`'s
@@ -177,7 +189,14 @@ made since, each with its reason, are in the
     `specs/ReactionFeed.tla`. A client that has just asked a question or
     made a proposal can instead mark a beat: the feed waits out the beat's
     window and answers with the readings and one interpretation of them, a
-    feeling, following `specs/FeelingBeat.tla` (#70). The person can then
+    feeling, following `specs/FeelingBeat.tla` (#70). The interpretation
+    also carries the majority gaze over that window as context (#142,
+    `ScreenContextReporter::Between`, injected as `GazeWindowFn`), and,
+    given a content rectangle with the beat, whether gaze was mostly
+    inside it (#144); gaze never changes the feeling by rule, the one
+    exception being `GuardAvertedUnknown`, the thinking guard: a question
+    beat ending averted reads unknown however the cues went, so the client
+    waits rather than acts on a guess. The person can then
     say how they really felt, once per interpretation and within five
     minutes, following `specs/FeelingFeedback.tla` (#35).
 -   `src/feelings`: the six feelings a reaction is read as, and the only list
@@ -429,8 +448,16 @@ last looked. Right after the agent asks the person something, it can pass
 `beat` (`question` or `proposal`): the service then watches the next
 `timeout_ms` (1500 by default, at most 10000) and adds `interpretation`, with
 an ID, the feeling the reaction was read as, which is `unknown` when it
-cannot tell, and `feelings`, every feeling the person can pick instead. A pick
-the person later makes replaces this read for that beat; with no pick, the
+cannot tell, and `feelings`, every feeling the person can pick instead.
+`interpretation.gaze` is the majority gaze over that window as context
+(`on_content`, `averted`, `away` or `unknown`, #142): it never changes the
+feeling by rule, the one exception being a question beat ending averted,
+which reads unknown so the agent waits rather than acts on a guess.
+Passing `content_rect`, the screen area the question or proposal occupies,
+with `beat` also adds `interpretation.content` (#144): whether gaze was
+mostly inside it, `yes`, `no` or `unknown`, coarse only -- never angles or
+window titles (#83). A pick the person later makes replaces this read for
+that beat; with no pick, the
 read stands, and nothing waits on one. The feeling is advisory either way,
 never an answer. When the person says how they really felt, `tell_feeling`
 takes the interpretation's ID and their pick, sends `feel <id> <feeling>`,
@@ -745,8 +772,8 @@ The class and report numbers are 0 none, 1 nod, 2 shake, 3 tilt, 4 turn and
 
 Run `build/gesture_replay --looking-away < camera-probe.log` to replay a
 recording's looks away instead: it reads the probe's `head_pose <timestamp>
-<yaw> <pitch> <roll>` lines (no eyes line, so gaze is head pose alone,
-#137's own fallback with no eye signal) and its `gesture_no_face` lines
+<yaw> <pitch> <roll>` lines (no eyes line, so gaze is head pose alone, the
+fallback #137 uses with no eye signal) and its `gesture_no_face` lines
 (#141's own `gone` kind), and prints
 `looked_away <timestamp> <kind> <duration_ms>` for each look away reported
 with the default settings, once it returns. Probe logs from before #35

@@ -11,6 +11,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/feelings.h"
+#include "src/screen_context.h"
 #include "src/tuner.h"
 
 // Each test stands for the specs/ReactionFeed.tla property it is named for,
@@ -88,7 +89,18 @@ class ReactionFeedTest : public ::testing::Test {
   }
   NiceMock<MockTuner> tuner_;
   std::chrono::steady_clock::time_point now_;
-  ReactionFeed feed_{/*capacity=*/2, tuner_, [this] { return now_; }};
+  std::int64_t now_ms_ = 0;
+  // Unset (the default for every test but the gaze ones below): every
+  // beat then answers GazeWindow{}, Gaze::kUnknown with no content, the
+  // same as a daemon with screen context disabled (#142, #144).
+  ReactionFeed::GazeWindowFn gaze_window_;
+  ReactionFeed feed_{/*capacity=*/2, tuner_, [this] { return now_; },
+                     [this] { return now_ms_; },
+                     [this](std::int64_t start, std::int64_t end,
+                            const std::optional<ContentRect>& content) {
+                       return gaze_window_ ? gaze_window_(start, end, content)
+                                           : GazeWindow{};
+                     }};
 };
 
 using NoRepeatTest = ReactionFeedTest;
@@ -141,8 +153,8 @@ TEST_F(NoRepeatTest, AReconnectingClientStartsWithNoBacklog) {
 
 TEST_F(ReactionFeedTest, ForgetEndsAWaitAndRetiresItsInterpretations) {
   ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t given =
-      InterpretationOf(feed_.Beat("agent", BeatKind::kQuestion, kShort));
+  const std::int64_t given = InterpretationOf(
+      feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
   auto waited = std::async(std::launch::async,
                            [this] { return feed_.Wait("agent", kLong); });
   while (!feed_.Waiting("agent")) {
@@ -170,8 +182,8 @@ TEST_F(ReactionFeedTest, ForgetAfterDisconnectWaitsForTheOldWaiter) {
 TEST_F(ReactionFeedTest, ForgetRetiresAnIdleOrUnknownClient) {
   feed_.DisconnectAndForget("unknown");
   ASSERT_TRUE(feed_.Connect("agent"));
-  const std::int64_t given =
-      InterpretationOf(feed_.Beat("agent", BeatKind::kQuestion, kShort));
+  const std::int64_t given = InterpretationOf(
+      feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
   feed_.DisconnectAndForget("agent");
   ASSERT_TRUE(feed_.Connect("agent"));
   EXPECT_FALSE(feed_.Feel("agent", given, Feeling::kAgreement));
@@ -373,7 +385,7 @@ class BeatTest : public ReactionFeedTest {
   std::future<std::optional<ReactionFeed::Delivery>> Mark(
       BeatKind kind = BeatKind::kQuestion) {
     auto beat = std::async(std::launch::async, [this, kind] {
-      return feed_.Beat("agent", kind, kBeat);
+      return feed_.Beat("agent", kind, kBeat, std::nullopt);
     });
     while (!feed_.Waiting("agent")) {
       if (beat.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -392,6 +404,27 @@ class BeatTest : public ReactionFeedTest {
       return Feeling::kUnknown;
     }
     return delivery.interpretation->feeling;
+  }
+
+  // The beat's own gaze (#142), or a failure and kUnknown when it has no
+  // interpretation.
+  static Gaze GazeOf(const ReactionFeed::Delivery& delivery) {
+    if (!delivery.interpretation) {
+      ADD_FAILURE() << "no interpretation";
+      return Gaze::kUnknown;
+    }
+    return delivery.interpretation->gaze;
+  }
+
+  // The beat's own content hit (#144), or a failure and nullopt when it
+  // has no interpretation.
+  static std::optional<ContentHit> ContentOf(
+      const ReactionFeed::Delivery& delivery) {
+    if (!delivery.interpretation) {
+      ADD_FAILURE() << "no interpretation";
+      return std::nullopt;
+    }
+    return delivery.interpretation->content;
   }
 };
 
@@ -449,7 +482,8 @@ TEST_F(ReadsOnlyTheBeatTest, AReadingBeforeTheBeatIsToldButNotRead) {
 
 TEST_F(ReadsOnlyTheBeatTest, AReadingAfterTheBeatGoesToTheNextRead) {
   ASSERT_TRUE(feed_.Connect("agent"));
-  const auto delivery = Got(feed_.Beat("agent", BeatKind::kQuestion, kShort));
+  const auto delivery =
+      Got(feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
   feed_.React("Gesture: nod", kNodText);
 
   EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kUnknown));
@@ -460,7 +494,8 @@ using UnknownWhenUnclearTest = BeatTest;
 
 TEST_F(UnknownWhenUnclearTest, NothingDuringTheBeatIsUnknown) {
   ASSERT_TRUE(feed_.Connect("agent"));
-  const auto delivery = Got(feed_.Beat("agent", BeatKind::kQuestion, kShort));
+  const auto delivery =
+      Got(feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
 
   EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kUnknown));
   EXPECT_THAT(delivery.readings, IsEmpty());
@@ -513,8 +548,10 @@ using OneAnswerPerBeatTest = BeatTest;
 TEST_F(OneAnswerPerBeatTest, EachBeatHasItsOwnInterpretation) {
   ASSERT_TRUE(feed_.Connect("agent"));
   ASSERT_TRUE(feed_.Connect("ai-pair"));
-  const auto first = Got(feed_.Beat("agent", BeatKind::kQuestion, kShort));
-  const auto second = Got(feed_.Beat("ai-pair", BeatKind::kQuestion, kShort));
+  const auto first =
+      Got(feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
+  const auto second =
+      Got(feed_.Beat("ai-pair", BeatKind::kQuestion, kShort, std::nullopt));
 
   const auto id = [](const ReactionFeed::Delivery& delivery) {
     return delivery.interpretation.value_or(ReactionFeed::Interpretation{
@@ -529,7 +566,7 @@ TEST_F(OneAnswerPerBeatTest, ABeatIsRefusedWhileTheClientWaits) {
   ASSERT_TRUE(feed_.Connect("agent"));
   auto beat = Mark();
 
-  EXPECT_THAT(feed_.Beat("agent", BeatKind::kQuestion, kShort),
+  EXPECT_THAT(feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt),
               Eq(std::nullopt));
   EXPECT_THAT(feed_.Wait("agent", kShort), Eq(std::nullopt));
   EXPECT_THAT(feed_.Read("agent"), Eq(std::nullopt));
@@ -537,7 +574,7 @@ TEST_F(OneAnswerPerBeatTest, ABeatIsRefusedWhileTheClientWaits) {
 }
 
 TEST_F(OneAnswerPerBeatTest, AClientNotConnectedCannotMarkABeat) {
-  EXPECT_THAT(feed_.Beat("stranger", BeatKind::kQuestion, kShort),
+  EXPECT_THAT(feed_.Beat("stranger", BeatKind::kQuestion, kShort, std::nullopt),
               Eq(std::nullopt));
 }
 
@@ -598,7 +635,8 @@ TEST_F(TunedReadTest, ABeatWithNoReactionHasEvidenceToo) {
                            Feeling::kUnknown))
       .WillOnce(Return(Feeling::kEngagement));
 
-  EXPECT_THAT(FeelingOf(Got(feed_.Beat("agent", BeatKind::kProposal, kShort))),
+  EXPECT_THAT(FeelingOf(Got(feed_.Beat("agent", BeatKind::kProposal, kShort,
+                                       std::nullopt))),
               Eq(Feeling::kEngagement));
 }
 
@@ -610,6 +648,144 @@ TEST_F(TunedReadTest, ABeatOfMixedReactionsKeepsTheGenericRead) {
   feed_.React("Gesture: shake", kShakeText);
 
   EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kUnknown));
+}
+
+// ReactionFeed's own default for a caller that gives it no GazeWindowFn at
+// all (every constructor below this one in the file instead gives it a
+// forwarding lambda, for gaze_window_ below to redirect per test): a
+// daemon with screen context disabled, following main.cc's own ternary.
+TEST(ReactionFeedGazeDefaultTest, NoGazeWindowFnAnswersUnknownWithNoContent) {
+  NiceMock<MockTuner> tuner;
+  ON_CALL(tuner, Read).WillByDefault(ReturnArg<1>());
+  ReactionFeed feed(/*capacity=*/2, tuner);
+  ASSERT_TRUE(feed.Connect("agent"));
+
+  const auto delivery =
+      Got(feed.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
+
+  if (!delivery.interpretation) {
+    ADD_FAILURE() << "no interpretation";
+    return;
+  }
+  EXPECT_THAT(delivery.interpretation->gaze, Eq(Gaze::kUnknown));
+  EXPECT_THAT(delivery.interpretation->content, Eq(std::nullopt));
+}
+
+// The gaze tests below stand for #142's and #144's own context a beat's
+// reply carries: the majority gaze over the window, and, given a content
+// rectangle, whether it was mostly inside it. Neither ever changes the
+// generic feeling by rule, the one exception (AQuestionEndingAverted
+// ReadsUnknown below) being FeelingBeat.tla's own thinking guard.
+using GazeContextTest = BeatTest;
+
+// The test fixture's own feed_ always gives ReactionFeed a forwarding
+// lambda (so gaze_window_ below can be set per test); this is about that
+// lambda's own fallback when gaze_window_ is left unset, not about
+// ReactionFeed's own default (ReactionFeedGazeDefaultTest above).
+TEST_F(GazeContextTest, NoGazeSourceAnswersUnknownWithNoContent) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+
+  const auto delivery =
+      Got(feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
+
+  EXPECT_THAT(GazeOf(delivery), Eq(Gaze::kUnknown));
+  EXPECT_THAT(ContentOf(delivery), Eq(std::nullopt));
+}
+
+TEST_F(GazeContextTest, TheInterpretationCarriesTheWindowsGaze) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  gaze_window_ = [](std::int64_t /*start*/, std::int64_t /*end*/,
+                    const std::optional<ContentRect>& /*content*/) {
+    return GazeWindow{.gaze = Gaze::kThisScreen};
+  };
+
+  const auto delivery =
+      Got(feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt));
+
+  EXPECT_THAT(GazeOf(delivery), Eq(Gaze::kThisScreen));
+}
+
+TEST_F(GazeContextTest, TheContentFieldIsGivenWhenAsked) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  constexpr ContentRect kRect = {.x = 1, .y = 2, .width = 3, .height = 4};
+  std::optional<ContentRect> seen;
+  gaze_window_ = [&](std::int64_t /*start*/, std::int64_t /*end*/,
+                     const std::optional<ContentRect>& content) {
+    seen = content;
+    return GazeWindow{.gaze = Gaze::kThisScreen, .content = ContentHit::kYes};
+  };
+
+  const auto delivery =
+      Got(feed_.Beat("agent", BeatKind::kQuestion, kShort, kRect));
+
+  EXPECT_THAT(ContentOf(delivery), Optional(Eq(ContentHit::kYes)));
+  EXPECT_THAT(seen, Optional(Eq(kRect)));
+}
+
+TEST_F(GazeContextTest, ABeatWithNoRectangleAsksForNone) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  std::optional<ContentRect> seen = ContentRect{.width = 1, .height = 1};
+  gaze_window_ = [&](std::int64_t /*start*/, std::int64_t /*end*/,
+                     const std::optional<ContentRect>& content) {
+    seen = content;
+    return GazeWindow{};
+  };
+
+  feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt);
+
+  EXPECT_THAT(seen, Eq(std::nullopt));
+}
+
+TEST_F(GazeContextTest, TheGazeWindowReadsTheBeatsOwnWindow) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  now_ms_ = 5000;
+  std::int64_t seen_start = -1;
+  std::int64_t seen_end = -1;
+  gaze_window_ = [&](std::int64_t start, std::int64_t end,
+                     const std::optional<ContentRect>& /*content*/) {
+    seen_start = start;
+    seen_end = end;
+    return GazeWindow{};
+  };
+
+  feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt);
+
+  EXPECT_THAT(seen_start, Eq(5000));
+  EXPECT_THAT(seen_end, Eq(5000));
+}
+
+// FeelingBeat.tla's GuardAvertedUnknown, the thinking guard: a question
+// beat ending averted reads unknown however the cues went, but still
+// reports averted as its own gaze.
+TEST_F(GazeContextTest, AQuestionEndingAvertedReadsUnknown) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  gaze_window_ = [](std::int64_t /*start*/, std::int64_t /*end*/,
+                    const std::optional<ContentRect>& /*content*/) {
+    return GazeWindow{.gaze = Gaze::kOtherScreen};
+  };
+  auto beat = Mark(BeatKind::kQuestion);
+  feed_.React("Gesture: nod", kNodText);
+
+  const auto delivery = Got(Answered(beat));
+
+  EXPECT_THAT(FeelingOf(delivery), Eq(Feeling::kUnknown));
+  EXPECT_THAT(delivery.interpretation,
+              Optional(Field(&ReactionFeed::Interpretation::gaze,
+                             Eq(Gaze::kOtherScreen))));
+}
+
+// The guard is for a question, not a proposal: eyes averted at the end of
+// a proposal's own beat still only ever changes the feeling by rule.
+TEST_F(GazeContextTest, AProposalEndingAvertedKeepsItsCuesFeeling) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  gaze_window_ = [](std::int64_t /*start*/, std::int64_t /*end*/,
+                    const std::optional<ContentRect>& /*content*/) {
+    return GazeWindow{.gaze = Gaze::kOtherScreen};
+  };
+  auto beat = Mark(BeatKind::kProposal);
+  feed_.React("Gesture: nod", kNodText);
+
+  EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kAgreement));
 }
 
 class FeedbackTest : public BeatTest {

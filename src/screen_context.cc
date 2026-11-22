@@ -80,4 +80,44 @@ Gaze CoarseGazeFrom(const HeadRotation& gaze,
   return Gaze::kUnknown;
 }
 
+std::string_view BeatGazeName(Gaze gaze) {
+  // In Gaze's own order, as Name(Gaze) is.
+  constexpr std::array<std::string_view, 4> kNames = {"on_content", "averted",
+                                                      "away", "unknown"};
+  return kNames.at(static_cast<std::size_t>(gaze));
+}
+
+std::string_view Name(ContentHit hit) {
+  constexpr std::array<std::string_view, 3> kNames = {"yes", "no", "unknown"};
+  return kNames.at(static_cast<std::size_t>(hit));
+}
+
+ContentHit ContentHitFrom(const HeadRotation& gaze,
+                          const std::optional<HeadRotation>& resting,
+                          const ScreenRect& main, const ContentRect& content,
+                          const GazeSettings& settings) {
+  if (!resting) {
+    return ContentHit::kUnknown;
+  }
+  const double yaw_off =
+      std::remainder(gaze.yaw_degrees - resting->yaw_degrees, kFullTurnDegrees);
+  const double pitch_off = gaze.pitch_degrees - resting->pitch_degrees;
+  if (std::max(std::abs(yaw_off), std::abs(pitch_off)) >
+      settings.other_screen_degrees) {
+    return ContentHit::kUnknown;
+  }
+  // -1..1 relative to resting at the screen's own centre; positive yaw
+  // (a turn to the subject's left) moves toward the screen's own left,
+  // the lower end of its x, so it subtracts rather than adds.
+  const double u = std::clamp(
+      0.5 - (0.5 * (yaw_off / settings.other_screen_degrees)), 0.0, 1.0);
+  const double v = std::clamp(
+      0.5 + (0.5 * (pitch_off / settings.other_screen_degrees)), 0.0, 1.0);
+  const double px = main.x + (u * main.width);
+  const double py = main.y + (v * main.height);
+  const bool inside = px >= content.x && px <= content.x + content.width &&
+                      py >= content.y && py <= content.y + content.height;
+  return inside ? ContentHit::kYes : ContentHit::kNo;
+}
+
 }  // namespace facepalm
