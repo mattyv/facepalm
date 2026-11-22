@@ -38,6 +38,34 @@ a line saying which entry replaced it.
     concurrency of their own, so `CLAUDE.md`'s spec-first rule does not
     apply here, as it did not for the pose gate (#46) either.
 
+## 2026-11-22: A window-count tracker decides when Command-Tab can reach the menu app (#146)
+
+-   **Decision (where the counting lives):** `WindowActivationTracker`
+    (`src/window_activation.h`), not booleans or an open-window count kept
+    on `FacepalmApp` itself, counts how many of Settings, the camera
+    preview and the calibration wizard are open and decides when
+    `tools/menu/main.mm` must flip `NSApp`'s activation policy between
+    `NSApplicationActivationPolicyAccessory` and `...Regular`: the one
+    piece of logic in the fix, kept apart and unit-tested the way #64
+    asked, with `main.mm` only wiring `WindowOpened()`/`WindowClosed()`
+    calls at each of the three windows' open and close points and
+    applying the `ActivationPolicyChange` it returns.
+-   **Decision (no TLA+ spec):** the tracker is a plain counter with a
+    floor at zero, run on Cocoa's single main thread with no concurrency
+    or cross-process race for a spec to model, unlike `SingleInstance.tla`
+    or `CalibrationMenu.tla`; it is tested the same way `src/look_away.h`'s
+    pure computation is, with ordinary unit tests enumerating its cases.
+-   **Decision (defensive, not failing, on an unmatched close):** a
+    `WindowClosed()` with nothing open returns `kNone` rather than letting
+    the count go negative, so a close notification this tracker was never
+    told to expect an open for can never flip the policy back a second
+    time; no such call is currently possible from `main.mm`'s own wiring,
+    but the tracker does not rely on that staying true.
+-   **Rejected:** giving each of the three windows its own boolean on
+    `FacepalmApp` and summing them inline at each open and close point --
+    the same decision, repeated three times in untested Objective-C++,
+    which is exactly what #64 found wrong with `main.mm` already.
+
 ## 2026-11-22: The camera preview now shows the readings and the latest beat's feeling, closing #134
 
 -   **Decision:** beside the frame, in the same private folder, under the same

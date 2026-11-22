@@ -17,6 +17,7 @@
 #include "src/settings_document.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
+#include "src/window_activation.h"
 #import "tools/menu/calibration_window_macos.h"
 
 namespace {
@@ -238,7 +239,12 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 @property(nonatomic) BOOL loadedMissing;
 @end
 
-@implementation FacepalmApp
+@implementation FacepalmApp {
+  // How many of Settings, the preview and the calibration wizard are
+  // open right now (#146): decides when NSApp's activation policy must
+  // flip so Command-Tab, the Dock and the app switcher can reach them.
+  facepalm::WindowActivationTracker _activationTracker;
+}
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
   (void)notification;
   // A request file an earlier launch of this menu left behind -- it
@@ -309,6 +315,38 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   self.statusItem.button.toolTip = on ? @"Facepalm — camera on" : @"Facepalm";
 }
 
+// Applies what src/window_activation.h's WindowActivationTracker decides
+// about NSApp's activation policy (#146): regular, and activated, while
+// any of Settings, the preview or the calibration wizard is open, so
+// Command-Tab, the Dock and the app switcher can reach it; accessory,
+// Facepalm's own menu-bar-only default, once none are.
+- (void)applyActivationPolicyChange:(facepalm::ActivationPolicyChange)change {
+  switch (change) {
+    case facepalm::ActivationPolicyChange::kNone:
+      break;
+    case facepalm::ActivationPolicyChange::kBecomeRegular:
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+      [NSApp activateIgnoringOtherApps:YES];
+      break;
+    case facepalm::ActivationPolicyChange::kBecomeAccessory:
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+      break;
+  }
+}
+
+// Called once, each time one of Settings, the preview or the calibration
+// wizard opens or closes: a plain message send, rather than touching
+// _activationTracker directly, so a weak reference to self (as the
+// calibration wizard's onClosed block below holds) can call it safely
+// even if self has since been deallocated.
+- (void)windowDidOpenForActivation {
+  [self applyActivationPolicyChange:self->_activationTracker.WindowOpened()];
+}
+
+- (void)windowDidCloseForActivation {
+  [self applyActivationPolicyChange:self->_activationTracker.WindowClosed()];
+}
+
 - (void)togglePreview:(id)sender {
   (void)sender;
   if (self.previewWindow.visible) {
@@ -361,6 +399,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
     return;
   }
   if (self.previewWindow == nil) [self createPreviewWindow];
+  [self windowDidOpenForActivation];
   self.preview.title = @"Hide Camera Preview";
   [NSApp activateIgnoringOtherApps:YES];
   [self.previewWindow center];
@@ -400,6 +439,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   [self.previewWindow orderOut:nil];
   self.preview.title = @"Show Camera Preview";
   self.previewStatus.stringValue = @"";
+  [self windowDidCloseForActivation];
 }
 
 // Opens the calibration wizard (#118, item 12 of #61): approves the
@@ -436,7 +476,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   __weak FacepalmApp* weakSelf = self;
   self.calibrationController.onClosed = ^{
     weakSelf.calibrationController = nil;
+    [weakSelf windowDidCloseForActivation];
   };
+  [self windowDidOpenForActivation];
   [self.calibrationController show];
 }
 
@@ -517,9 +559,16 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 
 // Closing the preview window by its own close button stops the preview
 // the same way toggling the menu item does (#108): no frame keeps being
-// written once nothing shows it.
+// written once nothing shows it. Settings has no such cleanup of its own,
+// so closing it only has to tell the activation tracker (#146); the
+// calibration wizard's own window hears its own close and tells
+// FacepalmApp through CalibrationWindowController's onClosed instead.
 - (void)windowWillClose:(NSNotification*)notification {
-  if (notification.object == self.previewWindow) [self stopPreview];
+  if (notification.object == self.previewWindow) {
+    [self stopPreview];
+  } else if (notification.object == self.settingsWindow) {
+    [self windowDidCloseForActivation];
+  }
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)application
@@ -606,6 +655,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   self.loadedData = data;
   self.loadedMissing = missing;
   if (self.settingsWindow == nil) [self createSettingsWindow];
+  [self windowDidOpenForActivation];
   self.frameRate.integerValue = config->frames_per_second;
   [self.camera removeAllItems];
   [self.camera addItemWithTitle:@"Default (built-in camera)"];
@@ -672,6 +722,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
                                       defer:NO];
   self.settingsWindow.title = @"Facepalm Settings";
   self.settingsWindow.releasedWhenClosed = NO;
+  // So windowWillClose: below hears it close, whether by Save (which
+  // calls close itself), its own close button, or Cmd-W (#146).
+  self.settingsWindow.delegate = self;
   NSView* content = self.settingsWindow.contentView;
   NSTextField* note = [NSTextField
       wrappingLabelWithString:@"Facepalm reads these settings when it starts: turn it off and "
