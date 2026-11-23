@@ -38,7 +38,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `FeelingFeedback.cfg` | two clients, two interpretations, two feelings, one reset, one restart | holds | 264,176 |
 | `FramePipeline.cfg` | the camera opening twice | holds | 93 |
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
-| `LookAway.cfg` | three moves, one tracking gap | holds | 681 |
+| `LookAway.cfg` | three moves, one tracking gap | holds | 922 |
 | `McpSocket.cfg` | one session, up to two requests, backoff bounded to two ticks | holds, with `LinkRecovers` | 65 |
 | `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 48 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
@@ -603,28 +603,44 @@ the way home, bounded like any other move; `ReturnByAbsorb` is the
 resting pose catching up to a gaze that never itself returned (the old
 model's `Absorb`), and reports through the very same effect `ReturnByMove`
 does, so it can never swallow a look silently -- `RestHasNothingPending`
-is what checks that (this issue's own finding: the old model's `Absorb`
-could report nothing and still be safe, because `Report` had already
-fired earlier if it was going to; with reporting moved to `Return`, a
-quiet `Absorb` would have nothing left to fire it). The resting pose
-learns throughout: quickly in the first three seconds of a track (`Learn`),
-and over about twenty seconds after. A gap of more than two seconds starts
-learning again (`Gap`), clearing whatever look was open with it. `MaxMoves`
-and `MaxGaps` bound how often the gaze moves and tracking restarts, the
-model's form of "the gaze eventually holds a pose"; weak fairness on `Hold`
-and `ReturnByAbsorb` says time passes and the rule acts. `Learn`, `Move`,
-`HoldLong`, `SeeOtherScreen` and `ReturnByMove` have no fairness of their
-own: no property needs it, `ReturnByMove` included, since `ReturnByAbsorb`
-alone already carries `LookReported` and `LookRearms`. `LookAway.cfg`
-checks `MaxMoves = 3`, `MaxGaps = 1`: 681 distinct states, every property
-holds.
+is what checks that (#141's own finding: the old model's `Absorb` could
+report nothing and still be safe, because `Report` had already fired
+earlier if it was going to; with reporting moved to `Return`, a quiet
+`Absorb` would have nothing left to fire it). Both now also need
+`resting = "learned"` to fire at all (#157): `LookAwayDetector::Update`'s
+own `!resting` branch holds everything rather than computing a return
+against no resting pose, so Return itself must wait for one too, or a
+look held across a gap (below) could report before relearning finished.
+The resting pose learns throughout: quickly in the first three seconds of
+a track, and again after a gap (`Learn`, either way), and over about
+twenty seconds once learned. A gap of more than two seconds starts
+learning afresh (`Gap`); #157 (found tuning #139's fixtures) is that an
+earlier version of this model, and of `LookAwayDetector::Update`'s own
+`!resting` branch, cleared `held`, `heldFromBetween`, `heldLong`,
+`otherScreen` and `sawGone` right there, silently dropping a look already
+open rather than merely holding it until relearning caught up -- neither
+`Gap` nor `Learn` clears them now, so a look survives either transition
+and is still reported once the gaze (or the newly learned resting pose)
+reads as home. `heldAcrossGap` is this issue's own ghost, snapshotting
+`held` into a gap; `GapNeverDropsAHeldLook` checks that nothing but
+`Return`'s own report ever clears it again. `MaxMoves` and `MaxGaps` bound
+how often the gaze moves and tracking restarts, the model's form of "the
+gaze eventually holds a pose"; weak fairness on `Hold`, `ReturnByAbsorb`
+and `Learn` says time passes, the rule acts, and relearning itself
+finishes, so a look stalled behind any of the three is not stuck forever.
+`Move`, `HoldLong`, `SeeOtherScreen` and `ReturnByMove` have no fairness of
+their own: no property needs it, `ReturnByMove` included, since
+`ReturnByAbsorb` alone already carries `LookReported` and `LookRearms`.
+`LookAway.cfg` checks `MaxMoves = 3`, `MaxGaps = 1`: 922 distinct states,
+every property holds.
 
 | Property | What it says | Test |
 |---|---|---|
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
-| `NoReportWhileLearning` | Nothing is reported while the resting pose is being learned. | `NoReportWhileLearningTest` (both) in `test/look_away_test.cc`; `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`, `OnNoFaceBeforeAnyFaceIsLearningNotGone`; `ExpressionsTest.HasNoRestingPoseWhileItIsLearned` and `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain` |
+| `NoReportWhileLearning` | Nothing is reported while the resting pose is being learned. | `NoReportWhileLearningTest` in `test/look_away_test.cc`; `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose`, `OnNoFaceBeforeAnyFaceIsNotYetALook`; `ExpressionsTest.HasNoRestingPoseWhileItIsLearned` and `HasNoRestingPoseAfterAGapUntilItIsLearnedAgain` |
 | `NoReportBeforeHold` | A glance, away (or gone) for less than `hold_ms`, is not reported. | `NoReportBeforeHoldTest`; `GoneKindTest.ABriefNoFaceThatReturnsBeforeTheHoldTimeIsAGlance`; `LookAwayReaderTest.ABriefOnNoFaceIsAGlance`; `LookAwayReplayTest.ABriefGestureNoFaceIsAGlance`, `RecordedNodsAreNotReported` |
 | `RestHasNothingPending` | Once truly home, nothing from the look that just ended is left running. | `OncePerLookTest`; `LookRearmsTest`; `LookAwayReaderTest.TwoLooksAreTwoReports` |
+| `GapNeverDropsAHeldLook` | A look already held when a gap starts is not simply dropped by it. | `GapNeverDropsAHeldLookTest` in `test/look_away_test.cc`; `LookAwayReaderTest.ALookThatOutlastsTheTrackersOwnRelearningStillReportsGone`; `LookAwayReplayTest.EachRecordedTurnAwayIsReportedOnce`'s own third, wide turn |
 | `NoHoldFromBetween` | A hold can only run once the gaze has truly passed the full threshold or gone, never merely from the gap between the two. | `RearmOnlyAtRestTest.HoveringRightAtTheThresholdIsOneLook`; `OtherScreenKindTest.TheBoxIsOnlyReadOnceTrulyAway` |
 | `GoneWinsPriority` | Leaving (no face) beats anything else read while the look was open. | `GoneKindTest.GoneWinsOverOtherScreenAndDuration` |
 | `OtherScreenWinsPriority` | Short of leaving, another screen's box beats how long the look ran. | `OtherScreenKindTest.OtherScreenWinsOverDurationEvenWhenBackQuickly` |
@@ -636,15 +652,19 @@ Each mutation, and what TLC found (`LookAway.cfg`'s own `MaxMoves = 3`,
 
 | Mutation | Broke |
 |---|---|
-| `GuardLearned = FALSE`: a hold runs while the resting pose is learned | `NoReportWhileLearning`, 49 states |
-| `GuardHold = FALSE`: no hold time | `NoReportWhileLearning`, 11 states (`NoReportBeforeHold` too, once `GuardLearned` alone is fixed, as the old model's own table found) |
-| `GuardHysteresis = FALSE`: a hold can start merely between the two thresholds | `NoHoldFromBetween`, 33 states |
-| `GuardAbsorb = FALSE`: the resting pose never follows a held gaze | `LookReported`/`LookRearms`, 352 states: a gaze that stays away stays open forever once `MaxMoves` runs out |
-| `GuardGoneWins = FALSE`: leaving does not win the kind | `GoneWinsPriority`, 99 states |
-| `GuardOtherScreenWins = FALSE`: another screen's box does not win the kind | `OtherScreenWinsPriority`, 139 states |
-| `GuardOtherScreenAway = FALSE`: another screen's box is read even merely between or gone | `RestHasNothingPending`, 5 states |
-| `ReturnByAbsorb` reports nothing (the old model's own quiet `Absorb`, restored) | `RestHasNothingPending`, 21 states: this issue's own check, that `Absorb` still can't swallow an unreported look |
-| No fairness on `Hold` or `ReturnByAbsorb` | `LookReported`/`LookRearms`, 681 states |
+| `GuardLearned = FALSE`: a hold runs while the resting pose is learned | Nothing, 1,112 states: `ReturnByMove`/`ReturnByAbsorb`'s own new `resting = "learned"` guard (#157) now independently keeps `NoReportWhileLearning` even when a hold itself ran too early, so this guard alone no longer needs `GuardLearned` to back it up. Left in the model and the code (`Hold`'s own `resting = "learned" \/ ~GuardLearned`, `Away`'s own `!learning` in `src/expressions.cc`) as defence in depth, named here rather than left silently unbitten |
+| `GuardHold = FALSE`: no hold time | `NoReportBeforeHold`, 37 states |
+| `GuardHysteresis = FALSE`: a hold can start merely between the two thresholds | `NoHoldFromBetween`, 34 states |
+| `GuardAbsorb = FALSE`: the resting pose never follows a held gaze | `LookReported`/`LookRearms`, 458 states: a gaze that stays away stays open forever once `MaxMoves` runs out |
+| `GuardGoneWins = FALSE`: leaving does not win the kind | `GoneWinsPriority`, 125 states |
+| `GuardOtherScreenWins = FALSE`: another screen's box does not win the kind | `OtherScreenWinsPriority`, 216 states |
+| `GuardOtherScreenAway = FALSE`: another screen's box is read even merely between or gone | `RestHasNothingPending`, 34 states |
+| `ReturnByAbsorb` reports nothing (the old model's own quiet `Absorb`, restored) | `RestHasNothingPending`, 105 states: #141's own check, that `Absorb` still can't swallow an unreported look |
+| `Gap` clears `held`, `heldFromBetween`, `heldLong`, `otherScreen` and `sawGone` again (#157's own bug, restored) | `GapNeverDropsAHeldLook`, 101 states |
+| `Learn` clears `held` again (the same bug, one step later: a look surviving `Gap` would otherwise be dropped the moment relearning finished instead) | `GapNeverDropsAHeldLook`, 182 states |
+| `ReturnByMove`/`ReturnByAbsorb` omit the `resting = "learned"` guard (restoring `ReturnByAbsorb`'s old third disjunct, `resting = "learning"`) | `NoReportWhileLearning`, 180 states |
+| No fairness on `Hold` or `ReturnByAbsorb` | `LookReported`/`LookRearms`, 922 states |
+| No fairness on `Learn` | `LookReported`/`LookRearms`, 922 states: a look held across a gap could otherwise wait on relearning forever |
 
 `src/look_away.cc` implements the spec, and its comments name the actions.
 `ReturnByAbsorb` is `ExpressionTracker`'s resting pose, in
@@ -669,11 +689,12 @@ that code, fail the tests that stand for the properties they break:
 | Yaw does not wrap at 180 degrees | `LookReportedTest.YawIsComparedAcrossTheWrapAt180Degrees` |
 | The reader judges against straight ahead, not the learned resting pose | `LookAwayReaderTest.AHeadTurnedFromTheStartIsItsRestingPose` |
 | The reader reads this frame's own freshly relearned resting pose, not the one from before a gap (#141's own fix, so a look spanning the gap is not lost) | `LookAwayReaderTest.OnNoFacePastTheTrackersOwnGapStillReportsGone` |
+| `LookAwayDetector::Update`'s own `!resting` branch clears `away_`, `saw_other_screen_` and `saw_gone_` again (#157's own bug, restored) | `GapNeverDropsAHeldLookTest` (both), `GoneKindTest.NoFaceFromTheVeryFirstFrameStartsTheLookToo`, `LookAwayReaderTest.ALookThatOutlastsTheTrackersOwnRelearningStillReportsGone`, `LookAwayReplayTest.EachRecordedTurnAwayIsReportedOnce` |
+| `LookAwayReader::OnNoFace`/`ReplayLookingAway`/`ReplayEyesAndLookAway` call `LookAwayDetector::Update` for a no-face line before any real frame has set a timestamp (#157's own residual: a placeholder timestamp, not a resting-pose question) | `LookAwayReaderTest.OnNoFaceBeforeAnyFaceIsNotYetALook` |
 
 The model does not prove gaze accuracy, nor that 15 degrees, a second, 5 to
 8 seconds and a calibrated screen's own margin suit anyone but the one
-person whose recordings may eventually tune them (#139's fixtures are not
-yet recorded).
+person whose recordings tune them (#139).
 
 ## `CameraLifecycle`: when the camera may be on
 

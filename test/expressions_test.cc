@@ -385,22 +385,54 @@ TEST_F(ExpressionsTest, ALookDownDoesNotGateOtherExpressions) {
 // exactly as a rise that straddles the pose gate does (see
 // ARiseThatStraddlesMovementRestartsItsHold above): the partial hold from
 // before the glance does not combine with time after it ends to report
-// sooner than a fresh hold would.
+// sooner than a fresh hold would. The gate itself stays shut a further
+// kEyeGateSettleMs past where eyeLookDown/eyeBlink themselves clear
+// (#158, below), so the wait before the hold can even start is longer
+// than ARiseThatStraddlesMovementRestartsItsHold's own pose-gate
+// equivalent.
 TEST_F(ExpressionsTest, ASquintThatStraddlesAGlanceDownRestartsItsHold) {
   Rest();
   Hold(0.1, {kEyeSquintLeft, kEyeSquintRight});  // One frame, well under the
                                                  // 200 ms hold.
   Hold(1,
        {kEyeSquintLeft, kEyeSquintRight, kEyeLookDownLeft, kEyeLookDownRight},
-       0.4F);                                    // Gated throughout.
-  Hold(0.1, {kEyeSquintLeft, kEyeSquintRight});  // One more frame, alone.
+       0.4F);                                  // Gated throughout.
+  Hold(1, {kEyeSquintLeft, kEyeSquintRight});  // Comfortably under the
+                                               // settle time (1,200 ms).
 
   EXPECT_THAT(reported_, IsEmpty());
 
-  Hold(0.3, {kEyeSquintLeft, kEyeSquintRight});  // Enough to cross the hold
-                                                 // from a fresh start.
+  Hold(0.6, {kEyeSquintLeft, kEyeSquintRight});  // Past the settle time and
+                                                 // the hold from a fresh
+                                                 // start.
 
   EXPECT_THAT(reported_, ElementsAre(Expression::kEyesNarrowed));
+}
+
+// #158: eyeSquint's own decay lags eyeLookDown's and eyeBlink's between
+// two blinks close together, so the raw gate (EyesGated) can reopen
+// while eyeSquint is still elevated from the blink just finished. Two
+// blinks under a second apart -- short of the settle time
+// (kEyeGateSettleMs) needed to bridge that gap -- must never read as a
+// squint in between, the way test/fixtures/eyes/blinks.probe's own
+// rapid-blink cue once did (facepalm#158).
+TEST_F(ExpressionsTest, TwoBlinksCloseTogetherDoNotReadAsASquint) {
+  Rest();
+  // First blink: eyeLookDown/eyeBlink and eyeSquint rise together,
+  // briefly (0.6, well past the 0.5 eyeBlink threshold), then
+  // eyeLookDown/eyeBlink clear while eyeSquint, decaying more slowly,
+  // stays elevated on its own (the default kSmall rise, well past its
+  // own starts_at).
+  Hold(0.1, {kEyeSquintLeft, kEyeSquintRight, kEyeBlinkLeft, kEyeBlinkRight},
+       0.6F);
+  Hold(1, {kEyeSquintLeft, kEyeSquintRight});
+  // Second blink, the same shape as the first, under a second after the
+  // raw gate's own last frame.
+  Hold(0.1, {kEyeSquintLeft, kEyeSquintRight, kEyeBlinkLeft, kEyeBlinkRight},
+       0.6F);
+  Hold(1, {kEyeSquintLeft, kEyeSquintRight});
+
+  EXPECT_THAT(reported_, IsEmpty());
 }
 
 TEST_F(ExpressionsTest, ReportsExpressionsThatStartTogether) {

@@ -45,22 +45,30 @@ std::optional<LookAwayReport> LookAwayDetector::Update(
     const std::optional<HeadRotation>& gaze,
     const std::optional<HeadRotation>& resting,
     const CalibrationProfile* profile, std::int64_t timestamp_ms) {
-  if (!resting) {
-    // LookAway.tla's Learn and Gap: no resting pose to be away from, so
-    // nothing is open and nothing is held.
-    away_ = false;
-    saw_other_screen_ = false;
-    saw_gone_ = false;
-    return std::nullopt;
-  }
   if (!gaze) {
     // #141's kGone: no face to read gaze from, read as past the full
-    // threshold either way.
+    // threshold either way -- whether or not the resting pose is known
+    // yet (LookAway.tla's Move, from any band, even while ExpressionTracker
+    // is still relearning it after a gap): a face lost counts on its own,
+    // never waiting on a resting pose it does not need.
     if (!away_) {
       away_ = true;
       away_ms_ = timestamp_ms;
     }
     saw_gone_ = true;
+    return std::nullopt;
+  }
+  if (!resting) {
+    // #157: no resting pose yet to judge this frame's gaze against --
+    // ExpressionTracker is still (re)learning one, whether this is the
+    // very first track or a gap long enough to relearn after (its own
+    // kGapMs). A look already open (away_, saw_gone_, saw_other_screen_)
+    // is left exactly as it is, not cleared the way this branch used to
+    // (LookAway.tla's Gap and Learn, which no longer clear them either):
+    // it is reported, once relearning finishes and the gaze turns out to
+    // be home, against the newly learned resting pose, rather than
+    // silently dropped the moment relearning started. A look that was
+    // never open (away_ already false) has nothing to preserve.
     return std::nullopt;
   }
   const double off = OffFrom(*gaze, *resting);

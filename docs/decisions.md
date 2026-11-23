@@ -62,6 +62,86 @@ a line saying which entry replaced it.
     file they never touched and a format change they have no reason to
     know about. Migrating in place, above, keeps them instead.
 
+## 2026-11-23: A look survives a relearning gap, and the squint gate settles past a blink burst, closing #157 and #158
+
+-   **Decision (Gap and Learn stop clearing a held look, and Return waits
+    for a resting pose, closing #157):** `LookAwayDetector::Update`'s own
+    `!resting` branch no longer resets `away_`, `saw_other_screen_` and
+    `saw_gone_`; it only declines to judge this frame, since there is no
+    resting pose yet to judge it against. The branch also now runs after
+    the `!gaze` check, not before, so a face lost while relearning still
+    extends the open look (`saw_gone_`) the way a face lost at any other
+    time does. `specs/LookAway.tla`'s `Gap` and `Learn` match: neither
+    clears `held`, `heldFromBetween`, `heldLong`, `otherScreen` or
+    `sawGone` any more, and `ReturnByMove`/`ReturnByAbsorb` both gained a
+    `resting = "learned"` guard, so a look cannot report while relearning
+    is still under way (it previously could not either, but only because
+    `held` was always false there; once `held` survives a gap, that
+    silent precondition needed to become an explicit one).
+    `GapNeverDropsAHeldLook`, a new invariant over a new ghost
+    (`heldAcrossGap`, snapshotting `held` into a gap), is what proves a
+    held look is never cleared except by actually reporting it; `LookAway.cfg`
+    holds at 922 distinct states (was 681), with `Learn` added to the
+    model's weak fairness so a look stalled on relearning is not stuck
+    forever. Verified by reproducing the bug on `test/fixtures/eyes/
+    fully_away.probe` (#139): replayed through `src/eyes_gaze_replay.h`,
+    the fixture's first turn away now reports
+    `looked_away 282924515 gone 6798`, where it reported nothing before.
+    `test/look_away_replay_test.cc`'s own `turns.head_pose` fixture
+    gained a third, previously-lost report for the same reason (its wide
+    turn, across a face lost for five seconds) -- a known, accepted
+    limitation named in #141's own decision entry and in that test's
+    comment, closed as a side effect of this fix rather than its target.
+-   **Decision (`GuardLearned` is kept as unbitten defence in depth):**
+    once `ReturnByMove`/`ReturnByAbsorb`'s own `resting = "learned"` guard
+    exists, `GuardLearned = FALSE` no longer breaks any checked property
+    (TLC: 1,112 states, no error) -- the new guard alone already keeps
+    `NoReportWhileLearning` even if `Hold` itself ran too early. Rejected:
+    removing `GuardLearned`/`Hold`'s own `resting = "learned" \/
+    ~GuardLearned` term, since the code's matching guard
+    (`ExpressionTracker::Away`'s own `!learning`) still has a real,
+    separate job (freezing expression levels while away) unrelated to
+    `LookAwayDetector`; `specs/README.md`'s own mutation table says so,
+    naming the mutation rather than dropping it silently.
+-   **Decision (a no-face line before any real frame is not yet a look,
+    a caller question, not a resting-pose one):** fixing #157 exposed a
+    second, latent bug the first one had been masking: `LookAwayReader::
+    OnNoFace`, `ReplayLookingAway` (`src/look_away_replay.cc`) and
+    `ReplayEyesAndLookAway` (`src/eyes_gaze_replay.cc`) each call
+    `LookAwayDetector::Update` for a leading no-face line using a
+    placeholder "no real frame yet" timestamp (`last_timestamp_ms_`'s own
+    default, or `last = -1`) when that line precedes any real frame --
+    every one of #139's own `.probe` fixtures starts with a few such
+    lines, recorded while the camera was still warming up. Once a held
+    look could survive past that call, this placeholder was read as the
+    look's own start, giving an absurd duration once a real face finally
+    settled (`eyes_gaze_replay_test.cc`'s `GlanceAtTheKeyboardIsNot
+    ReportedAsALookAway` and `ThinkingAversionReportsAverted` both failed
+    this way). `LookAwayDetector` itself is unchanged and still opens a
+    look from its own very first call, gaze lost or not
+    (`GoneKindTest.NoFaceFromTheVeryFirstFrameStartsTheLookToo`, #141's
+    own design, with a deliberate, meaningful timestamp); each of the
+    three callers now tracks whether it has ever read a real frame
+    (`LookAwayReader::had_face_`, or `last != -1`) and does nothing for a
+    no-face line before that, rather than opening a look from a timestamp
+    that was never a real reading.
+-   **Decision (the squint gate's own settle time, not `hold_ms`, closing
+    #158):** `ExpressionTracker::EyesSettling` keeps eyes_narrowed's own
+    gate (#140) shut for `kEyeGateSettleMs` (1,200 ms) after eyeLookDown
+    or eyeBlink themselves last crossed back under their threshold, since
+    eyeSquint's own decay lags theirs by close to that long between two
+    blinks in a rapid burst (`test/fixtures/eyes/blinks.probe`, #139:
+    eyeSquint stays elevated for about 999 ms after eyeLookDown/eyeBlink
+    clear, before the next blink in the burst raises them again).
+    Rejected: raising `Settings::hold_ms` instead, which every expression
+    shares and which a value this large would delay by a full second
+    (#158's own finding); reading eyeSquint's own decay rate directly,
+    which would need tracking its slope and risks misreading a real,
+    sustained squint as still-decaying noise, where a fixed settle keyed
+    to the two stand-in scores does not. `eyes_gaze_replay_test.cc`'s own
+    `BlinksAreNotReadAsEyesNarrowedAndDontMoveGaze` tightened from "at
+    most one" `eyes_narrowed` start to none, now that it holds.
+
 ## 2026-11-22: The eye/gaze/squint/calibration/look-away defaults are tuned on #139's recordings, closing #137, #139 and #150
 
 -   **Decision (what changed, and what did not):** of every provisional
