@@ -417,6 +417,8 @@ class Engine : public DaemonController, public DaemonPipeline {
                               config.eye_signs_widened_eyes_threshold,
                           .widened_eyes_hold_ms =
                               config.eye_signs_widened_eyes_hold_ms,
+                          .widened_eyes_max_side_look =
+                              config.eye_signs_widened_eyes_max_side_look,
                           .min_window_ms = config.eye_signs_min_window_ms})
                 : std::nullopt),
         feelings_(std::move(feelings)),

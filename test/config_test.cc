@@ -52,8 +52,9 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_THAT(config.calibration_min_spread_degrees, FloatEq(3.0F));
   EXPECT_THAT(config.eye_signs_elevated_blinks_per_minute, FloatEq(14.0F));
   EXPECT_THAT(config.eye_signs_long_blink_ms, Eq(500));
-  EXPECT_THAT(config.eye_signs_widened_eyes_threshold, FloatEq(0.15F));
-  EXPECT_THAT(config.eye_signs_widened_eyes_hold_ms, Eq(200));
+  EXPECT_THAT(config.eye_signs_widened_eyes_threshold, FloatEq(0.025F));
+  EXPECT_THAT(config.eye_signs_widened_eyes_hold_ms, Eq(1000));
+  EXPECT_THAT(config.eye_signs_widened_eyes_max_side_look, FloatEq(0.2F));
   EXPECT_THAT(config.eye_signs_min_window_ms, Eq(3000));
 }
 
@@ -96,6 +97,7 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "eye_signs.long_blink_ms = 600\n"
       "eye_signs.widened_eyes_threshold = 0.2\n"
       "eye_signs.widened_eyes_hold_ms = 250\n"
+      "eye_signs.widened_eyes_max_side_look = 0.25\n"
       "eye_signs.min_window_ms = 4000\n",
       error);
   ASSERT_TRUE(parsed.has_value()) << error;
@@ -137,6 +139,7 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_THAT(config.eye_signs_long_blink_ms, Eq(600));
   EXPECT_THAT(config.eye_signs_widened_eyes_threshold, FloatEq(0.2F));
   EXPECT_THAT(config.eye_signs_widened_eyes_hold_ms, Eq(250));
+  EXPECT_THAT(config.eye_signs_widened_eyes_max_side_look, FloatEq(0.25F));
   EXPECT_THAT(config.eye_signs_min_window_ms, Eq(4000));
 }
 
@@ -163,10 +166,10 @@ TEST(ParseConfigTest, RefusesAnUnknownSettingNamingTheLine) {
               Eq("line 2: unknown setting camera.fps"));
 }
 
-// #145: eye_signs.* has its own dispatcher (SetEyeSigns, kept apart from
-// Set for its own cognitive complexity), with its own "unknown setting"
-// fallback for a name starting with eye_signs. that is still none of the
-// five it knows.
+// #145, #165: eye_signs.* has its own dispatcher (SetEyeSigns, kept apart
+// from Set for its own cognitive complexity), with its own "unknown
+// setting" fallback for a name starting with eye_signs. that is still
+// none of the six it knows.
 TEST(ParseConfigTest, RefusesAnUnknownEyeSignsSetting) {
   EXPECT_THAT(ErrorFor("eye_signs.sideways = 1\n"),
               Eq("line 1: unknown setting eye_signs.sideways"));
@@ -483,6 +486,21 @@ TEST(ParseConfigTest, RefusesAWidenedEyesThresholdOutsideZeroToOne) {
               Eq("line 1: expected a number from 0 to 1"));
   // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
   EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_threshold = nan"),
+              Eq("line 1: expected a number from 0 to 1"));
+}
+
+// #145/#165: eye_signs.widened_eyes_max_side_look shares
+// SetEyeSignsFraction (src/config.cc) with eye_signs.widened_eyes_threshold,
+// so the same range and error message.
+TEST(ParseConfigTest, RefusesAWidenedEyesMaxSideLookOutsideZeroToOne) {
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_max_side_look = -0.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_max_side_look = 1.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_max_side_look = sideways"),
+              Eq("line 1: expected a number from 0 to 1"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_max_side_look = nan"),
               Eq("line 1: expected a number from 0 to 1"));
 }
 

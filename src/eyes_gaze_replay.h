@@ -26,8 +26,9 @@ namespace facepalm {
 // `config`'s settings are used for every tracker and the detector, its
 // defaults when omitted. For each paired frame, prints
 // `gaze <timestamp_ms> <yaw_degrees> <pitch_degrees>` (ComposeGaze's own
-// result); `eye_sign <timestamp_ms> <blink> <eye_wide>` (src/eye_signs.h's
-// own SampleFrom, `blink` 0 or 1, #145); for each expression
+// result); `eye_sign <timestamp_ms> <blink> <eye_wide> <side_look>`
+// (src/eye_signs.h's own SampleFrom, `blink` 0 or 1, #145, `side_look`
+// added by #165); for each expression
 // ExpressionTracker::Update starts, prints `expression <timestamp_ms>
 // <name>`; for each look away LookAwayDetector reports, prints
 // `looked_away <timestamp_ms> <kind> <duration_ms>`, as ReplayLookingAway

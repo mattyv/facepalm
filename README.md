@@ -91,18 +91,22 @@ made since, each with its reason, are in the
     `src/look_away_replay`'s own head-pose-only fallback; its tests are what
     proved `eye_gaze.*`, `calibration.*` and the squint-guard's own defaults
     (below) against #139's nine fixtures. It also prints one
-    `eye_sign <timestamp_ms> <blink> <eye_wide>` line per paired frame
-    (#145, `src/eye_signs`'s own `SampleFrom`), which is how
-    `eye_signs.*`'s own defaults (below) were measured against the same
-    nine fixtures.
+    `eye_sign <timestamp_ms> <blink> <eye_wide> <side_look>` line per
+    paired frame (#145, `src/eye_signs`'s own `SampleFrom`; `side_look`
+    added by #165), which is how `eye_signs.*`'s own defaults (below) were
+    measured against #139's nine fixtures and, for widened eyes, the
+    tenth.
 -   `src/eye_signs`: blink rate, a long blink and widened eyes (#145),
     coarse signs -- like `src/screen_context`'s `Gaze` -- for the
     personal read alone (`src/tuning`), never `Rule`'s own input
     (`specs/FeelingBeat.tla`'s `Interpret` is untouched). `EyeSignsOf` is
     pure computation over a window of `EyeSignSample`s a caller collects
     elsewhere; `SampleFrom` builds one sample from a frame's own `Face`,
-    the same blink flag (`src/eye_gaze`'s `EyeSignalFrom`) and eyeWide
-    blendshapes `src/eyes_gaze_replay`'s own `eye_sign` line reads.
+    the same blink flag (`src/eye_gaze`'s `EyeSignalFrom`), eyeWide
+    blendshapes, and -- since eyeWide alone cannot tell a widen from a
+    sideways glance, which lifts it too -- a `side_look` reading from the
+    eyeLookIn/eyeLookOut blendshapes (#165), all of which
+    `src/eyes_gaze_replay`'s own `eye_sign` line reads.
     `ScreenContextReader::OnFace` builds one every live frame
     (`blink_threshold_`, read from its own `EyeGazeTracker::Settings`)
     and `ScreenContextReporter::Sample`/`EyeSignsBetween` buffer and
@@ -110,15 +114,20 @@ made since, each with its reason, are in the
     `Between` already do for gaze -- in the same buffer, time-bounded by
     the same `max_window_ms`, so a frame with no face samples gaze as
     `Gaze::kUnknown` but contributes nothing here, since there is no
-    eyeBlink or eyeWide to read. None of #139's original nine fixtures
-    carries a cue that deliberately widens the eyes, so
-    `eye_signs.widened_eyes_threshold`'s own default is reasoned from
-    every fixture's own eyeWide ceiling (0.051 at most), not measured
-    against a true positive -- `src/eye_signs.h`'s own header comment
-    says so again where the setting's default lives
-    (`src/config.h`'s `kDefaultEyeSignsWidenedEyesThreshold`).
-    `scripts/record_eye_fixtures.sh` grew a tenth, `widened_eyes` (#165),
-    with a genuine one, for the user to record and tighten it against.
+    eyeBlink or eyeWide to read. `eye_signs.widened_eyes_threshold` and
+    `eye_signs.widened_eyes_hold_ms` are now measured against a genuine
+    "widen the eyes" fixture, `test/fixtures/eyes/widened_eyes.probe`
+    (`scripts/record_eye_fixtures.sh`'s own tenth, recorded for #165):
+    eyeWide over its own four six-second cue windows reads a mean of
+    0.007 to 0.022 and a peak of 0.031 -- a weak signal for this user,
+    but clear of the ahead/relax baseline, which the threshold (0.025)
+    now sits between. Every other fixture's own eyeWide also rises on a
+    sideways glance, up to 0.051 (`reading_other_screen.probe`), so
+    `eye_signs.widened_eyes_max_side_look` (0.2, #165) guards a widened
+    read against one, from how far the eyes are turned horizontally
+    (`EyeSignSample::side_look`). `src/eye_signs.h` and `src/config.h`
+    carry the full measurement in their own header comments, where the
+    three settings' defaults live.
 -   `src/eye_gaze`: coarse gaze reads head pose composed with eye-in-head
     signal, not head pose alone (#137). `EyeSignalFrom` reads the eye-look
     blendshapes `src/eyes_probe` already formats, into a horizontal and
