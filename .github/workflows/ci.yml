@@ -62,6 +62,16 @@ jobs:
         # `fuzzing` job below): every test name ends `_fuzz`, not `_test`,
         # so coverage.sh's own floors are unaffected by them existing.
         run: bash scripts/coverage.sh -DFACEPALM_FUZZTEST=ON
+      # #162: a shortfall here is sometimes a scheduling-dependent branch,
+      # not a real gap, and local runs never reproduce one; the raw
+      # profiles, plus llvm-cov's own branch-by-branch report
+      # scripts/coverage.sh writes for a file below its floor, name the
+      # exact branch next time instead of only the missing percentage.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: macos-coverage-profiles
+          path: build-coverage/profiles
 
   # Also builds the Linux camera daemon and tests its two Linux sources,
   # against MediaPipe's C headers and libmediapipe.so, pinned by
