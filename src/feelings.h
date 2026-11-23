@@ -9,6 +9,8 @@
 #include <string>
 #include <string_view>
 
+#include "src/screen_context.h"
+
 // What a reaction meant (#70, item 3 of #61): the feelings facepalm reads a
 // reaction as when a client marks a beat, and the generic rule that reads
 // them, and what a person's correction of a read is counted under (#35).
@@ -89,19 +91,25 @@ bool IsSign(std::string_view word);
 // The sign of a beat in which no reaction was made.
 inline constexpr std::string_view kNoSign = "none";
 
-// What a beat showed, which a person's corrections are counted under (#35):
-// the one kind of reaction made during it, or kNoSign, and what the client
-// marked the beat after.
+// What a beat showed, which a person's corrections are counted under (#35,
+// gaze added by #143): the one kind of reaction made during it, or kNoSign,
+// what the client marked the beat after, and where they were looking during
+// it, in the beat's own wording (src/screen_context.h's Gaze and
+// BeatGazeName) -- a feature the person's own read (src/tuning.h) learns
+// from, never Rule's own input (#142's ContextNeverChangesFeeling):
+// EvidenceOf below never sets it, defaulting to kUnknown;
+// src/reaction_feed.cc's Beat fills it in from the same gaze its reply reports.
 struct Evidence {
   std::string sign;
   BeatKind beat;
+  Gaze gaze = Gaze::kUnknown;
   friend auto operator<=>(const Evidence&, const Evidence&) = default;
 };
 
-// The evidence of a beat whose window held readings with `signs`. nullopt
-// when they were of more than one kind, one had no sign, or the window was
-// not complete: a correction could not then say which reaction it was
-// about.
+// The evidence of a beat whose window held readings with `signs`, its gaze
+// left at Gaze::kUnknown for the caller to fill in (#143). nullopt when they
+// were of more than one kind, one had no sign, or the window was not
+// complete: a correction could not then say which reaction it was about.
 std::optional<Evidence> EvidenceOf(std::span<const std::string_view> signs,
                                    BeatKind beat, bool complete);
 

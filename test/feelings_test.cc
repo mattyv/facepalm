@@ -115,6 +115,17 @@ TEST(EvidenceOfTest, AWindowWithNoReactionIsEvidenceToo) {
                                 .beat = BeatKind::kQuestion}));
 }
 
+// #143: gaze is reaction_feed.cc's own to fill in, from the same window's
+// gaze -- EvidenceOf never sets it.
+TEST(EvidenceOfTest, LeavesGazeAtUnknownForTheCallerToFillIn) {
+  const std::optional<Evidence> evidence =
+      EvidenceOf(std::vector<std::string_view>{"nod"}, BeatKind::kQuestion,
+                 /*complete=*/true);
+
+  ASSERT_TRUE(evidence.has_value());
+  EXPECT_THAT(evidence.value_or(Evidence{}).gaze, Eq(Gaze::kUnknown));
+}
+
 TEST(EvidenceOfTest, MixedUnsignedOrIncompleteWindowsAreNot) {
   EXPECT_THAT(EvidenceOf(std::vector<std::string_view>{"nod", "smile"},
                          BeatKind::kQuestion, /*complete=*/true),

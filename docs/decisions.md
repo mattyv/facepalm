@@ -5,6 +5,63 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-23: The personal read weighs a beat's own gaze, never the rule, closing #143
+
+-   **Decision (gaze is `Evidence`'s third field, not a fourth map):**
+    `src/feelings.h`'s `Evidence` gains a `Gaze gaze = Gaze::kUnknown`
+    field alongside `sign` and `beat`; `EvidenceOf` never sets it, leaving
+    it to whichever caller knows the beat's own gaze.
+    `ReactionFeed::Beat` fills it in from the same `GazeWindow` its reply
+    already reports (#142, #144), before the evidence is given to
+    `tuner_.Read` or stored for a later `Feel`, so the personal read and
+    the correction it later learns from both tune on the one gaze the
+    client was told. `FeelingBeat.tla`'s own `Rule` and `Applied` are
+    untouched, so `ContextNeverChangesFeeling` still holds exactly as
+    #142 left it -- `src/tuning.cc` is pure computation outside every
+    spec's model (`specs/FeelingFeedback.tla`'s own header comment
+    already says so), so this needed no spec change, following
+    `CLAUDE.md`'s "spec first" rule only where a spec models the thing
+    changing.
+-   **Decision (below the minimum for one gaze, pool every gaze of the
+    same evidence, not read gaze-blind):** `Tuning::Read` first tries the
+    picks for the evidence's own gaze; only once their own total is
+    under `kLeastPicks` does it fall back to summing every pick of the
+    same sign and beat across every gaze, and reads that pooled count the
+    same held-out way. The alternative -- ignoring gaze whenever the
+    specific bucket is thin, rather than pooling it in -- would silently
+    throw away picks a person already made under a different gaze every
+    time the gaze changes, so a feeling with no generic rule (engagement,
+    annoyance) would need to wait for `kLeastPicks` fresh picks under
+    *each* gaze it is ever read with, rather than the pool as a whole.
+    Once a gaze's own bucket reaches the minimum, it is read alone, never
+    pooled, even if pooling would also succeed
+    (`TuningGazeTest.AtOrAboveTheMinimumForOneGazeReadsItAlone`): two
+    gazes of the same evidence can then disagree, which is the point of
+    adding gaze as a feature at all.
+-   **Decision (the counts file's version bumps from 1 to 2, migrated on
+    read, not refused):** `Tuning::Text`/`Parse`'s header and each line's
+    word count change for the added `gaze` word (`src/screen_context.h`'s
+    `BeatGazeName`/`BeatGazeNamed`, the same wording a beat's own reply
+    already uses, not `Name(Gaze)`'s `this_screen`/`other_screen`). A
+    file a pre-#143 daemon saved has no such word; `Parse` reads it as
+    v1 (four words: sign, beat, feeling, count), giving every one of its
+    picks gaze `Gaze::kUnknown` -- the gaze it would have carried had
+    screen context always been on -- and `Text` always writes v2, so the
+    next save upgrades the file in place.
+-   **Decision rejected (refusing a v1 file, the way
+    `src/calibration_store.cc` refuses a pre-#137 calibration profile):**
+    the first cut of this change followed that precedent outright --
+    `Parse` rejected any header but the current one, so
+    `FeelingStore::Open` refused a pre-#143 file entirely. Rejected once
+    reviewed, because the two files are not alike: a calibration profile
+    missing is a normal, expected state (`uncalibrated`) the daemon
+    already runs in, so the person simply redoes the short calibration
+    session: no data of theirs is lost. A feelings file is the person's
+    own accumulated picks (#35) -- refusing to open it would silently
+    reset every one of them the first time they upgrade past #143, for a
+    file they never touched and a format change they have no reason to
+    know about. Migrating in place, above, keeps them instead.
+
 ## 2026-11-23: A look survives a relearning gap, and the squint gate settles past a blink burst, closing #157 and #158
 
 -   **Decision (Gap and Learn stop clearing a held look, and Return waits

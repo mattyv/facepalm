@@ -166,8 +166,10 @@ facepalm_unit(feelings)
 facepalm_unit(preview_readings)
 target_link_libraries(preview_readings PUBLIC feelings)
 facepalm_unit(tuning)
-# The feelings are pure computation, so the tuning's tests run them for real.
-target_link_libraries(tuning PUBLIC feelings)
+# The feelings are pure computation, so the tuning's tests run them for
+# real; screen_context for BeatGazeName/BeatGazeNamed, the beat's own
+# wording the counts file stores a pick's gaze in (#143).
+target_link_libraries(tuning PUBLIC feelings screen_context)
 # The tuning is pure computation, so the store's tests run it for real; its
 # POSIX calls are its own, and its tests run them on a real folder too.
 facepalm_unit(feeling_store)

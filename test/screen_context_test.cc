@@ -31,6 +31,19 @@ TEST(BeatGazeNameTest, NamesEachZoneForABeatsOwnReply) {
   EXPECT_EQ(BeatGazeName(Gaze::kUnknown), "unknown");
 }
 
+TEST(BeatGazeNameTest, EachNameGivesItsZone) {
+  EXPECT_EQ(BeatGazeNamed("on_content"), Gaze::kThisScreen);
+  EXPECT_EQ(BeatGazeNamed("averted"), Gaze::kOtherScreen);
+  EXPECT_EQ(BeatGazeNamed("away"), Gaze::kAway);
+  EXPECT_EQ(BeatGazeNamed("unknown"), Gaze::kUnknown);
+}
+
+TEST(BeatGazeNameTest, NoOtherNameIsAZone) {
+  EXPECT_EQ(BeatGazeNamed("this_screen"), std::nullopt);
+  EXPECT_EQ(BeatGazeNamed("On_content"), std::nullopt);
+  EXPECT_EQ(BeatGazeNamed(""), std::nullopt);
+}
+
 TEST(NameTest, NamesEachContentHit) {
   EXPECT_EQ(Name(ContentHit::kYes), "yes");
   EXPECT_EQ(Name(ContentHit::kNo), "no");

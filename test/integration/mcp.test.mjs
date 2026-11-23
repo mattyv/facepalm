@@ -86,7 +86,10 @@ test('MCP reads, reads a beat and tells its feeling to the real synthetic servic
   assert.equal((await tell(first, 1, 'engagement')).isError, true);
   assert.equal((await tell(first, 999, 'engagement')).isError, true);
   assert.equal((await tell(first, 1, 'happy')).isError, true);
-  assert.equal(await readFile(feelingsPath, 'utf8'), 'facepalm feelings 1\nnod question engagement 1\n');
+  assert.equal(
+    await readFile(feelingsPath, 'utf8'),
+    'facepalm feelings 2\nnod question unknown engagement 1\n',
+  );
   assert.equal((await stat(feelingsPath)).mode & 0o777, 0o600);
   const quiet = unpack(await first.call('tools/call', {
     name: 'wait_for_reaction', arguments: { beat: 'proposal', timeout_ms: 1 },

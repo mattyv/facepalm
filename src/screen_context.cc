@@ -87,6 +87,17 @@ std::string_view BeatGazeName(Gaze gaze) {
   return kNames.at(static_cast<std::size_t>(gaze));
 }
 
+std::optional<Gaze> BeatGazeNamed(std::string_view name) {
+  // In Gaze's own order, as BeatGazeName's own kNames is.
+  constexpr std::array<std::string_view, 4> kNames = {"on_content", "averted",
+                                                      "away", "unknown"};
+  const auto* found = std::ranges::find(kNames, name);
+  if (found == kNames.end()) {
+    return std::nullopt;
+  }
+  return static_cast<Gaze>(found - kNames.begin());
+}
+
 std::string_view Name(ContentHit hit) {
   constexpr std::array<std::string_view, 3> kNames = {"yes", "no", "unknown"};
   return kNames.at(static_cast<std::size_t>(hit));

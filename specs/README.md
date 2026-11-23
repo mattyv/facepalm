@@ -1145,9 +1145,11 @@ save runs at a time. Any step can fail, and the daemon can stop at any moment
 (`Restart`): a rename the folder sync has not kept may be lost then, and so may
 data never synced. The model holds the counts as the set of corrections they
 hold, each an interpretation and a feeling: which ones the file and the reads
-hold is what matters here, and how they tune a read is `src/tuning.cc`'s, held
-by its own tests. A feeling for a beat whose evidence cannot say which reaction
-it was about (mixed reactions, or a dropped reading) is taken but counted
+hold is what matters here, and how they tune a read -- now weighing the beat's
+own gaze too (#143), never changing `FeelingBeat`'s own `Rule` -- is
+`src/tuning.cc`'s, held by its own tests. A feeling for a beat whose evidence
+cannot say which reaction it was about (mixed reactions, or a dropped reading)
+is taken but counted
 nowhere; the model leaves that out.
 
 | Property | What it says | Test |
@@ -1219,11 +1221,23 @@ fail its tests in `test/tuning_test.cc`:
 | The person's majority wins without the held-out check | `TuningReadTest.TwoPicksAreNotEnough`, `TuningReadTest.ASplitThatDoesNotBeatTheGenericReadKeepsIt` |
 | A plurality is enough for the person's read | `TuningReadTest.ASplitThatDoesNotBeatTheGenericReadKeepsIt` |
 | One pick is enough | `TuningReadTest.TwoPicksAreNotEnough` |
+| Read never falls back to every gaze of the evidence (#143) | `TuningGazeTest.BelowTheMinimumForOneGazeFallsBackToEveryGazeOfIt`, `TuningGazeTest.PicksAcrossGazesCanStillNameAFeelingNoGenericRuleGives` |
+| Read always falls back, ignoring an evidence's own gaze even once it has enough (#143) | `TuningGazeTest.AtOrAboveTheMinimumForOneGazeReadsItAlone` |
+| The fallback pools a different sign or beat too, not only gaze (#143) | `TuningGazeTest.PicksTuneOnlyTheirOwnSignAndBeatAcrossGazes` |
+| A v1 file (no gaze word) is refused rather than read (#143) | `TuningTextTest.ReadsAV1FileWithGazeUnknownAndSavesItAsV2` |
 
 The integration test `test/integration/tuning.test.mjs` runs the whole path
 against the real feed, store and service: three `annoyance` picks for a frown at
 question beats change the next frown's read at a question, not at a proposal;
 they last when the service restarts; and `reset feelings` restores `confused`.
+Gaze defaults to `unknown` in that test (no screen context source), so its
+own counts file carries the word; `TuningTextTest` and
+`FeelingStoreOpenTest.ReadsAV1FileAndSavesItBackAsV2` cover the gaze word
+itself and the version bump (#143): unlike `src/calibration_store.cc`'s own
+precedent for #137's bump, a pre-#143 file is read, not refused, since
+refusing it would throw away the person's own picks for a file they never
+asked to change -- each of its picks reads with gaze `unknown`, and the
+next save writes it back as v2.
 
 ## `Service`: the background service and its connections
 
