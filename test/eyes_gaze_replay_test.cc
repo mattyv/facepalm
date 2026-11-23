@@ -153,14 +153,28 @@ TEST(EyesGazeReplayTest, PrintsEyeSignForEachPairedFrame) {
               .wide_left = 0.25,
               .wide_right = 0.25});
   const std::string output = Replay(log.str());
-  EXPECT_THAT(output, ::testing::HasSubstr("eye_sign 1000 1 0.25"));
+  EXPECT_THAT(output, ::testing::HasSubstr("eye_sign 1000 1 0.25 0"));
 }
 
 TEST(EyesGazeReplayTest, PrintsEyeSignWithBlinkZeroWhenNotBlinking) {
   std::ostringstream log;
   WriteFrame(log, 1000, 0, 0, {.blink_left = 0.1, .blink_right = 0.2});
   const std::string output = Replay(log.str());
-  EXPECT_THAT(output, ::testing::HasSubstr("eye_sign 1000 0 0"));
+  EXPECT_THAT(output, ::testing::HasSubstr("eye_sign 1000 0 0 0"));
+}
+
+// #145/#165: side_look is the larger of mean eyeLookIn and mean eyeLookOut,
+// the same way src/eye_signs.h's own SampleFrom reads it -- the guard
+// WidenedEyes takes against a sideways glance also lifting eyeWide.
+TEST(EyesGazeReplayTest, PrintsEyeSignSideLookAsTheLargerOfInAndOut) {
+  std::ostringstream log;
+  WriteFrame(log, 1000, 0, 0,
+             {.look_in_left = 0.3,
+              .look_in_right = 0.3,
+              .look_out_left = 0.1,
+              .look_out_right = 0.1});
+  const std::string output = Replay(log.str());
+  EXPECT_THAT(output, ::testing::HasSubstr("eye_sign 1000 0 0 0.3"));
 }
 
 // Recorded fixtures from #139 (test/fixtures/eyes/README.md): four cues,

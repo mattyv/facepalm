@@ -39,6 +39,107 @@ instead ([#178](https://github.com/mattyv/facepalm/issues/178)) since it
 needs its own design, not folded into this narrower fix.
 Evidence: [#177](https://github.com/mattyv/facepalm/issues/177).
 
+## 2026-11-23: The camera preview is a camera demand of its own; disabled, not an offer, is how a menu item says Facepalm is off
+
+**Decision (the preview joins the daemon's existing admission entry
+point, not a new one):** `src/camera_demand.h`'s new `CameraDemand`
+combines an approved client subscribing with the camera preview's own
+live, fresh request into the one boolean `DaemonControl::Subscription`
+already took, so opening the preview with nothing else using the camera
+now turns the camera on by itself, the same way a client subscribing
+already does, rather than refusing with "Turn on the camera", an action
+no menu item performs. `specs/PreviewLease.tla`'s `CameraOpens` and
+`CameraCloses` now fire only on this combined `Demand`, proved by two new
+properties, `PreviewAloneOpensCamera` and `AbandonedPreviewReleasesCamera`.
+The preview's own freshness check now also runs on a timer of its own
+(`Engine::StartPreviewDemandPoll`), independent of frame capture, which
+could not otherwise ever start. The menu side needed a matching grace
+period (`kPreviewCameraGraceMisses`/`kCameraGraceMisses`) before reading
+the camera as abandoned, since `Start` no longer waits for it to already
+be on.
+
+**Decision (widened scope: every menu item, in every state, from one
+pure table):** the user asked that every menu item behave correctly in
+each of Facepalm's three states (off; on, camera idle; on, camera
+running), on both platforms. `src/menu_state.h`'s `DecideMenuState` is
+the one decision table (docs/local-app.md) both `tools/menu/main.mm` and
+`tools/menu/main_linux.cc` now read for the camera-status line and the
+preview and calibrate items, rather than each front end deciding
+separately and risking drifting apart. **Rejected:** leaving Show Camera
+Preview and Calibrate… enabled while Facepalm is off and offering to
+turn it on from inside them, which the issue also allowed. **Turn On
+Facepalm…** already sits one line above either item in both menus; a
+second way to reach the same consent dialog from two more places would
+only be a second place for that one choice to go out of sync with the
+first, for no benefit over disabling the two that depend on it and
+pointing at the one that already works. Disabled items are titled "Turn
+on Facepalm first" rather than left unlabelled.
+
+**Decision (the always-disabled status line names what is actually
+true):** it used to read "Camera off" whether the service was off or on
+and idle, since a missing status file already reads as off either way.
+It now reads "Facepalm off" when the service itself is off, so the
+earlier issue's own confusion -- the real cause was the daemon not
+running at all, not the camera being idle -- cannot recur from reading
+the line alone.
+
+**Verified:** `test/camera_demand_test.cc` and `test/menu_state_test.cc`
+(both solitary, 100 percent), `specs/PreviewLease.tla`'s two new
+properties checked by TLC (`specs/PreviewLease.cfg`), each new guard's
+mutation confirmed to break the property it protects and discarded.
+Macos built, tested and run through clang-tidy and clang-format locally;
+the Linux tray's `tools/menu/main_linux.cc` change was written to mirror
+the macOS one as closely as Qt's API allows but could not be built or
+run in this session, since no Linux toolchain was available.
+**Evidence:** [#176](https://github.com/mattyv/facepalm/issues/176).
+
+## 2026-11-23: Widened eyes are gated on a measured threshold and a side-look guard, replacing #145's reasoned ceiling
+
+-   **Decision (the threshold comes from a recorded true positive, not a
+    reasoned ceiling):** `test/fixtures/eyes/widened_eyes.probe` (#145's
+    own follow-up, #165) measures eyeWide (the mean of eyeWideLeft/Right)
+    across its four six-second cue windows: ahead (resting) mean 0.007,
+    max 0.013; widen mean 0.015, max 0.031; relax mean 0.007; widen2 mean
+    0.022, max 0.030. `kDefaultEyeSignsWidenedEyesThreshold`
+    (`src/config.h`) moves from the old reasoned ceiling (0.15) to 0.025,
+    above the ahead/relax baseline and below both widen cues' own means.
+-   **Decision (a side-look guard, since eyeWide alone cannot tell a widen
+    from a sideways glance):** every other fixture's own eyeWide also
+    rises when the eyes turn aside -- up to 0.051
+    (`reading_other_screen.probe`) and 0.036 (`gaze_other_screen.probe`),
+    both past the new threshold, and held for long runs (91 and 99 frames
+    at or past 0.02, against `widened_eyes.probe`'s own 39). What tells
+    them apart is how far the eyes are turned horizontally: at eyeWide
+    >= 0.02, the larger of mean eyeLookIn and mean eyeLookOut reads 0.08
+    for `widened_eyes.probe` and 0.09 for `thinking_aversion.probe`,
+    against 0.35 to 0.36 for the two other-screen fixtures.
+    `EyeSignSample` (`src/eye_signs.h`) gains a `side_look` field
+    (`SampleFrom` fills it from `src/eyes_probe.h`'s own eyeLookIn/
+    eyeLookOut indices, 13/14 and 15/16); `EyeSignSettings` gains
+    `widened_eyes_max_side_look` (default 0.2, `src/config.h`'s new
+    `eye_signs.widened_eyes_max_side_look`); `EyeSignsOf`'s widened run
+    now requires `eye_wide >= widened_eyes_threshold` **and**
+    `side_look < widened_eyes_max_side_look`, held together for
+    `widened_eyes_hold_ms`.
+-   **Decision (the hold rises to 1,000 ms, since the measured signal is
+    held, not instantaneous):** `widened_eyes.probe`'s own longest run at
+    or past the threshold is 39 frames, about 2.6 s at 15 fps;
+    `kDefaultEyeSignsWidenedEyesHoldMs` moves from 200 to 1,000 ms,
+    comfortably inside that run and clear of `thinking_aversion.probe`'s
+    own longest run at the same bar (4 frames).
+-   **Why weak, and kept anyway:** this user's own widen cue peaks at
+    eyeWide 0.031, a small lift over their own 0.007 baseline, so the
+    signal is weak for them specifically. It still only ever feeds the
+    personal read's own tuning (`src/tuning.h`), never
+    `specs/FeelingBeat.tla`'s `Rule`, so a weak or occasionally silent
+    sign costs nothing but a feature that rarely fires.
+-   **Rejected:** keeping the reasoned 0.15 ceiling now that a true
+    positive exists -- it would never fire for this user, whose own widen
+    cue peaks at 0.031, more than 4x under it.
+-   **Evidence:** [#145](https://github.com/mattyv/facepalm/issues/145),
+    measured through `src/eyes_gaze_replay.h`'s own `eye_sign` line
+    against the recorded `widened_eyes.probe`.
+
 ## 2026-11-23: Publish each calibration as a fresh shared profile
 
 A finished calibration is published as a new
@@ -167,6 +268,10 @@ Evidence: [#167](https://github.com/mattyv/facepalm/issues/167),
     to record it.
 
 ## 2026-11-23: Blink rate and a long blink join the personal read as coarse signs; widened eyes too, on a reasoned ceiling rather than a measured positive, closing #145
+
+Its widened-eyes ceiling is replaced by "Widened eyes are gated on a
+measured threshold and a side-look guard, replacing #145's reasoned
+ceiling" (2026-11-23); blink rate and a long blink are unaffected.
 
 -   **Decision (three more `Evidence` fields, following #143's own
     shape):** `src/eye_signs.h` is a new file: `BlinkRate`, `LongBlink`

@@ -139,7 +139,7 @@ bool ReplayEyesAndLookAway(std::istream& input, std::ostream& output,
     const EyeSignSample sign =
         SampleFrom(face, config.eye_gaze_blink_threshold, timestamp);
     output << "eye_sign " << timestamp << ' ' << (sign.blink ? 1 : 0) << ' '
-           << sign.eye_wide << '\n';
+           << sign.eye_wide << ' ' << sign.side_look << '\n';
     last = timestamp;
     if (const std::optional<LookAwayReport> report =
             detector.Update(gaze, resting, nullptr, timestamp)) {

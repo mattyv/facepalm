@@ -130,21 +130,55 @@ daemon to revoke consent for that run.
 The local bundle verification covers startup refusal without consent, rejection
 of an unapproved socket client, and clean shutdown. The new bundle has not
 been tested with live capture. Choosing **Show Camera Preview** from the 🤦
-menu opens a window of the camera while it is on, started only by hand
-(#37 item 8, #108): it stops the same way it started, from the menu item, the
-window's own close button, or the camera going off, and no frame reaches
-anything but that window. Beside the frame, the window shows what Facepalm is
-reading as you watch yourself (#134): each gesture or expression it reports,
-held for two seconds so it can be read, and the latest beat's feeling (such
-as "Last read: confused (question)"), which stays until the next one. Both
-are a diagnostic only, text written to a private file beside the frame under
-the same rules, read only by the menu and only while the preview streams.
+menu opens a window of the camera, started only by hand (#37 item 8, #108)
+and turning the camera on by itself if nothing else has it on already
+(#176, `src/camera_demand.h`): it stops the same way it started, from the
+menu item, the window's own close button, or the camera going off, and no
+frame reaches anything but that window. Beside the frame, the window shows
+what Facepalm is reading as you watch yourself (#134): each gesture or
+expression it reports, held for two seconds so it can be read, and the
+latest beat's feeling (such as "Last read: confused (question)"), which
+stays until the next one. Both are a diagnostic only, text written to a
+private file beside the frame under the same rules, read only by the menu
+and only while the preview streams.
 
 Command-Tab, the Dock and the app switcher reach Settings, the preview and
 the calibration wizard while any one of them is open (#146): the 🤦 menu is
 otherwise a menu-bar-only accessory app, invisible to all three, but switches
 to a regular app the moment the first of these windows opens and back the
 moment the last one closes.
+
+### Menu items by state (#176)
+
+`src/menu_state.h`'s `DecideMenuState` is the one table both the macOS
+menu (`tools/menu/main.mm`) and the Linux tray (`tools/menu/main_linux.cc`)
+read for the always-disabled camera-status line and the **Show Camera
+Preview** and **Calibrate…** items, so the two can never disagree about
+when an item is enabled or what it says. Disabled, titled "Turn on
+Facepalm first", was chosen over leaving the items enabled with an offer
+to turn Facepalm on from inside them: **Turn On Facepalm…** already sits
+one line above either item, so a second way to reach it would be a second
+place for the same choice to drift out of sync, for no benefit over
+simply pointing at the one that already works (`docs/decisions.md`).
+
+| Facepalm | Camera | Preview window | Camera-status line | Show Camera Preview | Calibrate… |
+|---|---|---|---|---|---|
+| Off | (not running) | (not running) | "Facepalm off" | Disabled, "Turn on Facepalm first" | Disabled, "Turn on Facepalm first" |
+| On | Idle | Closed | "Camera off" | Enabled, "Show Camera Preview" | Enabled, "Calibrate…" |
+| On | Idle | Open | "Camera off" | Enabled, "Hide Camera Preview" | Enabled, "Calibrate…" |
+| On | Running | Closed | "Camera on" | Enabled, "Show Camera Preview" | Enabled, "Calibrate…" |
+| On | Running | Open | "Camera on" | Enabled, "Hide Camera Preview" | Enabled, "Calibrate…" |
+
+"Camera" and "Preview window" are independent: opening the preview is
+itself what can move "Idle" to "Running" (#176), so the second and third
+rows, and the fourth and fifth, are both reachable, not a contradiction --
+a camera already running for an approved client's sake shows exactly the
+same "Running" either way. Calibrate… is never disabled by the preview
+being open: it speaks to the daemon over its own, separate connection.
+`test/menu_state_test.cc` covers every combination (service on, camera in
+use, preview open) a solitary test can reach; the table above is `service
+on` crossed with the two that matter to what is shown (camera in use
+decides the status line and nothing else; disabled items ignore both).
 
 ## Calibration (optional)
 
