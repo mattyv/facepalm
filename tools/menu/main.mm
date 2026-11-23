@@ -687,7 +687,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
     FormatFloat(config->expressions_smallest_rise), FormatFloat(config->expressions_spreads),
     [NSString stringWithFormat:@"%d", config->expressions_hold_ms],
     FormatFloat(config->expressions_pose_degrees), FormatFloat(config->expressions_pose_range),
-    [NSString stringWithFormat:@"%d", config->expressions_settle_ms]
+    [NSString stringWithFormat:@"%d", config->expressions_settle_ms],
+    FormatFloat(config->expressions_eye_look_down_threshold),
+    FormatFloat(config->expressions_eye_blink_threshold)
   ];
   for (NSUInteger i = 0; i < tuning.count; ++i) self.advanced[i].stringValue = tuning[i];
   self.lookingAway.state =
@@ -712,8 +714,11 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   // distance from the top, shifted up by the extra height, and the config
   // path and Save button keep their original distance from the bottom.
   // Choosing the camera (item 10 of #61, #13) adds two more rows the same
-  // way, just above "Looking away".
-  constexpr CGFloat kExtraHeight = 256 + 64;
+  // way, just above "Looking away". The squint-guard's own two thresholds
+  // (#140, #150) add two more rows to "Advanced tuning" itself, so the
+  // extra height grows the same way once more to keep its gap above
+  // "Camera".
+  constexpr CGFloat kExtraHeight = 256 + 64 + 64;
   const NSRect bounds = NSMakeRect(0, 0, 560, 610 + kExtraHeight);
   self.settingsWindow =
       [[NSWindow alloc] initWithContentRect:bounds
@@ -752,7 +757,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   NSArray<NSString*>* labels = @[
     @"Gesture confidence (0–1)", @"Expression smallest rise (0–1)", @"Expression spreads (0–100)",
     @"Expression hold (0–5000 ms)", @"Pose degrees (0–180)", @"Pose range (0–180)",
-    @"Pose settle (0–5000 ms)"
+    @"Pose settle (0–5000 ms)", @"Eye look-down threshold (0–1)", @"Eye blink threshold (0–1)"
   ];
   self.advanced = [NSMutableArray array];
   for (NSUInteger i = 0; i < labels.count; ++i) {
@@ -860,6 +865,8 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
       .expression_pose_degrees = Utf8Bytes(self.advanced[4].stringValue),
       .expression_pose_range = Utf8Bytes(self.advanced[5].stringValue),
       .expression_settle_ms = Utf8Bytes(self.advanced[6].stringValue),
+      .expression_eye_look_down_threshold = Utf8Bytes(self.advanced[7].stringValue),
+      .expression_eye_blink_threshold = Utf8Bytes(self.advanced[8].stringValue),
       .looking_away_enabled = self.lookingAway.state == NSControlStateValueOn,
       .looking_away_degrees = Utf8Bytes(self.lookingAwayDegrees.stringValue),
       .looking_away_hold_ms = Utf8Bytes(self.lookingAwayHoldMs.stringValue),

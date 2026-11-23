@@ -30,7 +30,7 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_THAT(config.expressions_pose_degrees, FloatEq(10.0F));
   EXPECT_THAT(config.expressions_pose_range, FloatEq(3.0F));
   EXPECT_THAT(config.expressions_settle_ms, Eq(600));
-  EXPECT_THAT(config.expressions_eye_look_down_threshold, FloatEq(0.3F));
+  EXPECT_THAT(config.expressions_eye_look_down_threshold, FloatEq(0.2F));
   EXPECT_THAT(config.expressions_eye_blink_threshold, FloatEq(0.5F));
   EXPECT_TRUE(config.looking_away_enabled);
   EXPECT_THAT(config.looking_away_degrees, FloatEq(15.0F));
@@ -40,8 +40,8 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_TRUE(config.screen_context_enabled);
   EXPECT_FALSE(config.screen_context_window_titles_enabled);
   EXPECT_THAT(config.screen_context_other_screen_degrees, FloatEq(7.5F));
-  EXPECT_THAT(config.eye_gaze_horizontal_gain, FloatEq(30.0F));
-  EXPECT_THAT(config.eye_gaze_vertical_gain, FloatEq(30.0F));
+  EXPECT_THAT(config.eye_gaze_horizontal_gain, FloatEq(45.0F));
+  EXPECT_THAT(config.eye_gaze_vertical_gain, FloatEq(45.0F));
   EXPECT_THAT(config.eye_gaze_blink_threshold, FloatEq(0.5F));
   EXPECT_THAT(config.eye_gaze_median_ms, Eq(250));
   EXPECT_THAT(config.eye_gaze_resting_ms, Eq(3000));

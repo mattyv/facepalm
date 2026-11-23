@@ -26,7 +26,7 @@ FUZZ_TEST(SettingsDocumentFuzz, UpdateDoesNotCrash)
 // Every known setting, at a value `ParseConfig` and `UpdateSettingsDocument`
 // both already accept: the same text test/fuzz/corpus/config/all_settings.conf
 // holds, so the original document this test builds always parses.
-constexpr std::array<std::string_view, 18> kBaselineLines = {
+constexpr std::array<std::string_view, 20> kBaselineLines = {
     "camera.frames_per_second = 24",
     "camera.device_id =",
     "head_pose.enabled = true",
@@ -39,6 +39,8 @@ constexpr std::array<std::string_view, 18> kBaselineLines = {
     "expressions.pose_degrees = 10",
     "expressions.pose_range = 3",
     "expressions.settle_ms = 600",
+    "expressions.eye_look_down_threshold = 0.2",
+    "expressions.eye_blink_threshold = 0.5",
     "looking_away.enabled = true",
     "looking_away.degrees = 15",
     "looking_away.hold_ms = 1000",

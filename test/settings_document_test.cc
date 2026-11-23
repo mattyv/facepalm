@@ -86,6 +86,19 @@ TEST(SettingsDocumentTest, LookingAwayAndScreenContextDefaultOn) {
   EXPECT_FALSE(config.value().screen_context_window_titles_enabled);
 }
 
+// #150: MenuSettings' own defaults for the squint-guard match Config's.
+TEST(SettingsDocumentTest, SquintGuardDefaultsMatchConfig) {
+  std::string error;
+  const auto updated = UpdateSettingsDocument("", {}, error);
+  ASSERT_TRUE(updated.has_value());
+  const auto config = ParseConfig(updated.value(), error);
+  ASSERT_TRUE(config.has_value());
+  EXPECT_FLOAT_EQ(config.value().expressions_eye_look_down_threshold,
+                  Config::kDefaultExpressionsEyeLookDownThreshold);
+  EXPECT_FLOAT_EQ(config.value().expressions_eye_blink_threshold,
+                  Config::kDefaultExpressionsEyeBlinkThreshold);
+}
+
 // item 10 of #61, #13.
 TEST(SettingsDocumentTest, UpdatesTheChosenCamera) {
   std::string error;
@@ -117,6 +130,8 @@ TEST(SettingsDocumentTest, UpdatesAndValidatesAdvancedTuning) {
   settings.expression_pose_degrees = "12";
   settings.expression_pose_range = "2.5";
   settings.expression_settle_ms = "900";
+  settings.expression_eye_look_down_threshold = "0.25";
+  settings.expression_eye_blink_threshold = "0.45";
   const auto updated = UpdateSettingsDocument("# tuning\n", settings, error);
   ASSERT_TRUE(updated.has_value());
   const auto config = ParseConfig(updated.value(), error);
@@ -128,6 +143,8 @@ TEST(SettingsDocumentTest, UpdatesAndValidatesAdvancedTuning) {
   EXPECT_FLOAT_EQ(config.value().expressions_pose_degrees, 12);
   EXPECT_FLOAT_EQ(config.value().expressions_pose_range, 2.5F);
   EXPECT_EQ(config.value().expressions_settle_ms, 900);
+  EXPECT_FLOAT_EQ(config.value().expressions_eye_look_down_threshold, 0.25F);
+  EXPECT_FLOAT_EQ(config.value().expressions_eye_blink_threshold, 0.45F);
   settings.gesture_confidence = "1.1";
   EXPECT_FALSE(UpdateSettingsDocument("", settings, error));
   settings.gesture_confidence = "0.5\nhead_pose.enabled = false";

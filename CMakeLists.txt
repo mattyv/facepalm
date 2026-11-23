@@ -282,6 +282,17 @@ if(BUILD_TESTING)
   target_compile_definitions(look_away_replay_test PRIVATE
     FACEPALM_FIXTURES="${PROJECT_SOURCE_DIR}/test/fixtures")
 endif()
+# Replays head_pose and eyes lines together, composing real gaze rather
+# than look_away_replay's head-pose-only fallback, to prove #139's
+# fixtures (test/fixtures/eyes) against the tuned defaults (#137, #140,
+# #141).
+facepalm_unit(eyes_gaze_replay)
+target_link_libraries(eyes_gaze_replay PUBLIC look_away expressions eye_gaze
+  eyes_replay facepalm_config)
+if(BUILD_TESTING)
+  target_compile_definitions(eyes_gaze_replay_test PRIVATE
+    FACEPALM_FIXTURES="${PROJECT_SOURCE_DIR}/test/fixtures")
+endif()
 add_executable(gesture_replay_cli tools/gesture_replay/main.cc)
 set_target_properties(gesture_replay_cli PROPERTIES OUTPUT_NAME gesture_replay)
 target_link_libraries(gesture_replay_cli PRIVATE gesture_replay look_away_replay)
