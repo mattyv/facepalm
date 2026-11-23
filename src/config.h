@@ -114,6 +114,47 @@ struct Config {
   static constexpr float kDefaultCalibrationMinHeadTravelDegrees = 10.0F;
   static constexpr float kDefaultCalibrationMinAxisDegrees = 4.0F;
   static constexpr float kDefaultCalibrationMinSpreadDegrees = 3.0F;
+  // src/eye_signs.h's own EyeSignSettings defaults (#145): blink rate, a
+  // long blink and widened eyes, coarse signs for the personal read alone
+  // (src/tuning.h), never specs/FeelingBeat.tla's own Rule. Measured on
+  // #139's fixtures (test/fixtures/eyes/*.probe) through
+  // src/eyes_gaze_replay.h, which this issue extends to print one
+  // `eye_sign <timestamp_ms> <blink> <eye_wide>` line per paired frame (0
+  // or 1 for blink).
+  //
+  // kDefaultEyeSignsElevatedBlinksPerMinute (14): blinks.probe's own eight
+  // deliberate blinks span its whole 25.257 s recording, a rate of about
+  // 19 a minute; every other fixture's own natural blinking stays at or
+  // under thinking_aversion.probe's four single-frame blinks over the
+  // same span, about 9.5 a minute (the other seven fixtures show none at
+  // all). 14 sits at that split's own midpoint, clear of both.
+  //
+  // kDefaultEyeSignsLongBlinkMs (500): blinks.probe's own blinks, the
+  // longest of its eight, hold the blink score (eye_gaze.blink_threshold,
+  // 0.5) for at most 200 ms; long_blinks.probe's own two deliberate long
+  // blinks hold it for 4,264 ms and 5,264 ms. 500 ms clears the ordinary
+  // blinks by 2.5x and stays 8.5x under the shortest long one.
+  //
+  // kDefaultEyeSignsWidenedEyesThreshold (0.15) and
+  // kDefaultEyeSignsWidenedEyesHoldMs (200): no #139 fixture carries a cue
+  // that deliberately widens the eyes, so neither number is measured
+  // against a true positive, only reasoned from the absence of one --
+  // every fixture's own eyeWide peaks at 0.051 at most
+  // (reading_other_screen.probe), so 0.15 clears that ceiling 3x over,
+  // and 200 ms matches kDefaultExpressionsHoldMs, the hold this codebase
+  // already uses to tell a held expression from a flicker. A dedicated
+  // "widen the eyes" fixture would let this be tuned against a real
+  // positive instead.
+  //
+  // kDefaultEyeSignsMinWindowMs (3000): BlinkRate reads unknown under
+  // this, the same "not enough to judge yet" guard eye_gaze.resting_ms
+  // takes, rather than let a short window's own single blink read as an
+  // implausibly high rate.
+  static constexpr float kDefaultEyeSignsElevatedBlinksPerMinute = 14.0F;
+  static constexpr int kDefaultEyeSignsLongBlinkMs = 500;
+  static constexpr float kDefaultEyeSignsWidenedEyesThreshold = 0.15F;
+  static constexpr int kDefaultEyeSignsWidenedEyesHoldMs = 200;
+  static constexpr int kDefaultEyeSignsMinWindowMs = 3000;
 
   int frames_per_second = kDefaultFramesPerSecond;
   // The chosen camera's stable ID (CameraDevice::id), or empty for the
@@ -160,6 +201,13 @@ struct Config {
       kDefaultCalibrationMinHeadTravelDegrees;
   float calibration_min_axis_degrees = kDefaultCalibrationMinAxisDegrees;
   float calibration_min_spread_degrees = kDefaultCalibrationMinSpreadDegrees;
+  // src/eye_signs.h's own EyeSignSettings (#145).
+  float eye_signs_elevated_blinks_per_minute =
+      kDefaultEyeSignsElevatedBlinksPerMinute;
+  int eye_signs_long_blink_ms = kDefaultEyeSignsLongBlinkMs;
+  float eye_signs_widened_eyes_threshold = kDefaultEyeSignsWidenedEyesThreshold;
+  int eye_signs_widened_eyes_hold_ms = kDefaultEyeSignsWidenedEyesHoldMs;
+  int eye_signs_min_window_ms = kDefaultEyeSignsMinWindowMs;
 };
 
 // Reads a config file's text: one `name = value` a line, blank lines, and
@@ -181,9 +229,13 @@ struct Config {
 // eye_gaze.horizontal_gain and eye_gaze.vertical_gain (0 to 200),
 // eye_gaze.blink_threshold (0 to 1), eye_gaze.median_ms, eye_gaze.resting_ms
 // and eye_gaze.gap_ms (a whole number from 0 to 10000),
-// eye_gaze.head_only_yaw_degrees (0 to 180), and
+// eye_gaze.head_only_yaw_degrees (0 to 180),
 // calibration.min_head_travel_degrees, calibration.min_axis_degrees and
-// calibration.min_spread_degrees (0 to 180). Returns the config, or
+// calibration.min_spread_degrees (0 to 180), and
+// eye_signs.elevated_blinks_per_minute (0 to 120),
+// eye_signs.long_blink_ms, eye_signs.widened_eyes_hold_ms and
+// eye_signs.min_window_ms (a whole number from 0 to 10000, #145), and
+// eye_signs.widened_eyes_threshold (0 to 1). Returns the config, or
 // nothing with `error` naming the line, for an unknown name, a bad value, a
 // repeated name or a line with no `=`.
 std::optional<Config> ParseConfig(std::string_view text, std::string& error);

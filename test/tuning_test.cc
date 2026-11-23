@@ -7,14 +7,17 @@
 #include <string>
 #include <string_view>
 
+#include "src/eye_signs.h"
 #include "src/feelings.h"
 #include "src/screen_context.h"
 
 // The tuning rule (#35): a person's picks change a read only once a
 // held-out check shows they beat the generic rule for that evidence. #143
-// adds gaze as a third field of that evidence: below Tuning::kLeastPicks
-// picks for one gaze, the rule falls back to every pick of the same sign
-// and beat regardless of gaze.
+// adds gaze as a third field of that evidence, and #145 adds blink rate,
+// a long blink and widened eyes as three more: below Tuning::kLeastPicks
+// picks for one evidence's own exact bucket (every one of the four
+// context fields matching), the rule falls back to every pick of the
+// same sign and beat regardless of the other three.
 
 namespace facepalm {
 namespace {
@@ -203,16 +206,72 @@ TEST(TuningGazeTest, PicksTuneOnlyTheirOwnSignAndBeatAcrossGazes) {
               Eq(Feeling::kConfused));
 }
 
+// #145: blink rate, a long blink and widened eyes are three more context
+// fields of the evidence, pooled the same way gaze already is (#143):
+// below kLeastPicks for one evidence's own exact bucket, Read falls back
+// to every pick of the same sign and beat, whatever the other three
+// fields were made under.
+Evidence FrownElevatedLongWidenedAtAQuestion() {
+  return {.sign = "brows_down",
+          .beat = BeatKind::kQuestion,
+          .blink_rate = BlinkRate::kElevated,
+          .long_blink = LongBlink::kYes,
+          .widened_eyes = WidenedEyes::kYes};
+}
+Evidence FrownNormalNoNoAtAQuestion() {
+  return {.sign = "brows_down",
+          .beat = BeatKind::kQuestion,
+          .blink_rate = BlinkRate::kNormal,
+          .long_blink = LongBlink::kNo,
+          .widened_eyes = WidenedEyes::kNo};
+}
+
+TEST(TuningEyeSignsTest, BelowTheMinimumForOneExactBucketFallsBackToEveryOne) {
+  const Tuning tuning = Picked(Tuning(), FrownElevatedLongWidenedAtAQuestion(),
+                               Feeling::kAnnoyance, 3);
+
+  EXPECT_THAT(tuning.Read(FrownNormalNoNoAtAQuestion(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+}
+
+TEST(TuningEyeSignsTest, AtOrAboveTheMinimumForOneExactBucketReadsItAlone) {
+  const Tuning tuning =
+      Picked(Picked(Tuning(), FrownElevatedLongWidenedAtAQuestion(),
+                    Feeling::kAnnoyance, 3),
+             FrownNormalNoNoAtAQuestion(), Feeling::kConfused, 3);
+
+  EXPECT_THAT(
+      tuning.Read(FrownElevatedLongWidenedAtAQuestion(), Feeling::kUnknown),
+      Eq(Feeling::kAnnoyance));
+  EXPECT_THAT(tuning.Read(FrownNormalNoNoAtAQuestion(), Feeling::kUnknown),
+              Eq(Feeling::kConfused));
+}
+
+TEST(TuningEyeSignsTest, PicksTuneOnlyTheirOwnSignAndBeatAcrossTheEyeSigns) {
+  const Tuning tuning = Picked(Tuning(), FrownElevatedLongWidenedAtAQuestion(),
+                               Feeling::kAnnoyance, 3);
+
+  EXPECT_THAT(tuning.Read(SmileOnContentAtAQuestion(), Feeling::kUnknown),
+              Eq(Feeling::kUnknown));
+  EXPECT_THAT(tuning.Read(Evidence{.sign = "brows_down",
+                                   .beat = BeatKind::kProposal,
+                                   .blink_rate = BlinkRate::kNormal},
+                          Feeling::kConfused),
+              Eq(Feeling::kConfused));
+}
+
 TEST(TuningTextTest, WritesOneLinePerPickedFeeling) {
   const Tuning tuning = Picked(
       Picked(Picked(Tuning(), FrownAtAQuestion(), Feeling::kAnnoyance, 3),
              SmileAtAQuestion(), Feeling::kEngagement, 1),
       FrownAtAProposal(), Feeling::kConfused, 2);
 
-  EXPECT_THAT(tuning.Text(), Eq("facepalm feelings 2\n"
-                                "brows_down question unknown annoyance 3\n"
-                                "brows_down proposal unknown confused 2\n"
-                                "smile question unknown engagement 1\n"));
+  EXPECT_THAT(
+      tuning.Text(),
+      Eq("facepalm feelings 3\n"
+         "brows_down question unknown unknown unknown unknown annoyance 3\n"
+         "brows_down proposal unknown unknown unknown unknown confused 2\n"
+         "smile question unknown unknown unknown unknown engagement 1\n"));
 }
 
 TEST(TuningTextTest, WritesTheGazeEachPickWasMadeUnder) {
@@ -220,13 +279,25 @@ TEST(TuningTextTest, WritesTheGazeEachPickWasMadeUnder) {
       Picked(Tuning(), FrownOnContentAtAQuestion(), Feeling::kAnnoyance, 3),
       FrownAvertedAtAQuestion(), Feeling::kConfused, 2);
 
-  EXPECT_THAT(tuning.Text(), Eq("facepalm feelings 2\n"
-                                "brows_down question on_content annoyance 3\n"
-                                "brows_down question averted confused 2\n"));
+  EXPECT_THAT(tuning.Text(),
+              Eq("facepalm feelings 3\n"
+                 "brows_down question on_content unknown unknown unknown "
+                 "annoyance 3\n"
+                 "brows_down question averted unknown unknown unknown "
+                 "confused 2\n"));
+}
+
+TEST(TuningTextTest, WritesTheEyeSignsEachPickWasMadeUnder) {
+  const Tuning tuning = Picked(Tuning(), FrownElevatedLongWidenedAtAQuestion(),
+                               Feeling::kAnnoyance, 3);
+
+  EXPECT_THAT(tuning.Text(),
+              Eq("facepalm feelings 3\n"
+                 "brows_down question unknown elevated yes yes annoyance 3\n"));
 }
 
 TEST(TuningTextTest, WritesNoLinesWithNoPicks) {
-  EXPECT_THAT(Tuning().Text(), Eq("facepalm feelings 2\n"));
+  EXPECT_THAT(Tuning().Text(), Eq("facepalm feelings 3\n"));
 }
 
 TEST(TuningTextTest, ReadsBackWhatItWrote) {
@@ -263,16 +334,17 @@ TEST(TuningTextTest, ReadsBackTheGazeItWrote) {
 
 TEST(TuningTextTest, ReadsAFileWithNoPicks) {
   EXPECT_THAT(
-      Tuning::Parse("facepalm feelings 2\n"),
-      Optional(testing::Property(&Tuning::Text, Eq("facepalm feelings 2\n"))));
+      Tuning::Parse("facepalm feelings 3\n"),
+      Optional(testing::Property(&Tuning::Text, Eq("facepalm feelings 3\n"))));
 }
 
 // #143: a v1 file (pre-#143, no gaze word) is read, not refused --
 // refusing it would throw away the person's own picks for a file they
 // never asked to change, unlike a calibration profile, which the person
-// simply redoes (#137's own version bump). Each v1 pick reads as gaze
-// Gaze::kUnknown, and the next save upgrades the file to v2.
-TEST(TuningTextTest, ReadsAV1FileWithGazeUnknownAndSavesItAsV2) {
+// simply redoes (#137's own version bump). Each v1 pick reads with
+// every one of the four context fields unknown (#145 added three more
+// since #143), and the next save upgrades the file straight to v3.
+TEST(TuningTextTest, ReadsAV1FileWithEveryContextFieldUnknownAndSavesItAsV3) {
   const std::optional<Tuning> parsed =
       Tuning::Parse("facepalm feelings 1\nbrows_down question annoyance 3\n");
 
@@ -280,14 +352,34 @@ TEST(TuningTextTest, ReadsAV1FileWithGazeUnknownAndSavesItAsV2) {
   const Tuning read = parsed.value_or(Tuning());
   EXPECT_THAT(read.Read(FrownAtAQuestion(), Feeling::kConfused),
               Eq(Feeling::kAnnoyance));
-  EXPECT_THAT(read.Text(), Eq("facepalm feelings 2\n"
-                              "brows_down question unknown annoyance 3\n"));
+  EXPECT_THAT(read.Text(),
+              Eq("facepalm feelings 3\n"
+                 "brows_down question unknown unknown unknown unknown "
+                 "annoyance 3\n"));
+}
+
+// #145: a v2 file (pre-#145, gaze but no blink rate, long blink or
+// widened eyes word) is read the same way -- each v2 pick keeps its own
+// gaze and reads the three new fields unknown, and the next save
+// upgrades the file to v3.
+TEST(TuningTextTest, ReadsAV2FileWithTheNewFieldsUnknownAndSavesItAsV3) {
+  const std::optional<Tuning> parsed = Tuning::Parse(
+      "facepalm feelings 2\nbrows_down question on_content annoyance 3\n");
+
+  ASSERT_TRUE(parsed.has_value());
+  const Tuning read = parsed.value_or(Tuning());
+  EXPECT_THAT(read.Read(FrownOnContentAtAQuestion(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+  EXPECT_THAT(read.Text(),
+              Eq("facepalm feelings 3\n"
+                 "brows_down question on_content unknown unknown unknown "
+                 "annoyance 3\n"));
 }
 
 // Below kLeastPicks for one v1 file's own evidence, the same fallback
-// (#143) pools it with a v2 pick of a different gaze, read after the v1
-// file has been migrated in.
-TEST(TuningTextTest, AV1PicksEvidenceStillPoolsWithOtherGazes) {
+// (#143, #145) pools it with a v3 pick of different context fields, read
+// after the v1 file has been migrated in.
+TEST(TuningTextTest, AV1PicksEvidenceStillPoolsWithOtherContextFields) {
   const std::optional<Tuning> parsed =
       Tuning::Parse("facepalm feelings 1\nbrows_down question annoyance 1\n");
   ASSERT_TRUE(parsed.has_value());
@@ -302,9 +394,43 @@ TEST(TuningTextTest, AV1PicksEvidenceStillPoolsWithOtherGazes) {
 TEST(TuningTextTest, RefusesAnythingElse) {
   for (const std::string_view text : {
            "",
-           "facepalm feelings 3\n",
+           "facepalm feelings 4\n",
+           "facepalm feelings 3",
            "facepalm feelings 2",
            "facepalm feelings 1",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no no engagement 1",
+           "facepalm feelings 3\n\n",
+           "facepalm feelings 3\n"
+           "Smile question on_content normal no no engagement 1\n",
+           "facepalm feelings 3\n"
+           "smile answer on_content normal no no engagement 1\n",
+           "facepalm feelings 3\n"
+           "smile question sideways normal no no engagement 1\n",
+           "facepalm feelings 3\n"
+           "smile question on_content sideways no no engagement 1\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal sideways no engagement 1\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no sideways engagement 1\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no no happy 1\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no no engagement 0\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no no engagement x\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no no engagement 1x\n",
+           "facepalm feelings 3\n"
+           "smile question away elevated yes yes engagement 1000001\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no no engagement\n",
+           "facepalm feelings 3\n"
+           "smile question on_content normal no no engagement 1 1\n",
+           "facepalm feelings 3\nsmile question on_content normal engagement "
+           "1\n",
+           "facepalm feelings 3\nsmile question on_content engagement 1\n",
+           "facepalm feelings 3\nsmile question engagement 1\n",
            "facepalm feelings 2\nsmile question on_content engagement 1",
            "facepalm feelings 2\n\n",
            "facepalm feelings 2\nSmile question on_content engagement 1\n",
@@ -325,15 +451,17 @@ TEST(TuningTextTest, RefusesAnythingElse) {
        }) {
     EXPECT_THAT(Tuning::Parse(text), Eq(std::nullopt)) << text;
   }
-  const std::string twice = std::string("facepalm feelings 2\n") +
-                            "smile question on_content engagement 1\n" +
-                            "smile question on_content engagement 2\n";
+  const std::string twice =
+      std::string("facepalm feelings 3\n") +
+      "smile question on_content normal no no engagement 1\n" +
+      "smile question on_content normal no no engagement 2\n";
   EXPECT_THAT(Tuning::Parse(twice), Eq(std::nullopt));
 }
 
 TEST(TuningCountTest, AFeelingStopsCountingAtTheMostPicks) {
   const std::string full =
-      "facepalm feelings 2\nsmile question unknown engagement " +
+      "facepalm feelings 3\n"
+      "smile question unknown unknown unknown unknown engagement " +
       std::to_string(Tuning::kMostPicks) + "\n";
   const std::optional<Tuning> parsed = Tuning::Parse(full);
   ASSERT_TRUE(parsed.has_value());

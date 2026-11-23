@@ -15,6 +15,7 @@
 #include "src/config.h"
 #include "src/expressions.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/eyes_replay.h"
 #include "src/face_model.h"
 #include "src/head_pose.h"
@@ -133,6 +134,12 @@ bool ReplayEyesAndLookAway(std::istream& input, std::ostream& output,
         pose, eye, eye_resting, gains, config.eye_gaze_head_only_yaw_degrees);
     output << "gaze " << timestamp << ' ' << gaze.yaw_degrees << ' '
            << gaze.pitch_degrees << '\n';
+    // #145: the same face SampleFrom would read a live beat window's
+    // own blink flag and eye-widening score from.
+    const EyeSignSample sign =
+        SampleFrom(face, config.eye_gaze_blink_threshold, timestamp);
+    output << "eye_sign " << timestamp << ' ' << (sign.blink ? 1 : 0) << ' '
+           << sign.eye_wide << '\n';
     last = timestamp;
     if (const std::optional<LookAwayReport> report =
             detector.Update(gaze, resting, nullptr, timestamp)) {

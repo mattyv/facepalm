@@ -64,7 +64,8 @@ test('repeated picks for a frown at a question tune its next read until reset', 
   assert.equal((await service.beat('proposal', frown)).feeling, 'confused');
   assert.equal(
     await readFile(feelingsPath, 'utf8'),
-    'facepalm feelings 2\nbrows_down question unknown annoyance 3\n',
+    'facepalm feelings 3\n' +
+      'brows_down question unknown unknown unknown unknown annoyance 3\n',
   );
   assert.equal((await stat(feelingsPath)).mode & 0o777, 0o600);
   await service.stop();
@@ -73,7 +74,7 @@ test('repeated picks for a frown at a question tune its next read until reset', 
   assert.equal((await service.beat('question', frown)).feeling, 'annoyance');
   assert.deepEqual(await service.ask('reset feelings'), { ok: true });
   assert.equal((await service.beat('question', frown)).feeling, 'confused');
-  assert.equal(await readFile(feelingsPath, 'utf8'), 'facepalm feelings 2\n');
+  assert.equal(await readFile(feelingsPath, 'utf8'), 'facepalm feelings 3\n');
   await service.stop();
 });
 

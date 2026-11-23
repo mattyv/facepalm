@@ -90,7 +90,27 @@ made since, each with its reason, are in the
     `LookAwayDetector` in the order `LookAwayReader` runs them, rather than
     `src/look_away_replay`'s own head-pose-only fallback; its tests are what
     proved `eye_gaze.*`, `calibration.*` and the squint-guard's own defaults
-    (below) against #139's nine fixtures.
+    (below) against #139's nine fixtures. It also prints one
+    `eye_sign <timestamp_ms> <blink> <eye_wide>` line per paired frame
+    (#145, `src/eye_signs`'s own `SampleFrom`), which is how
+    `eye_signs.*`'s own defaults (below) were measured against the same
+    nine fixtures.
+-   `src/eye_signs`: blink rate, a long blink and widened eyes (#145),
+    coarse signs -- like `src/screen_context`'s `Gaze` -- for the
+    personal read alone (`src/tuning`), never `Rule`'s own input
+    (`specs/FeelingBeat.tla`'s `Interpret` is untouched). `EyeSignsOf` is
+    pure computation over a window of `EyeSignSample`s a caller collects
+    elsewhere (a later issue's own window reader, the way
+    `ScreenContextReporter::Between` already does for gaze); `SampleFrom`
+    builds one sample from a frame's own `Face`, the same blink flag
+    (`src/eye_gaze`'s `EyeSignalFrom`) and eyeWide blendshapes
+    `src/eyes_gaze_replay`'s own `eye_sign` line reads. None of #139's
+    nine fixtures carries a cue that deliberately widens the eyes, so
+    `eye_signs.widened_eyes_threshold`'s own default is reasoned from
+    every fixture's own eyeWide ceiling (0.051 at most), not measured
+    against a true positive -- `src/eye_signs.h`'s own header comment
+    says so again where the setting's default lives
+    (`src/config.h`'s `kDefaultEyeSignsWidenedEyesThreshold`).
 -   `src/eye_gaze`: coarse gaze reads head pose composed with eye-in-head
     signal, not head pose alone (#137). `EyeSignalFrom` reads the eye-look
     blendshapes `src/eyes_probe` already formats, into a horizontal and
@@ -208,31 +228,41 @@ made since, each with its reason, are in the
     no cue, cues of different feelings, or a window missing a dropped
     reading read as unknown. No rule gives engagement or annoyance yet; they
     are there for corrections to name (#35). It also names what a beat
-    showed, the one kind of reaction made during it, the beat's kind, and
+    showed, the one kind of reaction made during it, the beat's kind,
     where the person was looking during it, in the beat's own wording
-    (#143, `src/screen_context.h`'s `Gaze` and `BeatGazeName`) -- a
-    feature the person's own read (`src/tuning`) learns from, never
-    `Rule`'s own input (#142's `ContextNeverChangesFeeling`); `EvidenceOf`
-    itself leaves gaze at `kUnknown`, for `src/reaction_feed`'s `Beat` to
-    fill in from the same gaze its reply reports.
--   `src/tuning`: the person's own reads (#35, gaze added by #143): how
-    many times they picked each feeling for each reaction, kind of beat,
-    and coarse gaze during it. A feeling picked at least twice and more
-    than half the time becomes the person's read for it, but only once a
-    held-out check shows it beats the generic rule: each pick in turn is
-    held out and read from the others, and those reads must be right more
-    often than the generic one. Three picks of the same feeling are
-    enough; a split between two is not. Below that minimum for one gaze,
-    the read instead runs over every pick of the same reaction and beat,
-    whatever gaze it was made under, so a feeling no generic rule gives
-    (engagement, annoyance) can still come from the person's labels before
-    enough of them share one gaze. The counts file's own header bumped
-    from `facepalm feelings 1` to `facepalm feelings 2` for the added
-    gaze word; unlike a calibration profile's own version bump
-    (`src/calibration_store`, #137), a file from before #143 is read, not
-    refused -- each of its picks reads with gaze `unknown`, and the next
-    save writes the file back as v2, so the person's own picks are never
-    thrown away for a file they never asked to change.
+    (#143, `src/screen_context.h`'s `Gaze` and `BeatGazeName`), and, added
+    by #145, blink rate, a long blink and widened eyes
+    (`src/eye_signs.h`'s `BlinkRate`, `LongBlink` and `WidenedEyes`) --
+    every one of these a feature the person's own read (`src/tuning`)
+    learns from, never `Rule`'s own input (#142's
+    `ContextNeverChangesFeeling`, untouched by #145 too); `EvidenceOf`
+    itself leaves all four at their own unknown value, for a later
+    issue's own window reader to fill in the way `src/reaction_feed`'s
+    `Beat` already does for gaze.
+-   `src/tuning`: the person's own reads (#35, gaze added by #143; blink
+    rate, a long blink and widened eyes added by #145): how many times
+    they picked each feeling for each reaction, kind of beat, and the
+    four context fields during it. A feeling picked at least twice and
+    more than half the time becomes the person's read for it, but only
+    once a held-out check shows it beats the generic rule: each pick in
+    turn is held out and read from the others, and those reads must be
+    right more often than the generic one. Three picks of the same
+    feeling are enough; a split between two is not. Below that minimum
+    for the evidence's own exact bucket (sign, beat, gaze, blink rate,
+    long blink and widened eyes all matching), the read instead runs over
+    every pick of the same reaction and beat, whatever the other three
+    fields were made under, so a feeling no generic rule gives
+    (engagement, annoyance) can still come from the person's labels
+    before enough of them share one exact bucket. The counts file's own
+    header bumped from `facepalm feelings 1` to `facepalm feelings 2` for
+    gaze (#143), and now to `facepalm feelings 3` for the three new words
+    (#145); unlike a calibration profile's own version bump
+    (`src/calibration_store`, #137), a v1 or v2 file is read, not
+    refused -- each of a v1 file's picks reads with gaze, blink rate,
+    long blink and widened eyes all unknown, and a v2 file's with the
+    three new fields unknown, gaze kept; the next save always writes the
+    file back as v3, so the person's own picks are never thrown away for
+    a file they never asked to change.
 -   `src/feeling_store`: keeps those counts in one file private to the
     person, `facepalm/feelings` in `$XDG_CONFIG_HOME` or `~/.config` unless
     the daemon is given `--feelings-file PATH`. It is the file's only
@@ -609,8 +639,8 @@ The macOS menu's and the Linux tray's **Settings** windows show and save
 most of the settings above, including looking away's own `enabled`,
 `degrees` and `hold_ms` (#79), screen context's (window titles still
 default off there too) and the squint-guard's own `eye_look_down_threshold`
-and `eye_blink_threshold` (#140, #150). `eye_gaze.*`, `calibration.*`
-(#137) and looking away's own `averted_ms` and
+and `eye_blink_threshold` (#140, #150). `eye_gaze.*`, `eye_signs.*`
+(#145), `calibration.*` (#137) and looking away's own `averted_ms` and
 `other_screen_margin_degrees` (#141) are config-file only, provisional
 settings not yet shown there. Turn Facepalm off and on again from the menu
 to apply a change, as for the other settings.

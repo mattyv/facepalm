@@ -1224,20 +1224,28 @@ fail its tests in `test/tuning_test.cc`:
 | Read never falls back to every gaze of the evidence (#143) | `TuningGazeTest.BelowTheMinimumForOneGazeFallsBackToEveryGazeOfIt`, `TuningGazeTest.PicksAcrossGazesCanStillNameAFeelingNoGenericRuleGives` |
 | Read always falls back, ignoring an evidence's own gaze even once it has enough (#143) | `TuningGazeTest.AtOrAboveTheMinimumForOneGazeReadsItAlone` |
 | The fallback pools a different sign or beat too, not only gaze (#143) | `TuningGazeTest.PicksTuneOnlyTheirOwnSignAndBeatAcrossGazes` |
-| A v1 file (no gaze word) is refused rather than read (#143) | `TuningTextTest.ReadsAV1FileWithGazeUnknownAndSavesItAsV2` |
+| A v1 file (no gaze word) is migrated with gaze unknown, rather than read as is or refused (#143) | `TuningTextTest.ReadsAV1FileWithEveryContextFieldUnknownAndSavesItAsV3` |
+| Read never falls back to every blink rate, long blink or widened-eyes value of the evidence (#145) | `TuningEyeSignsTest.BelowTheMinimumForOneExactBucketFallsBackToEveryOne` |
+| Read always falls back, ignoring an evidence's own blink rate, long blink or widened eyes even once it has enough (#145) | `TuningEyeSignsTest.AtOrAboveTheMinimumForOneExactBucketReadsItAlone` |
+| The fallback pools a different sign or beat too, not only the three eye signs (#145) | `TuningEyeSignsTest.PicksTuneOnlyTheirOwnSignAndBeatAcrossTheEyeSigns` |
+| A v2 file (no blink-rate, long-blink or widened-eyes word) is migrated with the three unknown, rather than read as is or refused (#145) | `TuningTextTest.ReadsAV2FileWithTheNewFieldsUnknownAndSavesItAsV3` |
 
 The integration test `test/integration/tuning.test.mjs` runs the whole path
 against the real feed, store and service: three `annoyance` picks for a frown at
 question beats change the next frown's read at a question, not at a proposal;
 they last when the service restarts; and `reset feelings` restores `confused`.
-Gaze defaults to `unknown` in that test (no screen context source), so its
-own counts file carries the word; `TuningTextTest` and
-`FeelingStoreOpenTest.ReadsAV1FileAndSavesItBackAsV2` cover the gaze word
-itself and the version bump (#143): unlike `src/calibration_store.cc`'s own
-precedent for #137's bump, a pre-#143 file is read, not refused, since
-refusing it would throw away the person's own picks for a file they never
-asked to change -- each of its picks reads with gaze `unknown`, and the
-next save writes it back as v2.
+Gaze, blink rate, a long blink and widened eyes all default to `unknown` in
+that test (no screen context or window reader source), so its own counts
+file carries all four words; `TuningTextTest` and
+`FeelingStoreOpenTest.ReadsAV1FileAndSavesItBackAsV3` cover the gaze word
+and the version 1-to-2 bump (#143),
+`FeelingStoreOpenTest.ReadsAV2FileAndSavesItBackAsV3` the three new words
+and the 2-to-3 bump (#145): unlike `src/calibration_store.cc`'s own
+precedent for #137's bump, a pre-#143 or pre-#145 file is read, not
+refused, since refusing it would throw away the person's own picks for a
+file they never asked to change -- a v1 file's picks read with every
+context field `unknown`, a v2 file's with the three new ones `unknown`
+and gaze kept, and the next save always writes the file back as v3.
 
 ## `Service`: the background service and its connections
 

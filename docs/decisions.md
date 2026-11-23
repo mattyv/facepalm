@@ -5,6 +5,78 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-23: Blink rate and a long blink join the personal read as coarse signs; widened eyes too, on a reasoned ceiling rather than a measured positive, closing #145
+
+-   **Decision (three more `Evidence` fields, following #143's own
+    shape):** `src/eye_signs.h` is a new file: `BlinkRate`, `LongBlink`
+    and `WidenedEyes`, each a coarse bucket like `src/screen_context.h`'s
+    `Gaze`, plus the pure `EyeSignsOf` that reads a window of
+    `EyeSignSample`s into all three. `src/feelings.h`'s `Evidence` gains
+    `blink_rate`, `long_blink` and `widened_eyes` alongside `sign`,
+    `beat` and `gaze`; `EvidenceOf` never sets any of the four, the same
+    as it already left gaze for #142 to fill in. Unlike #143, no prior
+    issue already built a live windowed reader for these three (gaze had
+    #142's `GazeWindowFn` and `ScreenContextReporter::Between` ready to
+    wire in); building one is real work of its own -- a stateful sample
+    buffer and a new `ReactionFeed::Beat` parameter -- so this issue
+    stops at the pure computation and the counts file, and files a
+    follow-up issue for the live wiring rather than leave it unsaid.
+    `specs/FeelingBeat.tla`'s `Rule`, `Interpret` and
+    `ContextNeverChangesFeeling` are untouched, so, as with #143,
+    `src/tuning.cc` needed no spec change: it is pure computation outside
+    every spec's model.
+-   **Decision (the fallback still only checks sign and beat, now pooling
+    four context fields instead of one):** `Tuning::Read`'s own fallback
+    loop already read `other.sign == evidence.sign && other.beat ==
+    evidence.beat` with no mention of gaze; adding three more context
+    fields to `Evidence` changes nothing about that loop, since it never
+    named gaze as what it was ignoring -- it pools whatever the other
+    fields happen to be. The one new code is `ContextOf` in
+    `src/tuning.cc`, which reads the three (or one, or none) context
+    words a line's own format version carries, kept apart from
+    `Evidence` itself so a malformed or short line never leaves
+    `Evidence::beat` -- which has no "unknown" enumerator of its own --
+    default-constructed and unset.
+-   **Decision (format bumps straight to v3; a v1 or v2 file is migrated,
+    never refused):** the counts file's header bumps from `facepalm
+    feelings 2` to `facepalm feelings 3` for the three new words, one
+    bump for all three at once rather than one per sign, since they were
+    measured and added together. Following #143's own precedent (and its
+    own rejected alternative, recorded in that entry): a v1 file's picks
+    read with all four context fields `unknown`, a v2 file's with the
+    three new ones `unknown` and gaze kept, and `Tuning::Text` always
+    writes v3. Refusing either outright, mirroring
+    `src/calibration_store.cc`'s version bump for #137, would throw away
+    the person's own picks for a file they never asked to change.
+-   **Decision (widened eyes ships on a reasoned ceiling, not a measured
+    positive, rather than being dropped like eye-rolls):** #139's nine
+    fixtures were recorded for #140 through #145 together, before #145's
+    own cue list was finalized, and none of the nine asks the person to
+    widen their eyes -- every fixture's own eyeWide blendshape peaks at
+    0.051 at most (`reading_other_screen.probe`), read through
+    `src/eyes_gaze_replay.h`'s new `eye_sign` line. Blink rate and a long
+    blink both have a true positive to measure against
+    (`test/fixtures/eyes/blinks.probe` and `long_blinks.probe`); widened
+    eyes does not. The rejected alternative was dropping widened eyes
+    from this change the way eye-rolls were already dropped from #145's
+    own scope, on the reasoning that "#139's recordings show they are
+    detectable" (the issue's own condition) fails for a sign no fixture
+    tries to elicit at all. It is kept instead because every fixture's
+    own eyeWide ceiling is still informative -- it bounds the false-
+    positive rate a threshold well above it would have on ordinary faces
+    doing ordinary things -- and because the personal read only ever
+    weighs this sign for a correction the person themselves made; a
+    threshold that never fires on a real "widened eyes" moment costs
+    nothing but a sign that stays silent, while dropping it loses the
+    chance to tune it later against a real recording.
+    `kDefaultEyeSignsWidenedEyesThreshold` (0.15, three times that
+    ceiling) and `kDefaultEyeSignsWidenedEyesHoldMs` (200,
+    `kDefaultExpressionsHoldMs`'s own flicker guard) are both reasoned
+    this way, not measured against a positive; `src/eye_signs.h` and
+    `src/config.h` say so again where each lives, and the follow-up issue
+    for live wiring also asks for a dedicated "widen the eyes" fixture to
+    tighten them against a real one.
+
 ## 2026-11-23: BeginStop's already-left branch is held deterministically, not diagnosed by luck, closing #162
 
 -   **Decision (the flaky branch is `connection.name && !connection.left` in
