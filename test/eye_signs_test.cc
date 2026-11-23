@@ -29,8 +29,9 @@ using ::testing::Optional;
 
 constexpr EyeSignSettings kSettings = {.elevated_blinks_per_minute = 14.0,
                                        .long_blink_ms = 500,
-                                       .widened_eyes_threshold = 0.15,
-                                       .widened_eyes_hold_ms = 200,
+                                       .widened_eyes_threshold = 0.025,
+                                       .widened_eyes_hold_ms = 1000,
+                                       .widened_eyes_max_side_look = 0.2,
                                        .min_window_ms = 3000};
 
 TEST(BlinkRateNameTest, RoundTrips) {
@@ -83,6 +84,32 @@ TEST(SampleFromTest, ReadsBlinkAndEyeWideFromTheFace) {
       SampleFrom(FaceWith(0.3F, 0.2F), 0.5, 2000);
   EXPECT_FALSE(not_blinking.blink);
   EXPECT_THAT(not_blinking.eye_wide, testing::DoubleNear(0.2, 1e-6));
+}
+
+// A face with blendshapes all zero but for eyeLookIn and eyeLookOut (both
+// eyes, src/eye_signs.cc's own kEyeLookInLeft/Right (13, 14) and
+// kEyeLookOutLeft/Right (15, 16)), for SampleFrom's own side_look field
+// (#145/#165). `look_in` and `look_out` are never swapped in practice:
+// every call site passes a literal eyeLookIn score first, a literal
+// eyeLookOut score second.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+Face FaceLookingSideways(float look_in, float look_out) {
+  Face face{};
+  face.blendshapes[13] = look_in;
+  face.blendshapes[14] = look_in;
+  face.blendshapes[15] = look_out;
+  face.blendshapes[16] = look_out;
+  return face;
+}
+
+TEST(SampleFromTest, ReadsSideLookAsTheLargerOfMeanInAndMeanOut) {
+  const EyeSignSample looking_in =
+      SampleFrom(FaceLookingSideways(0.4F, 0.1F), 0.5, 1000);
+  EXPECT_THAT(looking_in.side_look, testing::DoubleNear(0.4, 1e-6));
+
+  const EyeSignSample looking_out =
+      SampleFrom(FaceLookingSideways(0.1F, 0.4F), 0.5, 2000);
+  EXPECT_THAT(looking_out.side_look, testing::DoubleNear(0.4, 1e-6));
 }
 
 TEST(EyeSignsOfTest, NoSamplesIsUnknownThroughout) {
@@ -180,7 +207,7 @@ TEST(EyeSignsOfTest, ABlinkHeldPastTheThresholdIsALongOne) {
 }
 
 TEST(EyeSignsOfTest, EyeWideUnderTheThresholdIsNotWidened) {
-  const std::vector<EyeSignSample> samples = Samples(0, 50, false, 0.1);
+  const std::vector<EyeSignSample> samples = Samples(0, 50, false, 0.02);
 
   EXPECT_THAT(EyeSignsOf(samples, kSettings).widened_eyes,
               Eq(WidenedEyes::kNo));
@@ -195,14 +222,48 @@ TEST(EyeSignsOfTest, EyeWideOverTheThresholdButNotHeldIsNotWidened) {
 }
 
 TEST(EyeSignsOfTest, EyeWideHeldPastTheThresholdIsWidened) {
-  // Samples 10 to 15, 330 ms, past widened_eyes_hold_ms.
+  // Samples 10 to 27, 1,122 ms, past widened_eyes_hold_ms (1,000), with
+  // side_look left at its own default (0), well under
+  // widened_eyes_max_side_look.
   std::vector<EyeSignSample> samples = Samples(0, 50, false, 0);
-  for (int i = 10; i <= 15; ++i) {
+  for (int i = 10; i <= 27; ++i) {
     samples[i].eye_wide = 0.2;
   }
 
   EXPECT_THAT(EyeSignsOf(samples, kSettings).widened_eyes,
               Eq(WidenedEyes::kYes));
+}
+
+TEST(EyeSignsOfTest, EyeWideHeldWithSideLookWellUnderTheGuardIsStillWidened) {
+  // The same held run as above, but with a non-zero side_look that still
+  // clears widened_eyes_max_side_look (0.2) comfortably -- the guard
+  // should not suppress an ordinary widen just because the eyes are not
+  // perfectly still.
+  std::vector<EyeSignSample> samples = Samples(0, 50, false, 0);
+  for (int i = 10; i <= 27; ++i) {
+    samples[i].eye_wide = 0.2;
+    samples[i].side_look = 0.05;
+  }
+
+  EXPECT_THAT(EyeSignsOf(samples, kSettings).widened_eyes,
+              Eq(WidenedEyes::kYes));
+}
+
+// #145/#165: eye_wide alone cannot tell a widen from a sideways glance,
+// which lifts it too (measured on gaze_other_screen.probe and
+// reading_other_screen.probe, src/config.h's own header comment on
+// kDefaultEyeSignsWidenedEyesMaxSideLook). A held run that otherwise
+// clears widened_eyes_threshold and widened_eyes_hold_ms is not widened
+// once side_look is at or past widened_eyes_max_side_look throughout.
+TEST(EyeSignsOfTest, EyeWideHeldButWithSideLookAtTheGuardIsNotWidened) {
+  std::vector<EyeSignSample> samples = Samples(0, 50, false, 0);
+  for (int i = 10; i <= 27; ++i) {
+    samples[i].eye_wide = 0.2;
+    samples[i].side_look = 0.2;  // At widened_eyes_max_side_look, not under.
+  }
+
+  EXPECT_THAT(EyeSignsOf(samples, kSettings).widened_eyes,
+              Eq(WidenedEyes::kNo));
 }
 
 // Recorded fixtures from #139 (test/fixtures/eyes/README.md), the same
@@ -226,11 +287,38 @@ std::vector<EyeSignSample> FixtureSamples(const std::string& name) {
     Face face{};
     face.blendshapes[9] = static_cast<float>(frame.eye_blink[0]);
     face.blendshapes[10] = static_cast<float>(frame.eye_blink[1]);
+    face.blendshapes[13] = static_cast<float>(frame.eye_look_in[0]);
+    face.blendshapes[14] = static_cast<float>(frame.eye_look_in[1]);
+    face.blendshapes[15] = static_cast<float>(frame.eye_look_out[0]);
+    face.blendshapes[16] = static_cast<float>(frame.eye_look_out[1]);
     face.blendshapes[21] = static_cast<float>(frame.eye_wide[0]);
     face.blendshapes[22] = static_cast<float>(frame.eye_wide[1]);
     samples.push_back(SampleFrom(face, 0.5, frame.timestamp_ms));
   }
   return samples;
+}
+
+// The `index`th of a fixture's own four six-second cue windows
+// (test/fixtures/eyes/README.md): the same per-cue span #145/#165's own
+// measurements (src/config.h's header comment on
+// kDefaultEyeSignsWidenedEyesThreshold) were taken over. `samples` must be
+// oldest first, as FixtureSamples returns them.
+std::vector<EyeSignSample> CueWindow(const std::vector<EyeSignSample>& samples,
+                                     int index) {
+  constexpr std::int64_t kCueMs = 6000;
+  if (samples.empty()) {
+    return {};
+  }
+  const std::int64_t start = samples.front().timestamp_ms +
+                             (static_cast<std::int64_t>(index) * kCueMs);
+  const std::int64_t end = start + kCueMs;
+  std::vector<EyeSignSample> window;
+  for (const EyeSignSample& sample : samples) {
+    if (sample.timestamp_ms >= start && sample.timestamp_ms < end) {
+      window.push_back(sample);
+    }
+  }
+  return window;
 }
 
 // Cues: look ahead normally; blink a few times, as while reading; rest;
@@ -255,6 +343,31 @@ TEST(EyeSignsOfTest, LongBlinksFixtureReadsALongBlink) {
       EyeSignsOf(FixtureSamples("long_blinks.probe"), kSettings);
 
   EXPECT_THAT(signs.long_blink, Eq(LongBlink::kYes));
+}
+
+// Cues: look straight ahead normally; widen your eyes as if surprised, and
+// hold; relax; widen your eyes again, and hold (#145/#165's own tenth
+// fixture, test/fixtures/eyes/README.md). Each of the four six-second cue
+// windows is read on its own, kDefaultEyeSignsWidenedEyesThreshold and
+// kDefaultEyeSignsWidenedEyesHoldMs's own measurements (src/config.h):
+// the two widen cues report widened, the ahead and relax cues do not.
+TEST(EyeSignsOfTest, WidenedEyesFixtureReadsWidenedInBothWidenWindowsOnly) {
+  const std::vector<EyeSignSample> samples =
+      FixtureSamples("widened_eyes.probe");
+  ASSERT_THAT(samples, ::testing::Not(::testing::IsEmpty()));
+
+  EXPECT_THAT(EyeSignsOf(CueWindow(samples, 0), kSettings).widened_eyes,
+              Eq(WidenedEyes::kNo))
+      << "ahead";
+  EXPECT_THAT(EyeSignsOf(CueWindow(samples, 1), kSettings).widened_eyes,
+              Eq(WidenedEyes::kYes))
+      << "widen";
+  EXPECT_THAT(EyeSignsOf(CueWindow(samples, 2), kSettings).widened_eyes,
+              Eq(WidenedEyes::kNo))
+      << "relax";
+  EXPECT_THAT(EyeSignsOf(CueWindow(samples, 3), kSettings).widened_eyes,
+              Eq(WidenedEyes::kYes))
+      << "widen2";
 }
 
 // Baseline: none of #139's nine fixtures carries a cue that deliberately

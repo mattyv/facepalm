@@ -434,8 +434,9 @@ TEST(BetweenTest, ASampleWithNoRestingPoseCountsAsUnknownContent) {
 
 constexpr EyeSignSettings kEyeSignSettings = {.elevated_blinks_per_minute = 14,
                                               .long_blink_ms = 500,
-                                              .widened_eyes_threshold = 0.15,
-                                              .widened_eyes_hold_ms = 200,
+                                              .widened_eyes_threshold = 0.025,
+                                              .widened_eyes_hold_ms = 1000,
+                                              .widened_eyes_max_side_look = 0.2,
                                               .min_window_ms = 3000};
 
 TEST(EyeSignsBetweenTest, NoSamplesInRangeIsUnknown) {

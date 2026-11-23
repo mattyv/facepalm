@@ -18,6 +18,13 @@ namespace {
 // eyeWideRight.
 constexpr int kEyeWideLeft = 21;
 constexpr int kEyeWideRight = 22;
+// src/eyes_probe.h's own blendshape indices for eyeLookInLeft/Right and
+// eyeLookOutLeft/Right (#145, #165): EyeSignSample::side_look's own
+// inputs.
+constexpr int kEyeLookInLeft = 13;
+constexpr int kEyeLookInRight = 14;
+constexpr int kEyeLookOutLeft = 15;
+constexpr int kEyeLookOutRight = 16;
 
 constexpr double kMillisecondsPerMinute = 60000.0;
 
@@ -105,11 +112,20 @@ std::optional<WidenedEyes> WidenedEyesNamed(std::string_view name) {
 
 EyeSignSample SampleFrom(const Face& face, double blink_threshold,
                          std::int64_t timestamp_ms) {
+  const double look_in =
+      (static_cast<double>(face.blendshapes[kEyeLookInLeft]) +
+       static_cast<double>(face.blendshapes[kEyeLookInRight])) /
+      2;
+  const double look_out =
+      (static_cast<double>(face.blendshapes[kEyeLookOutLeft]) +
+       static_cast<double>(face.blendshapes[kEyeLookOutRight])) /
+      2;
   return {.timestamp_ms = timestamp_ms,
           .blink = EyeSignalFrom(face, blink_threshold).blink,
           .eye_wide = (static_cast<double>(face.blendshapes[kEyeWideLeft]) +
                        static_cast<double>(face.blendshapes[kEyeWideRight])) /
-                      2};
+                      2,
+          .side_look = std::max(look_in, look_out)};
 }
 
 EyeSigns EyeSignsOf(std::span<const EyeSignSample> samples,
@@ -124,7 +140,8 @@ EyeSigns EyeSignsOf(std::span<const EyeSignSample> samples,
       samples, [](const EyeSignSample& sample) { return sample.blink; });
   const std::int64_t widened_ms =
       LongestRunMs(samples, [&settings](const EyeSignSample& sample) {
-        return sample.eye_wide >= settings.widened_eyes_threshold;
+        return sample.eye_wide >= settings.widened_eyes_threshold &&
+               sample.side_look < settings.widened_eyes_max_side_look;
       });
   EyeSigns signs;
   // #171: window_ms > 0 guards the divide just below, whatever
