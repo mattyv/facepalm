@@ -283,10 +283,10 @@ facepalm_unit(calibrate_cli)
 # daemon's reply, so tools/menu/main.mm and main_linux.cc stay thin glue.
 facepalm_unit(calibration_flow)
 target_link_libraries(calibration_flow PUBLIC calibration)
-# #177: calibration_flow_test builds one reply with protocol's own, real
-# CalibrationStatusJson (pure computation, not a collaborator this test
-# mocks: calibration_flow.cc itself never calls it) rather than hand-
-# escaping a refusal hint's special characters as a JSON literal.
+# #177/#178: calibration_flow_test builds its replies with protocol's own,
+# real CalibrationStatusJson and ErrorJson (pure computation, not a
+# collaborator this test mocks: calibration_flow.cc itself never calls
+# them), so the parser is tested against exactly what the daemon writes.
 if(BUILD_TESTING)
   target_link_libraries(calibration_flow_test PRIVATE protocol)
 endif()
@@ -387,6 +387,7 @@ if(FACEPALM_FUZZTEST)
   facepalm_fuzz_test(tuning LIBS tuning feelings)
   facepalm_fuzz_test(frame_times LIBS frame_times)
   facepalm_fuzz_test(calibration_store LIBS calibration_store head_pose)
+  facepalm_fuzz_test(calibration_flow LIBS calibration_flow protocol)
   facepalm_fuzz_test(cameras_listing LIBS cameras_listing)
   facepalm_fuzz_test(feelings LIBS feelings)
   facepalm_fuzz_test(head_pose LIBS head_pose)
