@@ -1070,6 +1070,10 @@ client gives alongside a beat -- is not modeled here, the same way
 `src/screen_context.h`'s own comment already excuses `CoarseGazeFrom` from
 a spec entry: it is a stateless computation with no lifecycle of its own,
 tested directly instead (`ContentHitFromTest` in `test/screen_context_test.cc`).
+The y-up-to-y-down flip a y-up platform source applies before handing
+over any `ScreenRect` or `MousePosition` (#168, #169's own
+`YDownFromYUp`, `src/screen_context.h`) is the same kind of stateless
+computation, tested directly in the same file (`YDownFromYUpTest`).
 
 The config leaves the puzzled face out: the rule treats it exactly as a nod or
 a shake, so two feelings are enough for a conflict, and a fourth cue made the
@@ -1593,8 +1597,16 @@ compute
 the screen from `View::screen` against `[NSScreen screens]` or
 `QGuiApplication::screens()`, primary/primary screen first then the rest,
 the same order `src/macos/screen_context_macos.mm`'s own
-`MacosScreenSource::Screens()` enumerates in on a Mac, so the daemon's own
-screen index lines up with AppKit's; `StepPrompt` in both names the
+`MacosScreenSource::Screens()` enumerates in on a Mac -- both keying
+"primary" off `[NSScreen screens].firstObject`, the true primary, rather
+than `[NSScreen mainScreen]`, the key window's own screen, which the
+wizard's own window becomes as it moves between monitors and which used
+to flip the ordering mid-session (#168, #169) -- so the daemon's own
+screen index lines up with AppKit's. On macOS, `primary` is captured once
+at `Start` (`primaryClicked:`'s own `_primaryScreen`) and reused for
+every later step, rather than re-read on each render, so moving the
+window never changes which screen orders or names the rest. `StepPrompt`
+in both names the
 screen (`ScreenDescription`: its position relative to the main one, and
 its display name) the same call builds. `primaryClicked:`/`PrimaryClicked`
 pass `[NSScreen screens].count`/`QGuiApplication::screens().size()` to

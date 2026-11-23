@@ -29,6 +29,10 @@ bool EntirelyRightOf(const ScreenRect& main, const ScreenRect& other) {
 
 }  // namespace
 
+double YDownFromYUp(double y, double height, double primary_height) {
+  return primary_height - (y + height);
+}
+
 std::string_view Name(Gaze gaze) {
   // In Gaze's order, as src/feelings.cc's own Name(Feeling) is written.
   constexpr std::array<std::string_view, 4> kNames = {

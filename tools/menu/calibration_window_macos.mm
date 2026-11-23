@@ -27,20 +27,25 @@ NSString* const kGainsStepText =
     @"left, then right, keeping your eyes on it the whole time. Then click "
     @"Next.";
 
-// Every screen AppKit reports, main first then the rest in [NSScreen
-// screens]' own order -- the same order MacosScreenSource::Screens()
-// (src/macos/screen_context_macos.mm) enumerates them in, which the
-// daemon's own screen index (CalibrationFlow::View::screen) is counted
-// against.
-NSArray<NSScreen*>* OrderedScreens() {
+// Every screen AppKit reports, `primary` first then the rest in
+// [NSScreen screens]' own order -- the same order
+// MacosScreenSource::Screens() (src/macos/screen_context_macos.mm)
+// enumerates them in, now that both pick the true primary
+// ([NSScreen screens].firstObject) the same way (#168, #169): this
+// comment used to claim that match while `primary` here was
+// [NSScreen mainScreen], the key window's own screen, which it is not.
+// `primary` is passed in, captured once at Start (primaryClicked:'s own
+// _primaryScreen), rather than read fresh on every call: mainScreen used
+// to swap as the wizard's own window moved between screens and flip this
+// ordering mid-session (#168).
+NSArray<NSScreen*>* OrderedScreens(NSScreen* primary) {
   NSArray<NSScreen*>* screens = [NSScreen screens];
-  NSScreen* main = [NSScreen mainScreen];
   NSMutableArray<NSScreen*>* ordered = [NSMutableArray arrayWithCapacity:screens.count];
-  if (main != nil) {
-    [ordered addObject:main];
+  if (primary != nil) {
+    [ordered addObject:primary];
   }
   for (NSScreen* screen in screens) {
-    if (screen != main) {
+    if (screen != primary) {
       [ordered addObject:screen];
     }
   }
@@ -50,25 +55,29 @@ NSArray<NSScreen*>* OrderedScreens() {
 // `screen`, or nil once `index` is past the last one AppKit reports (the
 // window simply stays where it was, rather than this method's caller
 // moving it onto nothing).
-NSScreen* ScreenAt(int index) {
-  NSArray<NSScreen*>* screens = OrderedScreens();
+NSScreen* ScreenAt(NSScreen* primary, int index) {
+  NSArray<NSScreen*>* screens = OrderedScreens(primary);
   if (index < 0 || static_cast<NSUInteger>(index) >= screens.count) {
     return nil;
   }
   return screens[static_cast<NSUInteger>(index)];
 }
 
-// Where `screen` sits relative to the main one: "the main screen", or its
-// side -- left, right, above or below -- by whichever of the two, x or y,
-// moved further from the main screen's own origin (#135: "the screen the
-// prompt names").
-NSString* ScreenPosition(NSScreen* screen) {
-  NSScreen* main = [NSScreen mainScreen];
-  if (screen == main || main == nil) {
+// Where `screen` sits relative to the primary one: "the main screen", or
+// its side -- left, right, above or below -- by whichever of the two, x
+// or y, moved further from the primary screen's own origin (#135: "the
+// screen the prompt names"). `primary` names it rather than this
+// function reading [NSScreen mainScreen] itself (#168, #169): that is
+// the key window's own screen, which the wizard's own window becomes as
+// it moves between monitors, so reading it fresh here would describe
+// every other screen relative to wherever the window last landed instead
+// of one fixed reference.
+NSString* ScreenPosition(NSScreen* primary, NSScreen* screen) {
+  if (screen == primary || primary == nil) {
     return @"the main screen";
   }
-  const CGFloat dx = screen.frame.origin.x - main.frame.origin.x;
-  const CGFloat dy = screen.frame.origin.y - main.frame.origin.y;
+  const CGFloat dx = screen.frame.origin.x - primary.frame.origin.x;
+  const CGFloat dy = screen.frame.origin.y - primary.frame.origin.y;
   if (std::abs(dx) >= std::abs(dy)) {
     return dx < 0 ? @"the screen to the left" : @"the screen to the right";
   }
@@ -79,8 +88,8 @@ NSString* ScreenPosition(NSScreen* screen) {
 // "the screen to the left (Dell U2720Q)", naming both the screen's
 // position and its display name (#135, #137), or just the position for a
 // screen AppKit cannot name.
-NSString* ScreenDescription(NSScreen* screen) {
-  NSString* position = ScreenPosition(screen);
+NSString* ScreenDescription(NSScreen* primary, NSScreen* screen) {
+  NSString* position = ScreenPosition(primary, screen);
   if (screen.localizedName.length == 0) {
     return position;
   }
@@ -91,7 +100,7 @@ NSString* ScreenDescription(NSScreen* screen) {
 // specs/Calibration.tla's own targets (the resting pose, #137's gains
 // step, then each screen's centre and four corners), naming the screen a
 // point's own prompt is for (#135).
-NSString* StepPrompt(const facepalm::CalibrationFlow::View& view) {
+NSString* StepPrompt(NSScreen* primary, const facepalm::CalibrationFlow::View& view) {
   if (view.resting_step) {
     return @"Sit the way you normally would and look at the centre of "
            @"the screen in front of you, then click Next.";
@@ -117,8 +126,8 @@ NSString* StepPrompt(const facepalm::CalibrationFlow::View& view) {
       where = @"the bottom-right corner";
       break;
   }
-  NSScreen* screen = ScreenAt(view.screen);
-  NSString* screenName = screen != nil ? ScreenDescription(screen)
+  NSScreen* screen = ScreenAt(primary, view.screen);
+  NSString* screenName = screen != nil ? ScreenDescription(primary, screen)
                                        : [NSString stringWithFormat:@"screen %d", view.screen + 1];
   return
       [NSString stringWithFormat:@"Look at %@ of %@, the way you normally would, then click Next.",
@@ -144,6 +153,14 @@ NSString* ResultText(int screens) {
 @implementation CalibrationWindowController {
   facepalm::PosixCalibrateClientIo _io;
   std::unique_ptr<facepalm::CalibrationFlow> _flow;
+  // The true primary screen (#168, #169: [NSScreen screens].firstObject,
+  // not [NSScreen mainScreen], the key window's own screen), captured
+  // once when the session starts (primaryClicked:) and reused for every
+  // later step: the wizard's own window becomes the key window as it
+  // moves between screens, so reading mainScreen again on a later step
+  // would reorder and rename screens mid-session instead of keeping one
+  // fixed reference throughout.
+  NSScreen* _primaryScreen;
 }
 
 - (instancetype)initWithSocketPath:(std::string)socketPath token:(std::string)token {
@@ -198,7 +215,7 @@ NSString* ResultText(int screens) {
   if (view.resting_step || view.gains_step) {
     return;
   }
-  NSScreen* screen = ScreenAt(view.screen);
+  NSScreen* screen = ScreenAt(self->_primaryScreen, view.screen);
   if (screen == nil) {
     return;
   }
@@ -224,7 +241,7 @@ NSString* ResultText(int screens) {
   switch (view.state) {
     case facepalm::CalibrationFlow::State::kPrompting:
       [self moveToScreenForStep:view];
-      self.label.stringValue = StepPrompt(view);
+      self.label.stringValue = StepPrompt(self->_primaryScreen, view);
       self.primaryButton.title = @"Next";
       self.primaryButton.hidden = NO;
       self.secondaryButton.title = @"Cancel";
@@ -252,6 +269,10 @@ NSString* ResultText(int screens) {
   (void)sender;
   if (!self.started) {
     self.started = YES;
+    // The true primary screen (#168, #169), captured once here rather
+    // than read fresh on every later step: see _primaryScreen's own
+    // comment above.
+    self->_primaryScreen = [NSScreen screens].firstObject;
     // The real screen count (#135), not a hardcoded one screen: every
     // screen [NSScreen screens] reports, the same count
     // CalibrationSession::kMaxScreens's own caller (the daemon) bounds.

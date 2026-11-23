@@ -5,6 +5,65 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-23: macOS screens and mouse are normalised to top-left-origin, y-down at the source, and the calibration wizard orders and names screens off a primary captured once per session, closing #168 and #169
+
+-   **Decision (flip at the source, in `MacosScreenSource`, rather than
+    teach `ContentHitFrom` two coordinate spaces):** `MacosScreenSource::
+    Screens()` and `::Mouse()` (`src/macos/screen_context_macos.mm`) used
+    to hand over raw Cocoa frames and `NSEvent` points -- y-up, origin at
+    the primary screen's bottom-left -- while `ScreenRect` and
+    `ContentRect`'s own contracts, and `ContentHitFrom`'s math
+    (`src/screen_context.cc`), already assumed top-left-origin, y-down,
+    the space Linux's XRandr geometry already is. On any multi-monitor
+    arrangement this judged a beat's content hit, and `SideOf`/`ZoneOf`'s
+    screen-relative reads, against the wrong vertical axis (#169). The
+    fix is a new pure function, `YDownFromYUp` (`src/screen_context.h`,
+    `src/screen_context.cc`), that flips a y-up rectangle's top (or a
+    point, with `height` 0) against the primary screen's own height; only
+    `MacosScreenSource` calls it. The rejected alternative was passing
+    the platform's own space through and having `ContentHitFrom` branch
+    on it: that would spread the y-up/y-down distinction into every
+    caller of `ScreenRect`, rather than fixing it once where the y-up
+    reading enters the system.
+-   **Decision (`main` is the true primary screen, not the key window's
+    own):** `MacosScreenSource::Screens()` used to mark `ScreenRect::main`
+    on `[NSScreen mainScreen]`, the screen holding the key window, a
+    pre-existing mismatch with every other reader's assumption that
+    `main` is the screen the camera faces (load-bearing since #92, #169).
+    It now marks `[NSScreen screens].firstObject`, AppKit's own true
+    primary (the screen with the menu bar), stable regardless of which
+    window has focus.
+-   **Decision (the calibration wizard captures its own primary once, at
+    `Start`, instead of reading `[NSScreen mainScreen]` on every step):**
+    `tools/menu/calibration_window_macos.mm`'s `OrderedScreens`,
+    `ScreenAt`, `ScreenPosition` and `StepPrompt` used to read
+    `[NSScreen mainScreen]` fresh each time they ran. Since the wizard's
+    own window becomes the key window as `moveToScreenForStep:` moves it
+    onto each step's screen, that screen became "primary" on the very
+    next render, reordering and renaming every other screen out from
+    under the person mid-session (#168). `CalibrationWindowController`
+    now captures `[NSScreen screens].firstObject` once, in
+    `primaryClicked:` when the session starts, into a new `_primaryScreen`
+    ivar, and threads it through every one of those functions instead.
+    `specs/CalibrationMenu.tla`'s own `windowOnScreen` abstracts only
+    whether the window moved onto the step's intended screen, not which
+    physical `NSScreen` that is, so this bug sat below the model's own
+    abstraction; no spec change was needed, only `specs/README.md`'s
+    prose description of the macOS/Linux implementation, which already
+    described "primary first" as the intent.
+-   **Verified:** #168 and #169 were read from the code at `065bd29`
+    (both issues cite file:line there) rather than reproduced on a real
+    multi-monitor Mac, since no second monitor was available in this
+    session; the fix is covered by `YDownFromYUpTest`
+    (`test/screen_context_test.cc`), a pure-function test against
+    monitor arrangements including a screen above and a shorter screen
+    left of the primary, run on real hardware (macOS, Apple clang). The
+    calibration window's own screen-capture change has no test of its
+    own, following `src/macos/screen_context_macos.h`'s own precedent for
+    AppKit code that needs a real desktop session with more than one
+    screen to exercise meaningfully; `menu_store_checks` still builds and
+    passes with the changed file linked in.
+
 ## 2026-11-23: Blink rate and a long blink join the personal read as coarse signs; widened eyes too, on a reasoned ceiling rather than a measured positive, closing #145
 
 -   **Decision (three more `Evidence` fields, following #143's own

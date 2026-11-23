@@ -10,10 +10,13 @@
 
 namespace facepalm {
 
-// One screen's position and size, in whatever coordinate space the platform
-// source reports (#36 item 11): consistent across one call, not across
-// platforms. `main` is the screen the camera is assumed to face, since
-// nothing here is calibrated to the camera's real position.
+// One screen's position and size, top-left-origin and y-down (#168, #169):
+// every platform source normalises to this same space at the source --
+// Linux's XRandr geometry already is it, and macOS's own Cocoa frames,
+// which are y-up, are flipped into it with YDownFromYUp below -- so it is
+// consistent across platforms as well as within one call. `main` is the
+// screen the camera is assumed to face, since nothing here is calibrated
+// to the camera's real position.
 struct ScreenRect {
   double x = 0;
   double y = 0;
@@ -21,6 +24,16 @@ struct ScreenRect {
   double height = 0;
   bool main = false;
 };
+
+// Flips `y` -- the top of a rectangle `height` tall, in Cocoa's own y-up
+// global screen space (origin at the primary screen's bottom-left, y
+// growing upward) -- into that same top in the top-left-origin, y-down
+// space ScreenRect and MousePosition (src/screen_source.h) carry (#168,
+// #169), against `primary_height`: the primary screen's own height, in
+// that same y-up space. A point flips the same way, with `height` 0. The
+// only caller is a y-up platform source (macOS's MacosScreenSource); a
+// y-down source (Linux's XRandr) needs no flip.
+double YDownFromYUp(double y, double height, double primary_height);
 
 // Where another screen sits relative to the main one, read from
 // ScreenRect::main and the rest of a Screens() call: to its left, its
@@ -96,9 +109,9 @@ std::string_view BeatGazeName(Gaze gaze);
 std::optional<Gaze> BeatGazeNamed(std::string_view name);
 
 // A content rectangle a client's beat may carry (#144): the area on
-// screen its question or proposal occupies, in the same coordinate space
-// as ScreenRect (#36 item 11), consistent across one call, not across
-// platforms.
+// screen its question or proposal occupies, in the same top-left-origin,
+// y-down space as ScreenRect (#168, #169), consistent across one call
+// and, since that fix, across platforms too.
 struct ContentRect {
   double x = 0;
   double y = 0;
@@ -127,8 +140,9 @@ std::string_view Name(ContentHit hit);
 // here reads it, the same simplification CoarseGazeFrom's own uncalibrated
 // reading already makes) -- and compared to `content`. Positive yaw is a
 // turn to the subject's left (src/reaction.h), which is `main`'s own left
-// (the lower end of its x); positive pitch is looking down, `main`'s own
-// lower end of y.
+// (the lower end of its x); positive pitch is looking down, toward
+// `main`'s own bottom -- the higher end of its y, since y runs top to
+// bottom (#168, #169).
 //
 ContentHit ContentHitFrom(const HeadRotation& gaze,
                           const std::optional<HeadRotation>& resting,

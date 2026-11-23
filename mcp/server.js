@@ -66,9 +66,9 @@ const delivery = z.object({
     feelings: z.array(feelingName).min(1),
   }).optional(),
 });
-// A content rectangle (#144): screen coordinates in whatever space the
-// daemon's own screen source reports, consistent across one call, not
-// across platforms. Only meaningful alongside beat.
+// A content rectangle (#144): screen coordinates in the daemon's own
+// top-left-origin, y-down space (#168, #169), consistent across one call
+// and across platforms. Only meaningful alongside beat.
 const contentRect = z.object({
   x: z.number().int().safe(), y: z.number().int().safe(),
   width: z.number().int().min(1).safe(), height: z.number().int().min(1).safe(),
