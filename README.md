@@ -84,7 +84,13 @@ made since, each with its reason, are in the
     reader (#140 through #145) can test against `test/fixtures/eyes`'s
     recordings. Eyes never decide a feeling by rule; gaze is context and a
     feature the personal read learns from. `scripts/record_eye_fixtures.sh`
-    guides the user through recording those fixtures.
+    guides the user through recording those fixtures. `src/eyes_gaze_replay`
+    replays a recording's `head_pose` and `eyes` lines together, composing
+    real gaze through `ExpressionTracker`, `EyeGazeTracker` and
+    `LookAwayDetector` in the order `LookAwayReader` runs them, rather than
+    `src/look_away_replay`'s own head-pose-only fallback; its tests are what
+    proved `eye_gaze.*`, `calibration.*` and the squint-guard's own defaults
+    (below) against #139's nine fixtures.
 -   `src/eye_gaze`: coarse gaze reads head pose composed with eye-in-head
     signal, not head pose alone (#137). `EyeSignalFrom` reads the eye-look
     blendshapes `src/eyes_probe` already formats, into a horizontal and
@@ -557,8 +563,8 @@ expressions.settle_ms = 600
 # Narrowed eyes alone pauses further on a downward glance or a blink,
 # which lift the squint score the same way a real squint does (#140):
 # MediaPipe's eyeLookDown and eyeBlink scores, either eye, above which it
-# pauses. Provisional, pending a tuning recording.
-expressions.eye_look_down_threshold = 0.3
+# pauses. Tuned on #139's recordings.
+expressions.eye_look_down_threshold = 0.2
 expressions.eye_blink_threshold = 0.5
 # Looking away (#35): yaw or pitch this many degrees from the resting pose,
 # held this long. Nods and shakes are shorter than the hold.
@@ -583,12 +589,13 @@ screen_context.other_screen_degrees = 7.5
 
 The macOS menu's and the Linux tray's **Settings** windows show and save
 most of the settings above, including looking away's own `enabled`,
-`degrees` and `hold_ms` (#79) and screen context's (window titles still
-default off there too). `eye_gaze.*`, `calibration.*` (#137) and looking
-away's own `averted_ms` and `other_screen_margin_degrees` (#141) are
-config-file only, provisional settings not yet shown there. Turn Facepalm
-off and on again from the menu to apply a change, as for the other
-settings.
+`degrees` and `hold_ms` (#79), screen context's (window titles still
+default off there too) and the squint-guard's own `eye_look_down_threshold`
+and `eye_blink_threshold` (#140, #150). `eye_gaze.*`, `calibration.*`
+(#137) and looking away's own `averted_ms` and
+`other_screen_margin_degrees` (#141) are config-file only, provisional
+settings not yet shown there. Turn Facepalm off and on again from the menu
+to apply a change, as for the other settings.
 
 A nod, a shake or a tilt moves the blendshape scores as much as an
 expression does, so while the head is away from its resting pose, or has

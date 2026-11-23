@@ -134,8 +134,9 @@ struct CalibrationSettings {
   // Matches Config's own kDefaultEyeGazeHorizontalGain/VerticalGain
   // (src/config.h); named here too since this struct's own defaults
   // stand alone, for a caller (such as a test) that builds one without
-  // going through Config at all.
-  static constexpr double kDefaultGain = 30;
+  // going through Config at all. Tuned to 45 alongside Config's own
+  // (#139, #137).
+  static constexpr double kDefaultGain = 45;
   static constexpr double kDefaultMinHeadTravelDegrees = 10;
   static constexpr double kDefaultMinAxisDegrees = 4;
   static constexpr double kDefaultMinSpreadDegrees = 3;

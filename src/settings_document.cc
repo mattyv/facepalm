@@ -35,7 +35,7 @@ std::optional<std::string> UpdateSettingsDocument(std::string_view original,
     error = "Frames per second must be between 1 and 60.";
     return std::nullopt;
   }
-  constexpr std::array<std::string_view, 17> kNames = {
+  constexpr std::array<std::string_view, 19> kNames = {
       "camera.frames_per_second",
       "camera.device_id",
       "gestures.enabled",
@@ -47,6 +47,8 @@ std::optional<std::string> UpdateSettingsDocument(std::string_view original,
       "expressions.pose_degrees",
       "expressions.pose_range",
       "expressions.settle_ms",
+      "expressions.eye_look_down_threshold",
+      "expressions.eye_blink_threshold",
       "looking_away.enabled",
       "looking_away.degrees",
       "looking_away.hold_ms",
@@ -65,6 +67,8 @@ std::optional<std::string> UpdateSettingsDocument(std::string_view original,
       settings.expression_pose_degrees,
       settings.expression_pose_range,
       settings.expression_settle_ms,
+      settings.expression_eye_look_down_threshold,
+      settings.expression_eye_blink_threshold,
       settings.looking_away_enabled ? "true" : "false",
       settings.looking_away_degrees,
       settings.looking_away_hold_ms,
