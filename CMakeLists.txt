@@ -285,7 +285,9 @@ target_link_libraries(calibration_flow PUBLIC calibration)
 # CalibrationStatusJson (pure computation, not a collaborator this test
 # mocks: calibration_flow.cc itself never calls it) rather than hand-
 # escaping a refusal hint's special characters as a JSON literal.
-target_link_libraries(calibration_flow_test PRIVATE protocol)
+if(BUILD_TESTING)
+  target_link_libraries(calibration_flow_test PRIVATE protocol)
+endif()
 facepalm_unit(session_camera)
 # The daemon's readers are pure computation, so their factory's tests make
 # them for real. screen_context_reader (#61 item 11) is the one exception:
