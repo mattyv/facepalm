@@ -127,7 +127,12 @@ EyeSigns EyeSignsOf(std::span<const EyeSignSample> samples,
         return sample.eye_wide >= settings.widened_eyes_threshold;
       });
   EyeSigns signs;
-  if (window_ms >= settings.min_window_ms) {
+  // #171: window_ms > 0 guards the divide just below, whatever
+  // settings.min_window_ms itself allows (src/config.cc's own Set
+  // requires at least 1, but EyeSignSettings is a plain struct a test can
+  // still build with 0) -- a single sample, or several sharing one
+  // timestamp, is never enough to judge a rate from either way.
+  if (window_ms > 0 && window_ms >= settings.min_window_ms) {
     const double per_minute = static_cast<double>(blinks) *
                               kMillisecondsPerMinute /
                               static_cast<double>(window_ms);

@@ -233,9 +233,11 @@ struct Config {
 // calibration.min_head_travel_degrees, calibration.min_axis_degrees and
 // calibration.min_spread_degrees (0 to 180), and
 // eye_signs.elevated_blinks_per_minute (0 to 120),
-// eye_signs.long_blink_ms, eye_signs.widened_eyes_hold_ms and
-// eye_signs.min_window_ms (a whole number from 0 to 10000, #145), and
-// eye_signs.widened_eyes_threshold (0 to 1). Returns the config, or
+// eye_signs.long_blink_ms and eye_signs.widened_eyes_hold_ms (a whole
+// number from 0 to 10000, #145), eye_signs.min_window_ms (a whole number
+// from 1 to 10000, #145, #171: 0 would divide EyeSignsOf's own blink rate
+// by a zero-length window), and eye_signs.widened_eyes_threshold (0 to
+// 1). Returns the config, or
 // nothing with `error` naming the line, for an unknown name, a bad value, a
 // repeated name or a line with no `=`.
 std::optional<Config> ParseConfig(std::string_view text, std::string& error);

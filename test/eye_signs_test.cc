@@ -124,6 +124,19 @@ TEST(EyeSignsOfTest, AShortWindowIsUnknownForTheRateAlone) {
   EXPECT_THAT(signs.widened_eyes, Eq(WidenedEyes::kNo));
 }
 
+// #171: a single sample (or several sharing one timestamp) is a
+// zero-length window, which used to divide blinks by zero once
+// min_window_ms itself allowed 0 (src/config.cc now floors it at 1, but
+// EyeSignSettings is a plain struct this test can still build with 0).
+TEST(EyeSignsOfTest, AZeroLengthWindowIsUnknownForTheRateEvenWithNoFloor) {
+  EyeSignSettings settings = kSettings;
+  settings.min_window_ms = 0;
+  const std::vector<EyeSignSample> samples = Samples(0, 1, true, 0);
+
+  EXPECT_THAT(EyeSignsOf(samples, settings).blink_rate,
+              Eq(BlinkRate::kUnknown));
+}
+
 TEST(EyeSignsOfTest, AFewBlinksOverALongWindowIsNormal) {
   // One blink run over 10 s: 6 a minute, under the elevated threshold.
   std::vector<EyeSignSample> samples = Samples(0, 152, false, 0);

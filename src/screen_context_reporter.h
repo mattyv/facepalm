@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <optional>
 
@@ -24,7 +25,12 @@ namespace facepalm {
 // this holds, guarded by its own mutex: the daemon's composition root
 // calls it once a calibration session finishes (#136, #137), so Json's
 // very next call already reads the new profile, rather than only after a
-// restart.
+// restart. profile_ is a shared_ptr, not a borrowed pointer (#167): a
+// second calibration gives SetProfile a wholly fresh CalibrationProfile,
+// never mutating the one this reporter (or anyone concurrently reading
+// Json/Sample/Between on another thread) already holds a reference to,
+// so the object a reading is mid-read of is never torn or freed out from
+// under it.
 class ScreenContextReporter {
  public:
   // protocol.cc's own longest beat window: nothing asks Between about a
@@ -33,13 +39,12 @@ class ScreenContextReporter {
   static constexpr std::int64_t kDefaultMaxWindowMs = 10000;
 
   // `titles_enabled` is Config's screen_context.window_titles_enabled.
-  // `profile`, when given, is an optional calibration profile (#61 item 12)
-  // this reporter reads no lifetime claim on, so the caller keeps it
-  // alive; a nullptr, or one with no screens, never adds
-  // "calibrated_screen" to Json's result, and its own gains (`profile`'s,
-  // once given) take over from `default_gains` for every ComposeGaze
-  // call Json makes. `head_only_yaw_degrees` is ComposeGaze's own.
-  // `max_window_ms` bounds Sample's own buffer (#142), gaze and eye
+  // `profile`, when given, is an optional calibration profile (#61 item
+  // 12), shared ownership (#167): a nullptr, or one with no screens,
+  // never adds "calibrated_screen" to Json's result, and its own gains
+  // (`profile`'s, once given) take over from `default_gains` for every
+  // ComposeGaze call Json makes. `head_only_yaw_degrees` is ComposeGaze's
+  // own. `max_window_ms` bounds Sample's own buffer (#142), gaze and eye
   // signs (#145/#165) alike. `eye_sign_settings` is EyeSignsBetween's
   // own (#165); a default-constructed one (every field 0) is only ever
   // passed by a test with no eye signs of its own to classify.
@@ -49,14 +54,14 @@ class ScreenContextReporter {
   // (main.cc's own config fields, or a test's own named constant), never
   // a bare literal in either position.
   // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
-  ScreenContextReporter(ScreenSource& source, GazeSettings settings,
-                        bool titles_enabled,
-                        const CalibrationProfile* profile = nullptr,
-                        EyeGains default_gains = {},
-                        double head_only_yaw_degrees =
-                            CalibrationSettings::kDefaultHeadOnlyYawDegrees,
-                        std::int64_t max_window_ms = kDefaultMaxWindowMs,
-                        EyeSignSettings eye_sign_settings = {});
+  ScreenContextReporter(
+      ScreenSource& source, GazeSettings settings, bool titles_enabled,
+      std::shared_ptr<const CalibrationProfile> profile = nullptr,
+      EyeGains default_gains = {},
+      double head_only_yaw_degrees =
+          CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+      std::int64_t max_window_ms = kDefaultMaxWindowMs,
+      EyeSignSettings eye_sign_settings = {});
 
   // {"active_app":"...","window_title":"...","mouse":{"x":..,"y":..},
   // "gaze":"...","calibrated_screen":n}, with active_app, window_title and
@@ -88,10 +93,12 @@ class ScreenContextReporter {
   // NOLINTEND(bugprone-easily-swappable-parameters)
 
   // Swaps the calibration profile Json reads from now on (#136, #137):
-  // nullptr for none. `profile`, when not null, must outlive every Json
-  // call made after this returns, the same lifetime constraint the
-  // constructor's own `profile` carries.
-  void SetProfile(const CalibrationProfile* profile);
+  // nullptr for none. Takes shared ownership of `profile` (#167): the
+  // caller is expected to hand this a freshly built CalibrationProfile
+  // each time, never the one an earlier call already gave this reporter,
+  // so a reading already mid-read of the old one keeps reading a whole,
+  // unchanging object for as long as it holds its own reference.
+  void SetProfile(std::shared_ptr<const CalibrationProfile> profile);
 
   // Samples this frame's composed gaze, and, given one, its own eye
   // sign (#145/#165), into the windows Between and EyeSignsBetween can
@@ -124,8 +131,10 @@ class ScreenContextReporter {
   // [start_ms, end_ms). Gaze::kUnknown, and ContentHit::kUnknown when
   // `content` is given, with no samples in range -- no screen context,
   // or a range predating every sample Sample's own `max_window_ms` still
-  // keeps. A tie between zones, or between yes and no, keeps whichever
-  // Sample saw first in the window.
+  // keeps. A tie between zones keeps the lowest Gaze enum value among
+  // them, not whichever Sample saw first (std::ranges::max_element's own
+  // first-maximum rule over zone_votes, indexed by Gaze); a tie between
+  // yes and no keeps yes (#171).
   [[nodiscard]] GazeWindow Between(
       std::int64_t start_ms, std::int64_t end_ms,
       const std::optional<ContentRect>& content) const;
@@ -172,7 +181,7 @@ class ScreenContextReporter {
   const std::int64_t max_window_ms_;
   const EyeSignSettings eye_sign_settings_;
   mutable std::mutex mutex_;
-  const CalibrationProfile* profile_;
+  std::shared_ptr<const CalibrationProfile> profile_;  // #167; under mutex_.
   std::deque<GazeSample> samples_;  // Oldest first; under mutex_.
   // Oldest first; under mutex_ (#145/#165).
   std::deque<EyeSignSample> eye_signs_samples_;

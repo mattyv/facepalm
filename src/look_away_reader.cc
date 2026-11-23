@@ -1,10 +1,12 @@
 #include "src/look_away_reader.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "src/calibration.h"
@@ -41,17 +43,17 @@ std::string JsonFor(const LookAwayReport& report) {
 
 }  // namespace
 
-LookAwayReader::LookAwayReader(ExpressionTracker::Settings tracker,
-                               EyeGazeTracker::Settings eye_tracker,
-                               LookAwayDetector::Settings detector,
-                               EyeGains gains, double head_only_yaw_degrees,
-                               const CalibrationProfile* profile)
+LookAwayReader::LookAwayReader(
+    ExpressionTracker::Settings tracker, EyeGazeTracker::Settings eye_tracker,
+    LookAwayDetector::Settings detector, EyeGains gains,
+    double head_only_yaw_degrees,
+    std::shared_ptr<const CalibrationProfile> profile)
     : tracker_(tracker),
       eye_tracker_(eye_tracker),
       detector_(detector),
       gains_(gains),
       head_only_yaw_degrees_(head_only_yaw_degrees),
-      profile_(profile) {}
+      profile_(std::move(profile)) {}
 
 void LookAwayReader::OnFace(const Face& face, int /*width*/, int /*height*/,
                             std::int64_t timestamp_ms,
@@ -81,11 +83,17 @@ void LookAwayReader::OnFace(const Face& face, int /*width*/, int /*height*/,
   tracker_.Update(scores, *pose, timestamp_ms);
   const std::optional<EyeSignal> eye = eye_tracker_.Signal();
   const std::optional<EyeSignal> eye_resting = eye_tracker_.Resting();
+  const std::shared_ptr<const CalibrationProfile> profile = Profile();
+  // A calibrated person's own gains take over from the constructor's
+  // default (#170), the way ScreenContextReporter::ZoneOf's own already
+  // does: a profile's screens were calibrated against its own estimated
+  // gains, not necessarily gains_, so the kOtherScreen box test below
+  // must compose gaze the same way the profile itself was saved with.
+  const EyeGains gains = profile != nullptr ? profile->gains : gains_;
   const HeadRotation gaze =
-      ComposeGaze(*pose, eye, eye_resting, gains_, head_only_yaw_degrees_);
-  const CalibrationProfile* profile = profile_.load();
+      ComposeGaze(*pose, eye, eye_resting, gains, head_only_yaw_degrees_);
   if (const std::optional<LookAwayReport> report =
-          detector_.Update(gaze, resting, profile, timestamp_ms)) {
+          detector_.Update(gaze, resting, profile.get(), timestamp_ms)) {
     reactions.emplace_back(JsonFor(*report));
   }
 }
@@ -104,12 +112,20 @@ void LookAwayReader::OnNoFace() {
   // resting pose is read, not touched -- it keeps whatever it already
   // learned until a face returns and its own Update runs again, the way
   // it always has (see this file's own header comment).
-  detector_.Update(std::nullopt, tracker_.RestingPose(), profile_.load(),
+  const std::shared_ptr<const CalibrationProfile> profile = Profile();
+  detector_.Update(std::nullopt, tracker_.RestingPose(), profile.get(),
                    last_timestamp_ms_);
 }
 
-void LookAwayReader::SetProfile(const CalibrationProfile* profile) {
-  profile_.store(profile);
+void LookAwayReader::SetProfile(
+    std::shared_ptr<const CalibrationProfile> profile) {
+  const std::scoped_lock lock(profile_mutex_);
+  profile_ = std::move(profile);
+}
+
+std::shared_ptr<const CalibrationProfile> LookAwayReader::Profile() const {
+  const std::scoped_lock lock(profile_mutex_);
+  return profile_;
 }
 
 }  // namespace facepalm

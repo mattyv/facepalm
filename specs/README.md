@@ -1480,7 +1480,29 @@ with the freshly saved profile, synchronously, inside the same `Next` call
 that saves it, so the model's separate `Restart` action is in the code one
 indivisible step earlier than the model draws it -- `GuardApplyImmediately`
 is always on in the code, with no deferred path to exercise, which is why
-`ProfileEventuallyApplied`'s own test coverage is `NoStaleApply`'s. `src/
+`ProfileEventuallyApplied`'s own test coverage is `NoStaleApply`'s. The
+model's own `profile' = "new"` is already a single, indivisible
+replacement, never a mutation of whatever `profile` named before (#167):
+`Engine::OnCalibrationFinished` makes this true in the code too, giving
+`calibration_profile_` (and `reporter_`/`look_away_reader_`, through
+`SetProfile`) a wholly fresh `shared_ptr<const CalibrationProfile>` on
+every finish, rather than copy-assigning into the `CalibrationProfile`
+object a reading already in progress, on the camera's own thread, might
+be mid-read of with no lock `OnCalibrationFinished`'s own caller (a
+connection's thread, inside `CalibrationSession`'s mutex) takes.
+`ScreenContextReporter` and `LookAwayReader` each take their own snapshot
+of the shared_ptr under their own lock (`ScreenContextReporter`'s
+existing `mutex_`; `LookAwayReader`'s own new `profile_mutex_`) before
+reading it, so the object a reading names is never torn or freed under
+it; no spec change, since the model's own replacement was already
+atomic.
+`ScreenContextReporterTest.SetProfileRunsSafelyAlongsideJsonOnAnotherThread`
+and
+`LookAwayReaderTest.SetProfileRunsSafelyAlongsideOnFaceOnAnotherThread`
+are each this fix's own two-thread stress test, caught by ThreadSanitizer
+(CI's `thread-sanitizer` job) before it, the same way
+`CalibrationSessionTest.UpdateRunsSafelyAlongsideStartAndNextOnAnotherThread`
+above already is for `CalibrationSession` itself. `src/
 calibration_store.cc` saves the profile atomically (write, sync, rename,
 sync the directory) to a private file (mode 0600), exactly once, on
 `Finish`; a failed save leaves the capture in place so `Next` can be

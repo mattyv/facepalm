@@ -5,6 +5,24 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-23: Publish each calibration as a fresh shared profile
+
+A finished calibration is published as a new
+`std::shared_ptr<const CalibrationProfile>`; the screen context reporter
+and the look-away reader each keep a snapshot and swap the whole pointer,
+so the camera thread never reads a profile another thread is assigning.
+The look-away reader composes gaze with the profile's own gains once one
+is set, as the reporter already did, so the other-screen box test and the
+boxes agree. A resting step where every frame blinked is refused like a
+weak gains step, and `eye_signs.min_window_ms` must be at least 1.
+Why: a second calibration in one run copy-assigned the published profile
+under a live reader (use-after-free with a new screen count). Rejected:
+a lock around every read of a long-lived profile (the readers already
+hold their own locks; a snapshot needs none on the camera thread).
+Evidence: [#167](https://github.com/mattyv/facepalm/issues/167),
+[#170](https://github.com/mattyv/facepalm/issues/170),
+[#171](https://github.com/mattyv/facepalm/issues/171).
+
 ## 2026-11-23: macOS screens and mouse are normalised to top-left-origin, y-down at the source, and the calibration wizard orders and names screens off a primary captured once per session, closing #168 and #169
 
 -   **Decision (flip at the source, in `MacosScreenSource`, rather than

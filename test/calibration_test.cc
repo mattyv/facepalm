@@ -203,6 +203,36 @@ TEST_F(NoSaveWithWeakStepTest, ARefusedGainsStepCanBeRetried) {
   EXPECT_THAT(status->point, Eq(CalibrationPoint::kCentre));
 }
 
+// #171: every frame of the resting step blinked, so eye_sample_ never
+// accumulated anything -- refused the same way the gains step's own too-
+// little-head-travel check is, rather than saving a placeholder {0, 0}
+// that would bias every later step's own eye-relative-to-resting term.
+TEST_F(NoSaveWithWeakStepTest, RefusesARestingStepWhereEveryFrameBlinked) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0, 0, /*blink=*/true));
+
+  std::string error;
+  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
+  EXPECT_THAT(error, Eq("keep your eyes open while you look at the dot"));
+}
+
+TEST_F(NoSaveWithWeakStepTest, ARefusedRestingStepCanBeRetried) {
+  std::string start_error;
+  ASSERT_TRUE(session_.Start(1, start_error).has_value());
+  session_.Update(Pose(0, 0), Eye(0, 0, /*blink=*/true));
+  std::string weak_error;
+  ASSERT_THAT(session_.Next(weak_error), Eq(std::nullopt));
+
+  session_.Update(Pose(0, 0), EyeSignal{});
+  std::string error;
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_FALSE(status->resting_step);
+  EXPECT_TRUE(status->gains_step);
+}
+
 TEST_F(NoSaveWithWeakStepTest, RefusesACornerTooCloseToItsOwnCentre) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
@@ -392,16 +422,16 @@ TEST_F(CalibrationWalksEveryTargetTest, BlinkFramesNeverJoinTheGainsStep) {
   EXPECT_NEAR(captured.gains.horizontal, 20, 1e-9);
 }
 
-// A step where every frame blinks captures nothing for the eye signal, so
-// it falls back to a centred (0, 0) average rather than crashing or
-// leaving a stale value (#137): one indivisible walk through a whole
+// A point where every frame blinks captures nothing for the eye signal, so
+// its composed gaze falls back to head pose alone (#137); the resting
+// step itself is refused without an open-eyed frame (#171), so this one
+// rests with open, centred eyes: one indivisible walk through a whole
 // session, the same as the other full-session tests above.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-TEST_F(CalibrationWalksEveryTargetTest,
-       AllBlinkFramesLeaveTheRestingEyeCentred) {
+TEST_F(CalibrationWalksEveryTargetTest, AllBlinkPointsFallBackToHeadPoseAlone) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
-  session_.Update(Pose(0, 0), Eye(0.9, 0.9, /*blink=*/true));
+  session_.Update(Pose(0, 0), Eye(0, 0));
   CalibrationProfile captured;
   EXPECT_CALL(store_, Save)
       .WillOnce([&](const CalibrationProfile& profile, std::string&) {

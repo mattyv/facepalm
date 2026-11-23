@@ -5,9 +5,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "src/calibration.h"
@@ -37,7 +39,7 @@ std::string PixelNumber(double value) {
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
 ScreenContextReporter::ScreenContextReporter(
     ScreenSource& source, GazeSettings settings, bool titles_enabled,
-    const CalibrationProfile* profile, EyeGains default_gains,
+    std::shared_ptr<const CalibrationProfile> profile, EyeGains default_gains,
     double head_only_yaw_degrees, std::int64_t max_window_ms,
     EyeSignSettings eye_sign_settings)
     // NOLINTEND(bugprone-easily-swappable-parameters)
@@ -48,11 +50,12 @@ ScreenContextReporter::ScreenContextReporter(
       head_only_yaw_degrees_(head_only_yaw_degrees),
       max_window_ms_(max_window_ms),
       eye_sign_settings_(eye_sign_settings),
-      profile_(profile) {}
+      profile_(std::move(profile)) {}
 
-void ScreenContextReporter::SetProfile(const CalibrationProfile* profile) {
+void ScreenContextReporter::SetProfile(
+    std::shared_ptr<const CalibrationProfile> profile) {
   const std::scoped_lock lock(mutex_);
-  profile_ = profile;
+  profile_ = std::move(profile);
 }
 
 // See the declaration (src/screen_context_reporter.h) for why pose/resting
