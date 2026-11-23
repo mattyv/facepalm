@@ -428,49 +428,58 @@ TEST_F(CalibrationFlowTest, NextTransitionsToDoneWithTheScreensCalibrated) {
   EXPECT_THAT(flow.CurrentView().screens, Eq(2));
 }
 
-// CalibrationMenu.tla's NextRefused/SessionEndsWithFlow: a refused "next"
-// always sends "calibrate cancel" before reporting the failure (#128), so
-// a session the daemon still has (the usual case this test's own error
-// means) is never left running with nobody left to answer for it.
-TEST_F(CalibrationFlowTest, NextSendsCancelAndReportsItsOwnErrorOnARefusal) {
+// CalibrationMenu.tla's NextRefused (#177): a refused "next" stays
+// "prompting" on the same step, with the daemon's own hint, and sends no
+// cleanup cancel -- the daemon never gave up the session over a refusal
+// (src/calibration.cc's Next only ResetStep()s it), so neither does this
+// flow.
+TEST_F(CalibrationFlowTest, NextStaysPromptingWithTheDaemonsHintOnARefusal) {
   RecordWrites();
   EXPECT_CALL(io_, ReadLine)
       .WillOnce(Return(R"({"ok":true})"))
       .WillOnce(Return(
           R"({"ok":true,"calibration":{"state":"running","index":0,"total":6,"step":"resting"}})"))
-      .WillOnce(Return(R"({"error":"no pose captured yet for this step"})"))
-      .WillOnce(Return(R"({"ok":true})"));
+      .WillOnce(Return(
+          R"({"ok":true,"calibration":{"state":"running","index":0,"total":6,)"
+          R"("step":"resting","refused":"no pose captured yet for this step"}})"));
   CalibrationFlow flow = Make();
   flow.Start(1);
 
   flow.Next();
 
   EXPECT_THAT(Sent(), ElementsAre("hello calibrate", "calibrate start 1",
-                                  "calibrate next", "calibrate cancel"));
-  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kFailed));
-  EXPECT_THAT(flow.CurrentView().error,
-              Eq("no pose captured yet for this step"));
+                                  "calibrate next"));
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kPrompting));
+  EXPECT_TRUE(view.resting_step);
+  EXPECT_THAT(view.hint, Eq("no pose captured yet for this step"));
 }
 
-// The cancel sent to clean up a refusal can itself fail or hang up; the
-// person still sees the original refusal, not a second error about the
-// cleanup they never asked for.
-TEST_F(CalibrationFlowTest, NextKeepsItsOwnErrorEvenWhenTheCleanupCancelFails) {
+// A save-error hint with a quote, a backslash, punctuation and a
+// non-ASCII character round-trips through protocol::CalibrationStatusJson's
+// own Quoted() and back (#177, #178), rather than breaking the reply's
+// shape.
+TEST_F(CalibrationFlowTest, NextCarriesARefusalHintWithPunctuation) {
   RecordWrites();
+  const CalibrationController::Status status{
+      .running = true,
+      .index = 0,
+      .total = 6,
+      .resting_step = true,
+      .refusal = R"(the disk "home" at C:\\ is 90% full — try again)"};
   EXPECT_CALL(io_, ReadLine)
       .WillOnce(Return(R"({"ok":true})"))
       .WillOnce(Return(
           R"({"ok":true,"calibration":{"state":"running","index":0,"total":6,"step":"resting"}})"))
-      .WillOnce(Return(R"({"error":"no pose captured yet for this step"})"))
-      .WillOnce(Return(std::nullopt));
+      .WillOnce(Return(protocol::CalibrationStatusJson(status)));
   CalibrationFlow flow = Make();
   flow.Start(1);
 
   flow.Next();
 
-  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kFailed));
-  EXPECT_THAT(flow.CurrentView().error,
-              Eq("no pose captured yet for this step"));
+  EXPECT_THAT(flow.CurrentView().state, Eq(CalibrationFlow::State::kPrompting));
+  EXPECT_THAT(flow.CurrentView().hint,
+              Eq(R"(the disk "home" at C:\\ is 90% full — try again)"));
 }
 
 // A hang-up, unlike a refusal, means the connection -- and whatever

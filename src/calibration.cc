@@ -163,14 +163,16 @@ std::optional<CalibrationSession::Status> CalibrationSession::Next(
     return std::nullopt;
   }
   if (!captured_) {
-    error = "no pose captured yet for this step";
-    return std::nullopt;
+    // The session is still running, waiting on this same step: a refusal
+    // (#177), not a failure, so CurrentStatus's own fields report it.
+    Status status = CurrentStatus();
+    status.refusal = "no pose captured yet for this step";
+    return status;
   }
-  return AdvanceOrRefuse(error);
+  return AdvanceOrRefuse();
 }
 
-std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
-    std::string& error) {
+CalibrationSession::Status CalibrationSession::AdvanceOrRefuse() {
   if (RestingStep()) {
     // #171: every frame of the resting step blinked, so eye_sample_
     // never accumulated anything -- refused the same way the gains step
@@ -178,9 +180,10 @@ std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
     // placeholder {0, 0} that would bias ComposeGaze's own
     // eye-relative-to-resting term for every later step.
     if (eye_sample_count_ == 0) {
-      error = "keep your eyes open while you look at the dot";
       ResetStep();
-      return std::nullopt;
+      Status status = CurrentStatus();
+      status.refusal = "keep your eyes open while you look at the dot";
+      return status;
     }
     resting_ = sample_;
     resting_eye_ = eye_sample_;
@@ -189,9 +192,11 @@ std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
         EstimateGains(gains_samples_, settings_.min_head_travel_degrees,
                       settings_.min_axis_degrees);
     if (!estimated) {
-      error = "turn your head further while you keep looking at the dot";
       ResetStep();
-      return std::nullopt;
+      Status status = CurrentStatus();
+      status.refusal =
+          "turn your head further while you keep looking at the dot";
+      return status;
     }
     gains_.horizontal =
         estimated->horizontal.value_or(settings_.default_gains.horizontal);
@@ -210,9 +215,10 @@ std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
         GazeDistance(gaze, points_[screen].points[static_cast<std::size_t>(
                                CalibrationPoint::kCentre)]) <
             settings_.min_spread_degrees) {
-      error = "look further toward that corner, away from the centre";
       ResetStep();
-      return std::nullopt;
+      Status status = CurrentStatus();
+      status.refusal = "look further toward that corner, away from the centre";
+      return status;
     }
     points_[screen].points[point] = gaze;
   }
@@ -225,9 +231,12 @@ std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
     if (!store_.Save(profile, save_error)) {
       // The capture stays, so the step can be finished again (the save is
       // the only thing that failed, as specs/Calibration.tla's Finish
-      // requires a capture before it ever touches the profile).
-      error = save_error;
-      return std::nullopt;
+      // requires a capture before it ever touches the profile): a
+      // refusal (#177), not a failure, so the session stays running on
+      // this same, last step for a retry.
+      Status status = CurrentStatus();
+      status.refusal = save_error;
+      return status;
     }
     const int screens_calibrated = screens_;
     running_ = false;

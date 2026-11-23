@@ -5,6 +5,40 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-23: A refused calibration step stays on that step, not the whole wizard
+
+A `calibrate next` the daemon refuses (no pose captured yet, #137's
+weak-step checks, or a failed save) now comes back as a normal, still-running
+`CalibrationController::Status` with a new `refusal` field (`protocol`'s
+`"refused"` JSON field), not an `{"error":...}` reply: `CalibrationFlow`
+reads it into `View::hint` and stays `kPrompting` on the same step, with
+Next still there to retry, instead of ending the whole session the way any
+other error does. Only a lost connection, a lost camera (which ends the
+daemon's own session, so the next `Next()` genuinely finds none running) or
+a real protocol error still reaches `kFailed`. `specs/CalibrationMenu.tla`'s
+`NextRefused` was fixed first (`GuardRefusalStaysOpen`), proved to matter
+by the mutation that sends it to `"failed"` instead, which breaks
+`SessionEndsWithFlow`.
+Also investigated: whether a running calibration session holds the camera
+open. It already does -- `CalibrationFlow::Start`'s own `hello` joins the
+daemon's feed (`Service::Greet`'s `feed_.Connect`), which is the same
+first-join signal that subscribes the camera controller
+(`tools/daemon/main.cc`'s `approved_`), and `Start`'s existing camera-wait
+retry loop (#128) exists precisely because that join's camera-up is
+asynchronous. Nothing was broken here; the symptom the issue described (no
+profile saved) is explained by the retry-vs-fail bug above refusing the
+first weak step and ending the wizard before any screen could be saved.
+Why: found by the user on a Mac with one screen, item 12 of #61's hand
+checks -- a refused corner or gains step ended the wizard with only Close,
+though the daemon had only reset that one step. Rejected: widening
+`src/calibration_flow.cc`'s own `StringField`/`IntField` to undo JSON
+escaping in the same change, which a regression test for the new
+`refusal` field's quoting found was already broken for every string field
+sent over this protocol, `"error"` included -- filed as its own issue
+instead ([#178](https://github.com/mattyv/facepalm/issues/178)) since it
+needs its own design, not folded into this narrower fix.
+Evidence: [#177](https://github.com/mattyv/facepalm/issues/177).
+
 ## 2026-11-23: The camera preview is a camera demand of its own; disabled, not an offer, is how a menu item says Facepalm is off
 
 **Decision (the preview joins the daemon's existing admission entry

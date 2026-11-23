@@ -283,10 +283,11 @@ facepalm_unit(calibrate_cli)
 # daemon's reply, so tools/menu/main.mm and main_linux.cc stay thin glue.
 facepalm_unit(calibration_flow)
 target_link_libraries(calibration_flow PUBLIC calibration)
+# #177/#178: calibration_flow_test builds its replies with protocol's own,
+# real CalibrationStatusJson and ErrorJson (pure computation, not a
+# collaborator this test mocks: calibration_flow.cc itself never calls
+# them), so the parser is tested against exactly what the daemon writes.
 if(BUILD_TESTING)
-  # #178: the round-trip tests build their replies with protocol::Quoted's
-  # own ErrorJson rather than a literal, so the fix stays undoing exactly
-  # what that function writes.
   target_link_libraries(calibration_flow_test PRIVATE protocol)
 endif()
 facepalm_unit(session_camera)
