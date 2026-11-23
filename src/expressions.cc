@@ -32,6 +32,15 @@ constexpr double kSpreadSeconds = 5;
 constexpr double kEndFraction = 0.5;
 // The window a head's pose range (#46) is measured over.
 constexpr std::int64_t kPoseRangeWindowMs = 500;
+// eyes_narrowed's own squint gate (#158, ExpressionTracker::EyesSettling)
+// stays shut this long after eyeLookDown or eyeBlink last crossed back
+// under their own threshold: long enough to bridge the roughly 999 ms gap
+// a rapid blink burst leaves between two blinks in #139's own
+// test/fixtures/eyes/blinks.probe, where eyeSquint has not yet settled
+// before the next blink raises eyeLookDown or eyeBlink again. Specific to
+// this one gate, not Settings::hold_ms, which every expression shares and
+// which a value this large would otherwise delay by a full second.
+constexpr std::int64_t kEyeGateSettleMs = 1200;
 
 // MediaPipe's indices for the scores read here.
 constexpr std::array<int, 3> kBrowsUp = {3, 4, 5};  // browInnerUp, OuterUp*.
@@ -100,6 +109,7 @@ void ExpressionTracker::StartOver(const Scores& scores,
   recent_poses_.clear();
   moved_ms_ = kNotRisen;
   gated_ = false;
+  eyes_gated_ms_ = kNotRisen;
   for (std::size_t index = 0; index < states_.size(); ++index) {
     states_.at(index) = State{.level = Signal(index, scores)};
   }
@@ -163,6 +173,16 @@ bool ExpressionTracker::EyesGated(const Scores& scores) const {
          Higher(kEyeBlink, scores) > settings_.eye_blink_threshold;
 }
 
+bool ExpressionTracker::EyesSettling(const Scores& scores,
+                                     std::int64_t timestamp_ms) {
+  if (EyesGated(scores)) {
+    eyes_gated_ms_ = timestamp_ms;
+    return true;
+  }
+  return eyes_gated_ms_ != kNotRisen &&
+         timestamp_ms - eyes_gated_ms_ < kEyeGateSettleMs;
+}
+
 std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
                                                   const HeadRotation& pose,
                                                   std::int64_t timestamp_ms) {
@@ -197,7 +217,7 @@ std::vector<Expression> ExpressionTracker::Update(const Scores& scores,
     return began;
   }
 
-  const bool eyes_gated = EyesGated(scores);
+  const bool eyes_gated = EyesSettling(scores, timestamp_ms);
   for (std::size_t index = 0; index < states_.size(); ++index) {
     State& state = states_.at(index);
     if (index == static_cast<std::size_t>(Expression::kEyesNarrowed) &&

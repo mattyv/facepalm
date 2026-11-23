@@ -85,6 +85,19 @@ TEST(LookAwayReplayTest, GestureNoFaceReportsGoneOnceAFaceReturns) {
   EXPECT_EQ(Replay(log.str()), "looked_away 8000 gone 2116\n");
 }
 
+// #157: a gesture_no_face line before any head_pose line has no real
+// timestamp to open a look from (`last` is still only its own
+// placeholder), so it is ignored, the way LookAwayReader::OnNoFace's own
+// had_face_ guard ignores an OnNoFace before any OnFace -- not read as a
+// look spanning all the way back to a value that was never a real
+// reading.
+TEST(LookAwayReplayTest, GestureNoFaceBeforeAnyHeadPoseIsIgnored) {
+  std::ostringstream log;
+  log << "gesture_no_face\n";
+  Poses(log, 1000, {.seconds = 1});
+  EXPECT_EQ(Replay(log.str()), "");
+}
+
 // A no-face stretch too short to hold is a glance, as any other is.
 TEST(LookAwayReplayTest, ABriefGestureNoFaceIsAGlance) {
   std::ostringstream log;
@@ -157,15 +170,19 @@ TEST(LookAwayReplayTest, EachRecordedLookDownIsReportedOnce) {
 }
 
 // Prompted: down at 6 s, center at 13, a slight turn at 17, center at 24,
-// a medium turn at 29, center at 35, a wide turn at 40, center at 47. The
-// two turns the face model kept tracking are each reported once, a little
-// after the head returns to center; during the wide one it lost the face
-// (no frames from 41 to 46 s) for long enough that its own resting pose
-// relearns before the head is read as back, so there is nothing to
-// return from and nothing is reported.
+// a medium turn at 29, center at 35, a wide turn at 40, center at 47. All
+// three turns are each reported once, a little after the head returns to
+// center; during the wide one it lost the face (no frames from 41 to
+// 46 s) for long enough that its own resting pose relearns before the
+// head is read as back, so the third report lands further past 47 s
+// than the first two do past their own returns -- #157 (found tuning
+// #139's fixtures) was that this report was lost outright, rather than
+// merely delayed, since the look stayed open across the gap but the old
+// relearning branch cleared it anyway.
 TEST(LookAwayReplayTest, EachRecordedTurnAwayIsReportedOnce) {
   EXPECT_THAT(ReportSeconds(Fixture("turns.head_pose")),
-              ElementsAre(AllOf(Gt(24), Lt(27)), AllOf(Gt(35), Lt(38))));
+              ElementsAre(AllOf(Gt(24), Lt(27)), AllOf(Gt(35), Lt(38)),
+                          AllOf(Gt(49), Lt(53))));
 }
 
 // Prompted: a frown at 12 s, neutral at 22, a smile while nodding at 28,

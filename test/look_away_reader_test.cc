@@ -197,6 +197,28 @@ TEST_F(LookAwayReaderTest, OnNoFacePastTheTrackersOwnGapStillReportsGone) {
   EXPECT_THAT(reactions_, ElementsAre(LookedAway("gone")));
 }
 
+// facepalm#157: a face reacquired too far off the old resting pose for
+// #141's own one grace frame (read against the resting pose from before
+// the gap) to close the look there and then must still be reported, not
+// dropped the moment ExpressionTracker starts relearning the resting
+// pose afresh -- `test/fixtures/eyes/fully_away.probe` (#139) is a real
+// recording of exactly this shape.
+TEST_F(LookAwayReaderTest,
+       ALookThatOutlastsTheTrackersOwnRelearningStillReportsGone) {
+  Hold(5);
+  reader_.OnNoFace();
+  now_ms_ += 4000;  // Past the tracker's own two-second relearning gap.
+  // The face returns turned well away: too far for the one grace frame
+  // to read as home.
+  Hold(0.1, {.yaw = 30});
+  EXPECT_THAT(reactions_, IsEmpty());  // Not yet: still relearning.
+  // Held near the true resting pose for the rest of the relearning
+  // window: by the time it finishes, the newly learned resting pose has
+  // caught back up to roughly where it always was, not to this turn.
+  Hold(4);
+  EXPECT_THAT(reactions_, ElementsAre(LookedAway("gone")));
+}
+
 // A no-face stretch too short to hold is a glance, as any other is.
 TEST_F(LookAwayReaderTest, ABriefOnNoFaceIsAGlance) {
   Hold(5);
@@ -205,10 +227,15 @@ TEST_F(LookAwayReaderTest, ABriefOnNoFaceIsAGlance) {
   EXPECT_THAT(reactions_, IsEmpty());
 }
 
-// OnNoFace before any OnFace at all: no resting pose yet either, so it
-// reads as nothing to hold, not kGone (LookAwayDetector's own
-// NoReportWhileLearning).
-TEST_F(LookAwayReaderTest, OnNoFaceBeforeAnyFaceIsLearningNotGone) {
+// OnNoFace before any OnFace at all has no real timestamp to open or
+// continue a look from (#157): last_timestamp_ms_ is still only its own
+// default, not a reading OnFace ever took, so this is not yet a look to
+// hold, not kGone. LookAwayDetector itself would still open one from
+// such a call (GoneKindTest.NoFaceFromTheVeryFirstFrameStartsTheLookToo,
+// at the detector level, where 0 is a deliberate, meaningful test
+// timestamp); the reader holds back only because it has nothing
+// meaningful of its own to give it yet.
+TEST_F(LookAwayReaderTest, OnNoFaceBeforeAnyFaceIsNotYetALook) {
   reader_.OnNoFace();
   Hold(10);
   EXPECT_THAT(reactions_, IsEmpty());

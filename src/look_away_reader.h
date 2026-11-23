@@ -41,7 +41,8 @@ class LookAwayReader : public FaceReader {
   // learned, which it keeps until a face returns (it never calls
   // ExpressionTracker::Update itself, so a gap here does not start its
   // own gap-relearning; that happens on the next OnFace instead, the way
-  // it always has).
+  // it always has). Before OnFace has ever read a usable pose, there is
+  // no real timestamp to read either (#157), so this does nothing.
   void OnNoFace() override;
 
   // Swaps the calibration profile the kOtherScreen box test reads from
@@ -62,6 +63,12 @@ class LookAwayReader : public FaceReader {
   // OnNoFace has no timestamp of its own; the last one OnFace read, so
   // the look stays measured in real time across a stretch with no face.
   std::int64_t last_timestamp_ms_ = 0;
+  // Whether OnFace has ever read a usable pose (#157): until it has,
+  // last_timestamp_ms_ is only its own default, not a real reading, so
+  // OnNoFace has no meaningful timestamp yet to open or continue a look
+  // from and does nothing, rather than opening one at a placeholder time
+  // that would read as an enormous duration once a face is finally seen.
+  bool had_face_ = false;
 };
 
 }  // namespace facepalm

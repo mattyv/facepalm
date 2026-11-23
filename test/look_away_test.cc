@@ -155,23 +155,29 @@ TEST(NoReportWhileLearningTest, NothingIsReportedWithoutARestingPose) {
   EXPECT_EQ(report->duration_ms, 1000);  // From 2500, not from 0.
 }
 
-// LookAway.tla's Gap: the resting pose is learned afresh, which clears a
-// look already open, so it is not folded into whatever comes after. Two
-// detectors, not one: Return (fired once by the first assertion) already
-// closes the look, so the second assertion needs its own run to show the
-// duration measured is the later one, not a continuation of the first.
-TEST(NoReportWhileLearningTest, AGapClearsALookSoItIsNotYetHeldJustAfter) {
+// LookAway.tla's GapNeverDropsAHeldLook (#157): the resting pose being
+// learned afresh does not clear a look already open; it is still held
+// across the gap, so a duration that was already past hold_ms before the
+// gap started stays reported once the gaze is back home, rather than
+// needing hold_ms all over again measured from the gap's own end (the
+// old, buggy behaviour `fully_away.probe`, #139's own recording,
+// reproduced: a face reacquired too far off the resting pose for #141's
+// one grace frame to close the look there and then lost it for good).
+TEST(GapNeverDropsAHeldLookTest, AGapDoesNotClearALookSoItIsAlreadyHeld) {
   LookAwayDetector detector(kSettings);
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 0), std::nullopt);
   EXPECT_EQ(detector.Update(Yawed(30), std::nullopt, nullptr, 500),
-            std::nullopt);  // The gap.
+            std::nullopt);  // The gap: no resting pose to judge against.
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 600), std::nullopt);
-  // Were the look not cleared by the gap, 1,599 - 0 would already be past
-  // hold_ms; measured from 600 (the gap's own end), it is not.
-  EXPECT_EQ(detector.Update(Yawed(0), kRest, nullptr, 1599), std::nullopt);
+  // Were the look cleared by the gap, 1,599 - 600 would not yet be past
+  // hold_ms (1,000); measured from 0 (the look's own start, never reset
+  // by the gap), it already is, so this reports rather than staying
+  // silent.
+  EXPECT_TRUE(detector.Update(Yawed(0), kRest, nullptr, 1599).has_value());
 }
 
-TEST(NoReportWhileLearningTest, AGapClearsALookSoDurationStartsAfterIt) {
+TEST(GapNeverDropsAHeldLookTest,
+     AGapDoesNotClearALookSoDurationStartsBeforeIt) {
   LookAwayDetector detector(kSettings);
   EXPECT_EQ(detector.Update(Yawed(30), kRest, nullptr, 0), std::nullopt);
   EXPECT_EQ(detector.Update(Yawed(30), std::nullopt, nullptr, 500),
@@ -180,7 +186,18 @@ TEST(NoReportWhileLearningTest, AGapClearsALookSoDurationStartsAfterIt) {
   const std::optional<LookAwayReport> report =
       detector.Update(Yawed(0), kRest, nullptr, 1600);
   ASSERT_TRUE(report.has_value());
-  EXPECT_EQ(report->duration_ms, 1000);  // From 600, the gap's own end.
+  EXPECT_EQ(report->duration_ms, 1600);  // From 0, not from 600.
+}
+
+// A gap that starts before any look ever opened has nothing to preserve:
+// this is #157's own fix leaving NothingIsReportedWithoutARestingPose's
+// own case alone, not loosening it.
+TEST(NoReportWhileLearningTest, AGapBeforeAnyLookOpenedStillReportsNothing) {
+  LookAwayDetector detector(kSettings);
+  EXPECT_EQ(detector.Update(Yawed(0), kRest, nullptr, 0), std::nullopt);
+  EXPECT_EQ(detector.Update(Yawed(0), std::nullopt, nullptr, 500),
+            std::nullopt);  // The gap: still never away.
+  EXPECT_EQ(detector.Update(Yawed(0), kRest, nullptr, 600), std::nullopt);
 }
 
 TEST(OncePerLookTest, OneReportPerLookEvenWhileStillAway) {
@@ -332,6 +349,14 @@ TEST(GoneKindTest, NoFaceFromTheVeryFirstFrameStartsTheLookToo) {
   const std::optional<LookAwayReport> during_gap =
       detector.Update(std::nullopt, std::nullopt, nullptr, 0);
   EXPECT_EQ(during_gap, std::nullopt);  // No resting pose yet either.
+  // The look it opened is not lost once a resting pose is finally known
+  // (#157): the face returns at rest, and this still reads as kGone, not
+  // as though nothing had been open at all.
+  const std::optional<LookAwayReport> report =
+      detector.Update(Yawed(0), kRest, nullptr, 1000);
+  ASSERT_TRUE(report.has_value());
+  EXPECT_EQ(report->kind, LookAwayKind::kGone);
+  EXPECT_EQ(report->duration_ms, 1000);
 }
 
 }  // namespace

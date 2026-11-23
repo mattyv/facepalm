@@ -269,17 +269,10 @@ TEST(EyesGazeReplayTest, FullyAwayGazeReadsAwayAndEndsWithNoFace) {
 // Cues: look ahead normally; blink a few times, as while reading; rest;
 // blink a few more times. A blink lifts eyeSquint the same way a real
 // squint does (#140), and the squint-guard (expressions.eye_look_down_
-// threshold, expressions.eye_blink_threshold) holds eyes_narrowed back
-// for almost all of it; EyeGazeTracker skips blink frames outright, so
-// the composed gaze never swings on one either way.
-//
-// "Almost all", not "all": facepalm#158 (found tuning this fixture) is
-// that eyeSquint's own decay lags eyeLookDown's and eyeBlink's between
-// two blinks close together, so the gate can reopen while eyeSquint is
-// still elevated from the blink just finished. This fixture's own rapid
-// blinks hit that once; a fix needs a design change to the gate, not a
-// threshold, so at most one eyes_narrowed start is allowed here, named
-// after that issue rather than silently expected.
+// threshold, expressions.eye_blink_threshold, plus #158's own settle
+// time bridging eyeSquint's slower decay between two close blinks) holds
+// eyes_narrowed back throughout; EyeGazeTracker skips blink frames
+// outright, so the composed gaze never swings on one either way.
 TEST(EyesGazeReplayTest, BlinksAreNotReadAsEyesNarrowedAndDontMoveGaze) {
   const std::string output = Replay(Fixture("blinks.probe"));
   const std::vector<std::string> narrowed =
@@ -290,7 +283,7 @@ TEST(EyesGazeReplayTest, BlinksAreNotReadAsEyesNarrowedAndDontMoveGaze) {
       ++eyes_narrowed_count;
     }
   }
-  EXPECT_THAT(eyes_narrowed_count, Le(1)) << "facepalm#158";
+  EXPECT_EQ(eyes_narrowed_count, 0) << "facepalm#158";
   const std::vector<GazeSample> samples = GazeSamples(output);
   ASSERT_THAT(samples, Not(IsEmpty()));
   const double resting_yaw = MeanYaw(Window(samples, 0.5));

@@ -53,7 +53,13 @@ std::string_view Name(Expression expression);
 // threshold, eyes_narrowed neither reports nor learns, though the other
 // four expressions are read as usual. This is read from the raw
 // blendshapes directly, never from #137's composed gaze, so it holds
-// whether or not that reading is available.
+// whether or not that reading is available. The gate also stays shut for
+// kEyeGateSettleMs after eyeLookDown and eyeBlink themselves last crossed
+// back under their threshold (#158): eyeSquint's own decay lags theirs,
+// so between two blinks close together -- a rapid blink, not a single
+// glance or a deliberate blink -- it can still read as elevated once
+// they have already cleared; the settle bridges that gap without
+// touching Settings::hold_ms, which every other expression shares.
 class ExpressionTracker {
  public:
   // Their defaults live in Config.
@@ -155,12 +161,19 @@ class ExpressionTracker {
   // blendshapes, not #137's composed gaze.
   [[nodiscard]] bool EyesGated(const Scores& scores) const;
 
+  // Whether the squint gate (EyesGated) should hold shut on this frame:
+  // `scores` reads it directly, or it is still within kEyeGateSettleMs of
+  // the last frame that did (#158). Updates eyes_gated_ms_, the last such
+  // frame's own timestamp.
+  bool EyesSettling(const Scores& scores, std::int64_t timestamp_ms);
+
   Settings settings_;
   std::array<double, 3> resting_pose_{};
   std::deque<std::pair<std::int64_t, std::array<double, 3>>> recent_poses_;
   std::int64_t moved_ms_ = kNotRisen;
   bool gated_ = false;  // Whether the gate was shut on the last frame.
-  std::array<double, 3> gated_pose_{};  // The resting pose when it shut.
+  std::array<double, 3> gated_pose_{};      // The resting pose when it shut.
+  std::int64_t eyes_gated_ms_ = kNotRisen;  // EyesSettling's own settle time.
   std::array<State, kExpressions> states_{};
   bool started_ = false;
   std::int64_t started_ms_ = 0;
