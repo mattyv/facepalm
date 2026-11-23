@@ -5,6 +5,60 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-23: The camera preview is a camera demand of its own; disabled, not an offer, is how a menu item says Facepalm is off
+
+**Decision (the preview joins the daemon's existing admission entry
+point, not a new one):** `src/camera_demand.h`'s new `CameraDemand`
+combines an approved client subscribing with the camera preview's own
+live, fresh request into the one boolean `DaemonControl::Subscription`
+already took, so opening the preview with nothing else using the camera
+now turns the camera on by itself, the same way a client subscribing
+already does, rather than refusing with "Turn on the camera", an action
+no menu item performs. `specs/PreviewLease.tla`'s `CameraOpens` and
+`CameraCloses` now fire only on this combined `Demand`, proved by two new
+properties, `PreviewAloneOpensCamera` and `AbandonedPreviewReleasesCamera`.
+The preview's own freshness check now also runs on a timer of its own
+(`Engine::StartPreviewDemandPoll`), independent of frame capture, which
+could not otherwise ever start. The menu side needed a matching grace
+period (`kPreviewCameraGraceMisses`/`kCameraGraceMisses`) before reading
+the camera as abandoned, since `Start` no longer waits for it to already
+be on.
+
+**Decision (widened scope: every menu item, in every state, from one
+pure table):** the user asked that every menu item behave correctly in
+each of Facepalm's three states (off; on, camera idle; on, camera
+running), on both platforms. `src/menu_state.h`'s `DecideMenuState` is
+the one decision table (docs/local-app.md) both `tools/menu/main.mm` and
+`tools/menu/main_linux.cc` now read for the camera-status line and the
+preview and calibrate items, rather than each front end deciding
+separately and risking drifting apart. **Rejected:** leaving Show Camera
+Preview and Calibrate… enabled while Facepalm is off and offering to
+turn it on from inside them, which the issue also allowed. **Turn On
+Facepalm…** already sits one line above either item in both menus; a
+second way to reach the same consent dialog from two more places would
+only be a second place for that one choice to go out of sync with the
+first, for no benefit over disabling the two that depend on it and
+pointing at the one that already works. Disabled items are titled "Turn
+on Facepalm first" rather than left unlabelled.
+
+**Decision (the always-disabled status line names what is actually
+true):** it used to read "Camera off" whether the service was off or on
+and idle, since a missing status file already reads as off either way.
+It now reads "Facepalm off" when the service itself is off, so the
+earlier issue's own confusion -- the real cause was the daemon not
+running at all, not the camera being idle -- cannot recur from reading
+the line alone.
+
+**Verified:** `test/camera_demand_test.cc` and `test/menu_state_test.cc`
+(both solitary, 100 percent), `specs/PreviewLease.tla`'s two new
+properties checked by TLC (`specs/PreviewLease.cfg`), each new guard's
+mutation confirmed to break the property it protects and discarded.
+Macos built, tested and run through clang-tidy and clang-format locally;
+the Linux tray's `tools/menu/main_linux.cc` change was written to mirror
+the macOS one as closely as Qt's API allows but could not be built or
+run in this session, since no Linux toolchain was available.
+**Evidence:** [#176](https://github.com/mattyv/facepalm/issues/176).
+
 ## 2026-11-23: Publish each calibration as a fresh shared profile
 
 A finished calibration is published as a new

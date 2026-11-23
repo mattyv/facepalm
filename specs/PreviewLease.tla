@@ -75,14 +75,41 @@
 \* lands regardless. `GuardStartClearsFrame` is `Engine::Start` clearing
 \* any frame a previous crash left behind before the daemon can ever
 \* stream again; without it, `Init` allows one already sitting there.
+\*
+\* #176: the preview used to only ever watch a camera some other demand
+\* (an approved client subscribing) had already opened, refusing
+\* otherwise with an error naming an action ("turn on the camera") no
+\* menu item performs. `CameraOpens` and `CameraCloses` now fire only on
+\* `Demand`, every reason the camera may be wanted: `client_demand`
+\* stands for every other source (an approved client; specs/
+\* DaemonAdmission.tla's own first-join/last-leave, proved there and
+\* taken as given, externally toggled the same way DaemonAdmission.tla's
+\* own `canStart` is), and the preview's own live, fresh request joins it
+\* (`GuardPreviewIsDemand`, the fix itself: `src/camera_demand.h`'s
+\* `CameraDemand`, which combines exactly these two sources before ever
+\* calling the daemon's existing admission entry point,
+\* `DaemonControl::Subscription` -- the same one `ApprovedFeed`'s own
+\* first-join/last-leave already drove, extended rather than given a
+\* second channel). `CameraOpens` firing only on `Demand` replaces the
+\* old unconditional `EventuallyOpens` ("the camera can always eventually
+\* open") with the honest, conditional `PreviewAloneOpensCamera` below:
+\* once something is actually wanted, it opens, not unconditionally.
+\* `CameraCloses` now also waits for `~Demand`, newly needing its own
+\* fairness (`WF_vars(CameraCloses)`) for `AbandonedPreviewReleasesCamera`
+\* to hold; leaving it unconditioned, forced to fire the instant the
+\* camera is open regardless of cause, would have let the camera closing
+\* for an unrelated reason quietly "pass" `MenuDeathEndsStreaming` even
+\* with `GuardRequestFresh` broken, the very finding that property exists
+\* to catch.
 EXTENDS Naturals
 CONSTANTS StaleAge, MaxAge,
           GuardStartNeedsCamera, GuardStreamingTracksLease, GuardRequestFresh,
-          GuardPublishChecksStreaming, GuardStartClearsFrame
+          GuardPublishChecksStreaming, GuardStartClearsFrame,
+          GuardPreviewIsDemand
 VARIABLES camera, streaming, requested, menu_alive, age, frame_exists,
-          pending_publish, readings_exists
+          pending_publish, readings_exists, client_demand
 vars == <<camera, streaming, requested, menu_alive, age, frame_exists,
-          pending_publish, readings_exists>>
+          pending_publish, readings_exists, client_demand>>
 
 Init == /\ camera = "closed" /\ streaming = FALSE
         /\ requested = FALSE /\ menu_alive = TRUE /\ age = 0
@@ -90,32 +117,48 @@ Init == /\ camera = "closed" /\ streaming = FALSE
         /\ frame_exists \in (IF GuardStartClearsFrame THEN {FALSE} ELSE BOOLEAN)
         /\ readings_exists \in
              (IF GuardStartClearsFrame THEN {FALSE} ELSE BOOLEAN)
+        /\ client_demand \in BOOLEAN
 
 \* Whether the request is still within the couple of seconds the daemon
 \* grants a live menu's own refresh timer to catch up (#114):
 \* GuardRequestFresh is the guard that makes this matter at all.
 Fresh == age <= StaleAge \/ ~GuardRequestFresh
 
-\* DaemonAdmission.tla's own first-join, taken as given here. Forces
-\* streaming off directly, the same as CameraCloses: a stale grant from
-\* before this open never carries over, with no session number to check.
-\* #129: PreviewLease's own streaming_changed hook clears the frame file
-\* synchronously, within this same transition, whenever it turns
-\* streaming off -- so frame_exists follows streaming' here too.
-CameraOpens == /\ camera = "closed"
+\* #176: every reason the camera may be wanted -- an approved client
+\* (`client_demand`), or the preview's own live, fresh request, once
+\* `GuardPreviewIsDemand` lets it count at all.
+Demand == client_demand \/ (requested /\ menu_alive /\ Fresh
+                            /\ GuardPreviewIsDemand)
+
+\* src/camera_demand.h's CameraDemand reporting its combined signal's own
+\* first source arriving (#176), through the very entry point
+\* DaemonAdmission.tla's own first-join already drives
+\* (`DaemonControl::Subscription`): fires only once something is actually
+\* wanted. Forces streaming off directly, the same as CameraCloses: a
+\* stale grant from before this open never carries over, with no session
+\* number to check. #129: PreviewLease's own streaming_changed hook
+\* clears the frame file synchronously, within this same transition,
+\* whenever it turns streaming off -- so frame_exists follows streaming'
+\* here too.
+CameraOpens == /\ camera = "closed" /\ Demand
                /\ camera' = "open" /\ streaming' = FALSE
                /\ frame_exists' = FALSE /\ readings_exists' = FALSE
-               /\ UNCHANGED <<requested, menu_alive, age, pending_publish>>
+               /\ UNCHANGED <<requested, menu_alive, age, pending_publish,
+                             client_demand>>
 
-\* DaemonAdmission.tla's own last-leave, taken as given here: ends any
+\* CameraDemand's combined signal's last source leaving (#176): ends any
 \* preview at once, same as the indicator (#37 item 8) stopping with it.
-CameraCloses == /\ camera = "open" /\ camera' = "closed"
+\* Waits for every source to be gone (`~Demand`), not just one: the
+\* preview's own request going stale must not close a camera an approved
+\* client still has open, and the reverse.
+CameraCloses == /\ camera = "open" /\ ~Demand /\ camera' = "closed"
                 /\ streaming' = (IF GuardStreamingTracksLease
                                   THEN FALSE ELSE streaming)
                 /\ frame_exists' = (IF streaming' THEN frame_exists ELSE FALSE)
                 /\ readings_exists' = (IF streaming' THEN readings_exists
                                         ELSE FALSE)
-                /\ UNCHANGED <<requested, menu_alive, age, pending_publish>>
+                /\ UNCHANGED <<requested, menu_alive, age, pending_publish,
+                              client_demand>>
 
 \* PreviewLease!Start: the menu's own ask (#108), fired again by its own
 \* refresh timer every time its window stays open (#114), so a camera
@@ -133,7 +176,7 @@ StartPreview == /\ menu_alive
                                   THEN camera = "open" \/ ~GuardStartNeedsCamera
                                   ELSE streaming)
                 /\ UNCHANGED <<camera, menu_alive, frame_exists,
-                              pending_publish, readings_exists>>
+                              pending_publish, readings_exists, client_demand>>
 
 \* PreviewLease!Stop: the menu's own explicit stop -- toggling the menu
 \* item off, or its preview window's own close button (#108) -- while it
@@ -147,7 +190,8 @@ StopPreview == /\ requested /\ menu_alive
                /\ frame_exists' = (IF streaming' THEN frame_exists ELSE FALSE)
                /\ readings_exists' = (IF streaming' THEN readings_exists
                                        ELSE FALSE)
-               /\ UNCHANGED <<camera, menu_alive, age, pending_publish>>
+               /\ UNCHANGED <<camera, menu_alive, age, pending_publish,
+                             client_demand>>
 
 \* The daemon's own per-frame check (#37 item 8, #114),
 \* src/preview_publisher.cc's PreviewPublisher::OnFrame: runs only while
@@ -175,7 +219,7 @@ Frame == /\ camera = "open" /\ ~pending_publish
          /\ pending_publish' = streaming'
          /\ frame_exists' = (IF streaming' THEN frame_exists ELSE FALSE)
          /\ readings_exists' = (IF streaming' THEN readings_exists ELSE FALSE)
-         /\ UNCHANGED <<camera, requested, menu_alive>>
+         /\ UNCHANGED <<camera, requested, menu_alive, client_demand>>
 
 \* #129: PreviewPublisher::OnFrame's own publish_ call, once its encode
 \* (which this model does not need its own step for: nothing but time
@@ -193,7 +237,7 @@ Publish == /\ pending_publish
            /\ frame_exists' = (IF GuardPublishChecksStreaming
                                 THEN streaming ELSE TRUE)
            /\ UNCHANGED <<camera, streaming, requested, menu_alive, age,
-                         readings_exists>>
+                         readings_exists, client_demand>>
 
 \* #134: src/preview_readings.h's own write, through the same
 \* PreviewLease::Publish as Publish above -- one atomic step, since
@@ -205,7 +249,8 @@ Publish == /\ pending_publish
 PublishReadings == /\ readings_exists' = (IF GuardPublishChecksStreaming
                                            THEN streaming ELSE TRUE)
                     /\ UNCHANGED <<camera, streaming, requested, menu_alive,
-                                  age, frame_exists, pending_publish>>
+                                  age, frame_exists, pending_publish,
+                                  client_demand>>
 
 \* The menu quits without cleaning up, crashes, or the session logs out
 \* while the preview is open (#114): irreversible, and asks and removes
@@ -214,22 +259,31 @@ PublishReadings == /\ readings_exists' = (IF GuardPublishChecksStreaming
 MenuDies == /\ menu_alive
             /\ menu_alive' = FALSE
             /\ UNCHANGED <<camera, streaming, requested, age, frame_exists,
-                          pending_publish, readings_exists>>
+                          pending_publish, readings_exists, client_demand>>
+
+\* An approved client subscribes or leaves (#176): DaemonAdmission.tla's
+\* own first-join/last-leave, proved there and taken as given here, the
+\* same way `canStart` is externally toggled in specs/DaemonAdmission.tla.
+ClientDemandChanges == /\ client_demand' = ~client_demand
+                       /\ UNCHANGED <<camera, streaming, requested, menu_alive,
+                                     age, frame_exists, pending_publish,
+                                     readings_exists>>
 
 Next == CameraOpens \/ CameraCloses \/ StartPreview \/ StopPreview \/ Frame
-           \/ Publish \/ PublishReadings \/ MenuDies
+           \/ Publish \/ PublishReadings \/ MenuDies \/ ClientDemandChanges
 \* Frame needs to be fair, not only CameraOpens (#114): it is what both
 \* grants a fresh request once the camera opens and ages a dead menu's
 \* stale one away, and neither liveness property below can hold if the
 \* daemon's own per-frame check is never required to run. Publish needs
 \* fairness too (#129): otherwise a pending_publish stuck forever would
-\* keep Frame disabled forever with it, the same way.
+\* keep Frame disabled forever with it, the same way. CameraCloses needs
+\* its own fairness too (#176), now that it waits for `~Demand`: without
+\* it, an abandoned preview with nothing else holding the camera open
+\* could sit open forever regardless, which AbandonedPreviewReleasesCamera
+\* below exists to catch.
 Spec == Init /\ [][Next]_vars
-           /\ WF_vars(CameraOpens) /\ WF_vars(Frame) /\ WF_vars(Publish)
-
-\* The camera can always eventually open: something must happen, so a
-\* model that can never open it fails this.
-EventuallyOpens == <>(camera = "open")
+           /\ WF_vars(CameraOpens) /\ WF_vars(CameraCloses)
+           /\ WF_vars(Frame) /\ WF_vars(Publish)
 
 NeverStreamsWithoutCamera == streaming => camera = "open"
 \* #114: the request alone is not enough either -- it must still be
@@ -277,4 +331,29 @@ MenuDeathEndsStreaming == ~menu_alive ~> ~streaming
 \* that settles does.
 Wanted == requested /\ Fresh /\ menu_alive /\ camera = "open"
 PreviewStreamsWhenWanted == [](<>[]Wanted => <>streaming)
+
+\* #176: the acceptance bar's first half -- the camera turns on for an
+\* open preview -- attributed to the preview itself, not to some other
+\* client that happens to also want it: `~client_demand` in the
+\* antecedent rules that out. `[](<>[]P => <>Q)`, the same shape as
+\* `PreviewStreamsWhenWanted` and specs/DaemonAdmission.tla's own
+\* `JoinOpens`, rather than a plain "~>" a momentary ask could satisfy
+\* only by chance. This is the property `GuardPreviewIsDemand = FALSE`
+\* breaks: with the preview never counting as demand, a request with no
+\* approved client ever subscribed finds nothing to ever open the camera,
+\* reproducing #176 exactly.
+PreviewAloneOpensCamera ==
+    [](<>[](requested /\ menu_alive /\ Fresh /\ ~client_demand)
+        => <>(camera = "open"))
+
+\* #176: the acceptance bar's second half -- a closed or abandoned
+\* preview (the window closed, the menu crashed, or the lease simply
+\* expired) never keeps the camera on by itself. "Abandoned" is read the
+\* same way `MenuDeathEndsStreaming` reads it: not requested, or
+\* `menu_alive` false, or no longer `Fresh`, with no approved client
+\* holding the camera open either. Needs `WF_vars(CameraCloses)` (above)
+\* to hold at all.
+AbandonedPreviewReleasesCamera ==
+    [](<>[](~client_demand /\ ~(requested /\ menu_alive /\ Fresh))
+        => <>(camera = "closed"))
 ====

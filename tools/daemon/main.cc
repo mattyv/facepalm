@@ -32,6 +32,7 @@
 #include "src/calibration.h"
 #include "src/calibration_store.h"
 #include "src/camera_controller.h"
+#include "src/camera_demand.h"
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/config.h"
@@ -81,6 +82,15 @@ constexpr int kFeedCapacity = 100;
 // sooner the fewer times it is checked, and a fixed interval is simpler
 // to explain and to test.
 constexpr std::chrono::seconds kRetryInterval{5};
+
+// How often to recheck the camera preview's own request file for camera
+// admission (#176, src/camera_demand.h), independent of whether the
+// camera is already open: a frame can only arrive, and so OnFrame's own
+// check of the same file can only run, once the camera is; comfortably
+// under src/preview_request.h's own staleness window
+// (kPreviewRequestStaleMs), the same cadence the menu's own refresh
+// timer (tools/menu/main.mm, tools/menu/main_linux.cc) already uses.
+constexpr std::chrono::milliseconds kPreviewDemandPollInterval{500};
 
 // Schedules a retry on `control`, `kRetryInterval` later, on a thread of
 // its own: the portable way to delay a task when the queue underneath
@@ -297,6 +307,26 @@ class Engine : public DaemonController, public DaemonPipeline {
         preview_request_path_(std::move(preview_request_path)),
         preview_frame_path_(std::move(preview_frame_path)),
         preview_readings_path_(std::move(preview_readings_path)),
+        // src/camera_demand.h's CameraDemand (#176): combines an approved
+        // client subscribing with the camera preview's own live, fresh
+        // request into the one admission signal DaemonControl::Subscription
+        // already needs, firing only on that combined signal's own edge.
+        // CameraStatus!Publish's own first-join/last-leave signal (#37
+        // item 8) is this same edge too, generalized the same way, so the
+        // indicator reads "Camera on" for a preview with no approved
+        // client either.
+        camera_demand_([this](bool wanted) {
+          PublishStatus(wanted);
+          control_.Subscription(wanted);
+          // PreviewLease!CameraOpens / CameraCloses (#37 item 8, #176):
+          // the same combined signal the camera's own subscription
+          // already uses.
+          if (wanted) {
+            preview_lease_.CameraOpened();
+          } else {
+            preview_lease_.CameraClosed();
+          }
+        }),
         // PreviewLease!streaming_changed (#114, #134): once streaming
         // stops, the last frame published, and the readings text beside
         // it, are cleared, so neither ever answers the menu's next poll
@@ -456,21 +486,14 @@ class Engine : public DaemonController, public DaemonPipeline {
             }),
         approved_(
             feed_,
+            // specs/PreviewLease.tla's `client_demand` (#176):
+            // camera_demand_ is called only from the control queue, the
+            // same convention CameraController and DaemonControl already
+            // follow, so it is never touched from two threads at once
+            // alongside the preview's own poll below.
             [this](bool joined) {
-              // CameraStatus!Publish (#37 item 8): the menu's indicator
-              // follows this same first-join/last-leave signal.
-              PublishStatus(joined);
-              control_queue_([this, joined] {
-                control_.Subscription(joined);
-                // PreviewLease!CameraOpens / CameraCloses (#37 item 8):
-                // the same first-join/last-leave signal the camera's own
-                // subscription already uses.
-                if (joined) {
-                  preview_lease_.CameraOpened();
-                } else {
-                  preview_lease_.CameraClosed();
-                }
-              });
+              control_queue_(
+                  [this, joined] { camera_demand_.SetClientDemand(joined); });
             },
             [this](const std::string& session) {
               feed_.DisconnectAndForget(session);
@@ -581,6 +604,7 @@ class Engine : public DaemonController, public DaemonPipeline {
     // center, call back into one that was not.
     capture_.StartWatching();
     service_.Start();
+    StartPreviewDemandPoll();
   }
   void Stop() { control_.Stop(); }
   void Subscribe() override { controller_.Subscribe("approved"); }
@@ -683,6 +707,29 @@ class Engine : public DaemonController, public DaemonPipeline {
     return analyzers;
   }
 
+  // Polls the preview's own request file for camera admission on a
+  // thread of its own (#176), the same portable way RetryAfter above
+  // schedules a retry: nothing else can tell the daemon the preview
+  // wants the camera, since OnFrame's own freshness check
+  // (preview_publisher_'s own `requested` callback above) runs only once
+  // the camera is already open, which is exactly what is in question
+  // here. A daemon with no --home resolved has no request file to poll,
+  // the same emptiness PreviewRequestPath above already gives it.
+  void StartPreviewDemandPoll() {
+    if (preview_request_path_.empty()) {
+      return;
+    }
+    std::thread([this] {
+      for (;;) {
+        const bool fresh = IsFreshPreviewRequest(
+            preview_request_path_, UnixMilliseconds(), FileModifiedMs);
+        control_queue_(
+            [this, fresh] { camera_demand_.SetPreviewDemand(fresh); });
+        std::this_thread::sleep_for(kPreviewDemandPollInterval);
+      }
+    }).detach();
+  }
+
   // CameraStatus!Publish. A daemon started with no --status path (such as
   // a test fixture's) simply runs without one.
   void PublishStatus(bool on) {
@@ -718,6 +765,11 @@ class Engine : public DaemonController, public DaemonPipeline {
   std::string preview_request_path_;
   std::string preview_frame_path_;
   std::string preview_readings_path_;
+  // src/camera_demand.h (#176): every reason the camera may be wanted,
+  // combined into DaemonControl::Subscription's own `joined` boolean.
+  // Touched only from control_queue_: approved_'s own callback below and
+  // StartPreviewDemandPoll's own posted check.
+  CameraDemand camera_demand_;
   PreviewLease preview_lease_;
   PreviewPublisher preview_publisher_;
   PreviewReadings preview_readings_;

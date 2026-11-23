@@ -40,7 +40,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `HookBroker.cfg` | one hook peer and one MCP session | holds | 20 |
 | `LookAway.cfg` | three moves, one tracking gap | holds | 922 |
 | `McpSocket.cfg` | one session, up to two requests, backoff bounded to two ticks | holds, with `LinkRecovers` | 65 |
-| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `EventuallyOpens`, `MenuDeathEndsStreaming` and `PreviewStreamsWhenWanted` | 48 |
+| `PreviewLease.cfg` | a stale-after bound of two frames | holds, with `MenuDeathEndsStreaming`, `PreviewStreamsWhenWanted`, `PreviewAloneOpensCamera` and `AbandonedPreviewReleasesCamera` | 384 |
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 9,776 |
@@ -253,6 +253,18 @@ The model does not cover the OS camera itself, which `CameraLifecycle`
 models, nor the secrecy of the token files, which only file permissions
 give.
 
+`Subscription`'s own `joined` boolean generalizes beyond `ApprovedFeed`'s
+own sessions as of #176: `src/camera_demand.h`'s `CameraDemand` now calls
+`DaemonControl::Subscription` through the very same entry point for a
+second source, the camera preview's own live request, combining it with
+`ApprovedFeed`'s signal first so `Subscription` is still called only on
+the combined result's own first-source/last-source edge -- the same
+contract `ApprovedFeed` already met alone. No action or invariant here
+changed: the model already took `joined` as an opaque admission signal,
+never as something only `ApprovedFeed` could produce. `PreviewLease`'s
+own section below models the combination itself
+(`PreviewAloneOpensCamera`, `AbandonedPreviewReleasesCamera`).
+
 ## `UserService`: the menu turns facepalm on and off
 
 Models #37's start from the menu, as `src/user_service.cc` implements it.
@@ -359,6 +371,16 @@ delay, and a real clock bounds how long a poller may take to see it,
 standing for the menu's own one-second timer settling inside the two
 seconds the indicator is asked to.
 
+As of #176, "`DaemonAdmission`'s own transitions" above includes the
+camera preview's own demand (`src/camera_demand.h`), not only an
+approved client's: `camera` here still stands for whatever
+`CameraController` believes, whatever is behind it, so no action or
+invariant changed, only which code calls `Publish`. `src/menu_state.h`'s
+`DecideMenuState` decides what the camera-status line itself reads when
+the service is off (`"Facepalm off"`, not `"Camera off"`, since nothing
+is publishing to it at all then); that decision has no lifecycle of its
+own, so it is covered by `test/menu_state_test.cc` alone, not a spec.
+
 ## `PreviewLease`: the camera preview's lease
 
 Models #61 item 8's camera preview, as `src/preview_lease.cc` implements it,
@@ -371,6 +393,39 @@ all. No image reaches a client but the menu through this: the gate
 decides only whether to publish to the menu's own local channel, never
 whether the approved-token service every other client reaches carries
 one (it never does, either way).
+
+Issue #176 found that `CameraOpens` and `CameraCloses` being taken as
+wholly free, external facts had let a real bug hide in plain sight:
+`tools/menu/main.mm`'s `startPreview` and `tools/menu/main_linux.cc`'s
+`CameraPreview::Start` refused to even ask unless the camera was already
+in use for some other reason, with an error naming an action ("turn on
+the camera") no menu item performs, since nothing in this model said the
+preview's own request was itself a reason to open the camera. `Demand`
+is every reason the camera may be wanted now: `client_demand` stands for
+`DaemonAdmission.tla`'s own admission (an approved client; still taken as
+given, still proved there, now an externally toggled fact the way that
+spec's own `canStart` is, rather than the whole of what `CameraOpens`
+needs), and the preview's own live, fresh request joins it, gated by the
+fix itself, `GuardPreviewIsDemand`. `CameraOpens` fires only once
+something is actually wanted; `CameraCloses` now waits for every source
+to agree nothing is (`~Demand`), needing its own fairness
+(`WF_vars(CameraCloses)`) in turn, since nothing else ever required it to
+run. In code, `src/camera_demand.h`'s `CameraDemand` is `Demand` itself:
+it combines an approved client subscribing (`ApprovedFeed`'s own
+first-join/last-leave, unchanged) with the preview's own request, polled
+on a timer of its own (`tools/daemon/main.cc`'s
+`StartPreviewDemandPoll`, independent of frame capture, which cannot run
+before the camera is admitted in the first place) into the one signal
+`DaemonControl::Subscription` already needed, firing only on that
+combined signal's own edge -- extending the daemon's existing admission
+entry point rather than adding a second channel. The menu side still
+needs a grace period of its own (`kPreviewCameraGraceMisses` in
+`tools/menu/main.mm`, `kCameraGraceMisses` in
+`tools/menu/main_linux.cc`): `Start` no longer waits for the camera to
+already be on, so its own first few polls of the camera-in-use indicator
+may still read off while the daemon's admission and status publish catch
+up with the request it just made, which a plain instant self-close would
+otherwise have misread as the preview's own camera going away again.
 
 Issue #114 adds a second gate: `requested` (the request file's presence)
 must also be fresh, `age` (ticks since a live menu's own `StartPreview` -- its
@@ -402,13 +457,14 @@ table, is gone: its concern is now `NeverStreamsOnAStaleRequest`'s alone.
 
 | Property | What it says | Test |
 |---|---|---|
-| `EventuallyOpens` | Something must happen: the camera can always eventually open. | `StartTest.NeedsTheCameraOpen` and the suite overall, through `PreviewLease::CameraOpened` |
 | `NeverStreamsWithoutCamera` | The lease never grants streaming while the camera is closed. | `StartTest.NeedsTheCameraOpen` |
 | `NeverStreamsOnAStaleRequest` (#114) | Streaming needs the request both there and fresh. | `NeverStreamsOnAStaleRequestTest.AReopenedCameraNeedsANewStart` |
 | `MenuDeathEndsStreaming` (#114) | Liveness: once the menu that made a request is gone, streaming always eventually stops, and -- since only a live menu's own `StartPreview` can turn it back on -- stops for good. This is the acceptance bar's "nothing streams without a live menu window", phrased as a leads-to rather than an instant cutoff: the daemon can only learn of the menu's death indirectly, on its own per-frame check, within the couple of seconds `GuardRequestFresh`'s own grace period already allows for. | `IsFreshPreviewRequestTest.AbandonedLongAgoIsStale` in `test/preview_request_test.cc`; hand-checked against `tools/menu/main.mm`'s `applicationWillTerminate:` and `tools/menu/main_linux.cc`'s `QCoreApplication::aboutToQuit`, which remove a clean quit's own request outright rather than waiting on this grace period at all |
 | `PreviewStreamsWhenWanted` (#114) | Liveness, and something must happen: the camera, the request and the menu behind it, all held from some point on, lead to the preview actually streaming. `[](<>[]Wanted => <>streaming)`, as `specs/DaemonAdmission.tla`'s own `JoinOpens` uses the shape, rather than a plain `~>` a momentary ask could satisfy only by chance. | `OnFrameTest.GrantsAndPublishesOnceTheCameraIsOpenAndItIsRequested` in `test/preview_publisher_test.cc` |
 | `NeverFrameWithoutStreaming` (#129) | The frame file on disk never outlives the preview: not a crash's leftover at startup, and not a publish still in flight once something else has already stopped streaming. | `OnFrameTest.SkipsPublishingAFrameEncodedBeforeTheCameraClosedMidEncode` in `test/preview_publisher_test.cc`, `PublishTest.SkipsTheWriteOnceStreamingHasStopped` in `test/preview_lease_test.cc` |
 | `NeverReadingsWithoutStreaming` (#134) | The readings text beside the frame never outlives the preview either, for the same two reasons as the frame -- a crash's leftover, or a write landing after a transition already cleared it -- since both go through the one `PreviewLease::Publish`. | `PublishTest.SkipsTheWriteOnceStreamingHasStopped` in `test/preview_lease_test.cc`, which already proves the shared gate regardless of what it writes; `tools/daemon/main.cc`'s `Engine::PublishPreviewReadings` calls that same `Publish`, the way `PreviewPublisher::OnFrame` does for the frame, and is otherwise composition, tested the way `clients_`'s and `approved_`'s own forwarding is -- by reading it, not a unit of its own |
+| `PreviewAloneOpensCamera` (#176) | Liveness, and something must happen: the camera turns on for an open preview, attributed to the preview itself (`~client_demand` rules out some other client happening to also want it) -- the acceptance bar's first half, and exactly #176's own bug once the guard below is off. | `CameraDemandTest.PreviewDemandAloneIsWanted`; `src/camera_demand.h`'s own doc comment names the admission entry point it drives |
+| `AbandonedPreviewReleasesCamera` (#176) | Liveness: a closed or abandoned preview (the window closed, the menu crashed, or the lease simply expired) never keeps the camera on by itself -- the acceptance bar's second half, read the same way `MenuDeathEndsStreaming` reads "abandoned". | `CameraDemandTest.TheLastSourceLeavingReleasesIt`, `CameraDemandTest.OneSourceLeavingWhileTheOtherStillWantsItStaysOn` |
 
 Each mutation, and what TLC found:
 
@@ -416,12 +472,13 @@ Each mutation, and what TLC found:
 |---|---|
 | `GuardStartNeedsCamera = FALSE`: `StartPreview` is let through with the camera closed | `NeverStreamsWithoutCamera`, 2 states |
 | `GuardStreamingTracksLease = FALSE`: `streaming` is never recomputed | `PreviewStreamsWhenWanted`: nothing ever grants, 3 states |
-| `CameraOpens` never enabled (its guard replaced by `FALSE`) | `EventuallyOpens`, 4 states |
 | `GuardRequestFresh = FALSE` (#114): streaming never checks the request's age | `MenuDeathEndsStreaming`: a request a dead menu left behind streams forever once granted |
 | No fairness on `Frame` (#114): the daemon's own per-frame check is never required to run | `PreviewStreamsWhenWanted` (nothing is ever forced to grant) and `MenuDeathEndsStreaming` (nothing is ever forced to age a stale one away) |
 | `GuardPublishChecksStreaming = FALSE` (#129): `Publish` writes the frame unconditionally | `NeverFrameWithoutStreaming`, 46 states; `PublishReadings` shares the same guard (#134), so `NeverReadingsWithoutStreaming` breaks too, in fewer steps (21 states), since it has no `pending_publish` of its own to wait on first |
 | `GuardStartClearsFrame = FALSE` (#129): a crash's leftover frame is never cleared at startup | `NeverFrameWithoutStreaming`, violated by the initial state itself; `readings_exists`' own `Init` shares the same guard (#134), so `NeverReadingsWithoutStreaming` is violated by the initial state too |
 | No fairness on `Publish` (#129): a frame once committed to is never required to actually publish | `PreviewStreamsWhenWanted` and `MenuDeathEndsStreaming`, the same way missing `Frame` fairness does: `Frame` cannot run again, by its own `~pending_publish` guard, while a publish stays forever outstanding |
+| `GuardPreviewIsDemand = FALSE` (#176): the preview's own request never counts as demand | `PreviewAloneOpensCamera`: with no approved client ever subscribed, nothing ever opens the camera, reproducing #176 exactly |
+| No fairness on `CameraCloses` (#176): the camera's own admission is never required to re-check `Demand` | `AbandonedPreviewReleasesCamera`: with nothing holding the camera open but a dead menu's own stale request and the fresh check already caught by `GuardRequestFresh` above, the camera simply stays open forever once opened, `CameraCloses` never forced to run even though always enabled -- leaving `CameraCloses` wholly unconditioned and fair instead, rather than waiting for `~Demand`, was tried first and rejected: it let the camera close for an unrelated reason quietly satisfy this property even with `GuardRequestFresh` broken, masking the very finding that property exists to catch |
 
 Issue #129 adds a third gate: whether the frame file itself, on disk, is
 ever left behind once the preview is not streaming. `frame_exists` and
@@ -491,6 +548,17 @@ the mutation cannot touch -- the same lesson dropping
 `StreamingMatchesFormula` already taught, that a property checked
 against the same broken piece it is meant to guard proves nothing.
 
+`EventuallyOpens` (`<>(camera = "open")`, "something must happen, so a
+model that can never open it fails this") is gone as of #176, the same
+way `StreamingMatchesFormula` went: it was only ever honest while
+`CameraOpens` was wholly free, needing no cause at all. Once `CameraOpens`
+fires only on `Demand`, the model can no longer open the camera for no
+reason, so an unconditional "it always eventually does" would be false on
+its face; `PreviewAloneOpensCamera` is the conditional replacement that
+also serves as the non-vacuity check `EventuallyOpens` gave, now
+attributing the open to its real cause instead of asserting one
+unconditionally.
+
 `src/preview_publisher.cc` implements `PreviewLease`'s caller, following
 no spec of its own (it has no lifecycle beyond the lease's): it polls the
 menu's request file, drives `CameraOpened`/`Start`/`Stop`, and encodes a
@@ -503,7 +571,13 @@ already proved above and has no I/O of its own to mock. `src/preview_request.cc`
 implements the request's own freshness check (`IsFreshPreviewRequest`,
 specs/PreviewLease.tla's `Fresh`), which `tools/daemon/main.cc` wires as
 the `requested` callback `PreviewPublisher` polls every frame, in place of
-the plain file-existence check #114 found insufficient.
+the plain file-existence check #114 found insufficient. As of #176, the
+very same check also runs on `Engine::StartPreviewDemandPoll`'s own timer,
+independent of frame capture, so `src/camera_demand.h`'s `CameraDemand`
+hears about a live request even while the camera is still closed; `main.cc`
+has no unit test of its own for this wiring, following `DaemonStatus`'s own
+precedent above, since it is composition read directly rather than
+exercised.
 
 ## `FeedWaitRetirement`: canceled wait ownership
 
