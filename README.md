@@ -164,6 +164,15 @@ made since, each with its reason, are in the
     already uses it, rather than only the daemon's next run (#136); the
     profile adds a `calibrated_screen` field from
     `NearestCalibratedScreen` alongside the gaze it already reads.
+-   `src/camera_demand`: combines every reason the camera may be wanted
+    -- an approved client subscribing, and the camera preview's own live
+    request -- into the one admission signal the daemon already had
+    (#176), following `specs/PreviewLease.tla`'s `Demand`.
+-   `src/menu_state`: the pure decision table (#176) both the macOS menu
+    and the Linux tray read for the camera-status line's title and the
+    "Show Camera Preview" and "Calibrate…" items' title and enabled
+    state, from whether the service is on, the camera is in use, and the
+    preview is open; see the table in `docs/local-app.md`.
 -   `src/preview_lease`, `src/preview_publisher`, `src/preview_request`,
     `src/macos/preview_jpeg`, `src/linux/preview_jpeg`: the camera
     preview (#36, #37, #61 item 8, #108, #114), gated so a frame is ever
@@ -179,11 +188,18 @@ made since, each with its reason, are in the
     frame to JPEG (ImageIO on macOS, libjpeg on Linux) and writes it,
     owner-only, to the private `UserPaths::preview_frame`, never to the
     approved-token service every other client reaches, clearing it once
-    streaming stops. The menu's own "Show Camera Preview" window
-    (`tools/menu/main.mm`, `tools/menu/main_linux.cc`) rereads that file
-    and re-touches the request on its own timer, keeping it fresh for as
-    long as the window stays open; declines to open at all with the
-    camera off; and removes the request outright at launch, on a clean
+    streaming stops. The preview is a camera demand of its own (#176,
+    `src/camera_demand.h`), the same way an approved client subscribing
+    already is, combined into the daemon's existing admission entry
+    point rather than a second channel: opening the preview with nothing
+    else using the camera turns the camera on by itself, with "Turn on
+    Facepalm first" the only reason it is ever refused, that being the
+    service itself not running. The menu's own "Show Camera Preview"
+    window (`tools/menu/main.mm`, `tools/menu/main_linux.cc`) rereads
+    that file and re-touches the request on its own timer, keeping it
+    fresh for as long as the window stays open, tolerating a brief grace
+    period while the daemon's own admission catches up with a request it
+    just made; and removes the request outright at launch, on a clean
     quit, and when its own close button is used or the camera itself
     goes off.
 -   `src/screen_context`, `src/screen_context_reporter`,
@@ -461,11 +477,13 @@ subscription within a couple of seconds (#61 item 8). Only one tray
 runs at a time: choosing **Facepalm** again, which runs
 `facepalm-menu --settings`, while one is already running reopens its
 Settings form instead of opening a second tray icon (#98). **Show
-Camera Preview** opens a window of the camera, started only by hand
-(and only once the camera is already in use) and stopped from the same
-item, by the window's own close button, or when the camera goes off
-(#108); quitting the tray, or an earlier run that crashed or was logged
-out mid-preview, ends it too (#114).
+Camera Preview** opens a window of the camera, started only by hand and
+turning the camera on by itself if nothing else has it on already
+(#176), and stopped from the same item, by the window's own close
+button, or when the camera goes off (#108); quitting the tray, or an
+earlier run that crashed or was logged out mid-preview, ends it too
+(#114). While Facepalm is off, **Show Camera Preview** and
+**Calibrate…** are disabled, titled "Turn on Facepalm first" (#176).
 For live camera capture, use the separate [Linux daemon build](docs/linux-camera.md)
 or the macOS daemon.
 

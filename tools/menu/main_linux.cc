@@ -44,6 +44,7 @@
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/daemon_status.h"
+#include "src/menu_state.h"
 #include "src/settings_document.h"
 #include "src/single_instance.h"
 #include "src/user_paths.h"
@@ -677,11 +678,10 @@ class SettingsDialog : public QDialog {
 // menu's side; the daemon only watches for the request file.
 class CameraPreview {
  public:
-  CameraPreview(QWidget* parent, QAction* action)
+  explicit CameraPreview(QWidget* parent)
       : window_(parent),
         label_(new QLabel(&window_)),
-        status_(new QLabel(&window_)),
-        action_(action) {
+        status_(new QLabel(&window_)) {
     constexpr int kSide = 480;
     window_.setWindowTitle(QStringLiteral("Camera Preview"));
     window_.resize(kSide, kSide);
@@ -711,6 +711,8 @@ class CameraPreview {
     }
   }
 
+  [[nodiscard]] bool IsOpen() const { return window_.isVisible(); }
+
   // The request file, if any -- the only signal the daemon needs to stop
   // publishing (#108, #114). Safe to call whether or not the preview is
   // running: at launch, and on QCoreApplication::aboutToQuit, nothing
@@ -737,27 +739,20 @@ class CameraPreview {
     return request.open(QIODevice::WriteOnly);
   }
 
-  // PreviewLease!StartPreview (#114): creating the request file is the
-  // only signal the daemon needs; it notices it on the next captured
-  // frame. Needs the camera already on, read the same way the tray's own
-  // indicator does, since otherwise the window has nothing to ever show,
-  // and would open, flash, and have to close itself again the moment its
-  // own first poll found the same thing.
+  // PreviewLease!StartPreview (#114, #176): creating the request file is
+  // a camera demand of its own now (src/camera_demand.h), the same way
+  // an approved client subscribing already is, so the daemon admits the
+  // camera for this alone rather than refusing unless something else
+  // already has it on.
   void Start() {
-    if (!facepalm::ReadCameraStatus(StatusPath().toStdString())) {
-      Warn(QStringLiteral(
-          "Turn on the camera, or wait for it to be used, before opening "
-          "the preview."));
-      return;
-    }
     if (!Touch()) {
       Warn(QStringLiteral("Could not create the preview request."));
       return;
     }
+    misses_ = 0;
     Refresh();
     window_.show();
     window_.raise();
-    action_->setText(QStringLiteral("Hide Camera Preview"));
     constexpr int kRefreshMs = 500;
     timer_.start(kRefreshMs);
   }
@@ -771,23 +766,38 @@ class CameraPreview {
     timer_.stop();
     RemoveRequest();
     window_.hide();
-    action_->setText(QStringLiteral("Show Camera Preview"));
     status_->clear();
   }
 
-  // PreviewLease!Poll: also stops the preview once the camera goes off,
+  // PreviewLease!Poll: also stops the preview once the camera has
+  // genuinely stayed off for kCameraGraceMisses refreshes in a row,
   // since the daemon stops publishing then but the window would
-  // otherwise keep showing the last frame. Also touches the request
-  // file (#114) so the daemon keeps seeing it as fresh for as long as
-  // this window stays open; a touch that fails is left for the next
-  // one, same as a dropped frame, rather than treated as a reason to
-  // stop.
+  // otherwise keep showing the last frame. The grace period (#176) is
+  // what keeps a preview that just asked for the camera itself from
+  // reading its own daemon's admission catching up as abandonment and
+  // closing itself before it was ever shown anything: Start no longer
+  // waits for the camera to already be on first. Also touches the
+  // request file (#114) so the daemon keeps seeing it as fresh for as
+  // long as this window stays open; a touch that fails is left for the
+  // next one, same as a dropped frame, rather than treated as a reason
+  // to stop.
   void Refresh() {
+    Touch();
     if (!facepalm::ReadCameraStatus(StatusPath().toStdString())) {
-      window_.reject();
+      // How many refreshes in a row, at kRefreshMs apart, may find the
+      // camera not yet in use before giving up: long enough for the
+      // daemon's own camera-demand poll (tools/daemon/main.cc's
+      // kPreviewDemandPollInterval, 0.5 s) and its admission and status
+      // publish to catch up with a request this window itself just
+      // made, short enough that a camera genuinely lost for an
+      // unrelated reason still closes the window promptly.
+      constexpr int kCameraGraceMisses = 4;
+      if (++misses_ >= kCameraGraceMisses) {
+        window_.reject();
+      }
       return;
     }
-    Touch();
+    misses_ = 0;
     const QPixmap pixmap(frame_path_);
     if (!pixmap.isNull()) {
       label_->setPixmap(pixmap.scaled(label_->size(), Qt::KeepAspectRatio,
@@ -816,8 +826,10 @@ class CameraPreview {
   QDialog window_;
   QLabel* label_;
   QLabel* status_;
-  QAction* action_;
   QTimer timer_;
+  // How many Refresh calls in a row have found the camera not yet in
+  // use since this window last asked for the preview (#176).
+  int misses_ = 0;
   const QString request_path_ = PreviewRequestPath();
   const QString frame_path_ = PreviewFramePath();
   const QString readings_path_ = PreviewReadingsPath();
@@ -864,35 +876,6 @@ int main(int argc, char* argv[]) {
   QAction* tools = menu.addAction(QString::fromUtf8(kReplayStatus));
   tools->setEnabled(false);
   QAction* power = menu.addAction(QString());
-  const auto show_power = [power] {
-    power->setText(ServiceIsOn() ? QStringLiteral("Turn Off Facepalm")
-                                 : QStringLiteral("Turn On Facepalm…"));
-  };
-  show_power();
-  QObject::connect(&menu, &QMenu::aboutToShow, &window, show_power);
-  // Turning on is the person's consent, so it asks first.
-  QObject::connect(power, &QAction::triggered, &window, [&window, show_power] {
-    const bool on = ServiceIsOn();
-    if (!on &&
-        QMessageBox::question(
-            &window, QStringLiteral("Turn on Facepalm?"),
-            QStringLiteral(
-                "Facepalm will use your camera while an app you "
-                "approved, such as Claude, asks how you react, and it "
-                "starts again each time you log in until you turn it "
-                "off. Frames stay on this computer.")) != QMessageBox::Yes) {
-      return;
-    }
-    const QString error = SwitchService(!on);
-    if (!error.isEmpty()) {
-      QMessageBox::warning(
-          &window,
-          on ? QStringLiteral("Facepalm could not be turned off")
-             : QStringLiteral("Facepalm could not be turned on"),
-          error);
-    }
-    show_power();
-  });
   menu.addSeparator();
   const QAction* show = menu.addAction(QStringLiteral("Settings…"));
   const auto show_window = [&window] { window.Open(); };
@@ -900,9 +883,69 @@ int main(int argc, char* argv[]) {
 
   QAction* preview_action =
       menu.addAction(QStringLiteral("Show Camera Preview"));
-  CameraPreview preview(&window, preview_action);
+  CameraPreview preview(&window);
+
+  // The calibration wizard (#118, item 12 of #61): optional, so it is a
+  // menu entry a person chooses, never run on their behalf.
+  QAction* calibrate_action = menu.addAction(QStringLiteral("Calibrate…"));
+  facepalm_menu::CalibrationWindow calibration(&window,
+                                               SocketPath().toStdString());
+
+  // Decides camera_status's, power's, preview_action's and
+  // calibrate_action's title and enabled state from src/menu_state.h's
+  // DecideMenuState, the one table both this tray and tools/menu/
+  // main.mm's menu read (docs/local-app.md, #176), so Facepalm being
+  // off is never the silent cause of a preview or a calibration wizard
+  // that can never reach it.
+  const QString status_path = StatusPath();
+  const auto refresh_menu_state = [=, &preview] {
+    const bool service_on = ServiceIsOn();
+    const facepalm::MenuState state = facepalm::DecideMenuState(
+        {.service_on = service_on,
+         .camera_in_use = facepalm::ReadCameraStatus(status_path.toStdString()),
+         .preview_open = preview.IsOpen()});
+    power->setText(service_on ? QStringLiteral("Turn Off Facepalm")
+                              : QStringLiteral("Turn On Facepalm…"));
+    camera_status->setText(QString::fromStdString(state.camera_status_title));
+    preview_action->setText(QString::fromStdString(state.preview_title));
+    preview_action->setEnabled(state.preview_enabled);
+    calibrate_action->setText(QString::fromStdString(state.calibrate_title));
+    calibrate_action->setEnabled(state.calibrate_enabled);
+  };
+  refresh_menu_state();
+  QObject::connect(&menu, &QMenu::aboutToShow, &window, refresh_menu_state);
+
+  // Turning on is the person's consent, so it asks first.
+  QObject::connect(
+      power, &QAction::triggered, &window, [&window, refresh_menu_state] {
+        const bool on = ServiceIsOn();
+        if (!on &&
+            QMessageBox::question(
+                &window, QStringLiteral("Turn on Facepalm?"),
+                QStringLiteral(
+                    "Facepalm will use your camera while an app you "
+                    "approved, such as Claude, asks how you react, and it "
+                    "starts again each time you log in until you turn it "
+                    "off. Frames stay on this computer.")) !=
+                QMessageBox::Yes) {
+          return;
+        }
+        const QString error = SwitchService(!on);
+        if (!error.isEmpty()) {
+          QMessageBox::warning(
+              &window,
+              on ? QStringLiteral("Facepalm could not be turned off")
+                 : QStringLiteral("Facepalm could not be turned on"),
+              error);
+        }
+        refresh_menu_state();
+      });
+
   QObject::connect(preview_action, &QAction::triggered, &window,
-                   [&preview] { preview.Toggle(); });
+                   [&preview, refresh_menu_state] {
+                     preview.Toggle();
+                     refresh_menu_state();
+                   });
   // A request file an earlier launch left behind -- it crashed, or its
   // session logged out, while the preview was open (#114) -- is removed
   // outright: the daemon's own freshness check would stop streaming to
@@ -917,12 +960,6 @@ int main(int argc, char* argv[]) {
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &window,
                    [&preview] { preview.RemoveRequest(); });
 
-  // The calibration wizard (#118, item 12 of #61): optional, so it is a
-  // menu entry a person chooses, never run on their behalf.
-  const QAction* calibrate_action =
-      menu.addAction(QStringLiteral("Calibrate…"));
-  facepalm_menu::CalibrationWindow calibration(&window,
-                                               SocketPath().toStdString());
   QObject::connect(
       calibrate_action, &QAction::triggered, &window,
       [&calibration, &window] { OpenCalibration(calibration, &window); });
@@ -941,20 +978,14 @@ int main(int argc, char* argv[]) {
   QObject::connect(&refresh_timer, &QTimer::timeout, &window, refresh);
   refresh_timer.start(kRefreshIntervalMs);
 
-  // The camera-in-use indicator (#37 item 8): its own, faster timer so the
-  // tray settles within the two seconds it is asked to, independent of the
-  // slower daemon-reachability check above.
+  // The camera-in-use indicator (#37 item 8), and the preview and
+  // calibrate items alongside it, refresh on their own faster timer so
+  // they settle within the two seconds the indicator is asked to,
+  // independent of the slower daemon-reachability check above.
   constexpr int kCameraStatusIntervalMs = 1000;
-  const QString status_path = StatusPath();
-  const auto refresh_camera_status = [=] {
-    camera_status->setText(facepalm::ReadCameraStatus(status_path.toStdString())
-                               ? QStringLiteral("Camera on")
-                               : QStringLiteral("Camera off"));
-  };
-  refresh_camera_status();
   QTimer camera_status_timer;
   QObject::connect(&camera_status_timer, &QTimer::timeout, &window,
-                   refresh_camera_status);
+                   refresh_menu_state);
   camera_status_timer.start(kCameraStatusIntervalMs);
 
   // specs/SingleInstance.tla: Forward. This instance holds the lock, so

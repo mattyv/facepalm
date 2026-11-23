@@ -14,6 +14,7 @@
 #include "src/client_token.h"
 #include "src/config.h"
 #include "src/daemon_status.h"
+#include "src/menu_state.h"
 #include "src/settings_document.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
@@ -28,6 +29,14 @@ constexpr NSTimeInterval kCameraStatusInterval = 1.0;
 // item 8, #108): a plain poll, like the camera status file's own, not a
 // frame rate the preview promises to keep up with.
 constexpr NSTimeInterval kPreviewRefreshInterval = 0.5;
+// How many consecutive refreshes may find the camera not yet in use
+// before the preview gives up and closes itself (#176): long enough,
+// at kPreviewRefreshInterval apart, for the daemon's own camera-demand
+// poll (tools/daemon/main.cc's kPreviewDemandPollInterval, 0.5 s) and
+// its admission and status publish to catch up with a request this
+// window itself just made, short enough that a camera genuinely lost
+// for an unrelated reason still closes the window promptly.
+constexpr NSInteger kPreviewCameraGraceMisses = 4;
 
 NSURL* SettingsURL() {
   const char* xdg = std::getenv("XDG_CONFIG_HOME");
@@ -214,6 +223,13 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 @property(nonatomic, strong) NSTimer* cameraStatusTimer;
 @property(nonatomic, strong) NSMenuItem* preview;
 @property(nonatomic, strong) NSWindow* previewWindow;
+// How many refreshes in a row have found the camera not yet in use since
+// this window last asked for the preview (#176): Start is no longer
+// refused while nothing else has the camera open, so the daemon's own
+// admission and status publish need a brief grace period to catch up
+// before a still-open preview is read as abandoned.
+@property(nonatomic) NSInteger previewCameraMisses;
+@property(nonatomic, strong) NSMenuItem* calibrate;
 // The calibration wizard (#118, item 12 of #61): nil whenever no window is
 // open, the way previewWindow starts out, except this controller is
 // created and dropped on each open rather than kept around closed.
@@ -283,11 +299,11 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   [menu addItem:self.preview];
   // The calibration wizard (#118, item 12 of #61): optional, so it is a
   // menu entry a person chooses, never run on their behalf.
-  NSMenuItem* calibrate = [[NSMenuItem alloc] initWithTitle:@"Calibrate…"
-                                                     action:@selector(calibrate:)
-                                              keyEquivalent:@""];
-  calibrate.target = self;
-  [menu addItem:calibrate];
+  self.calibrate = [[NSMenuItem alloc] initWithTitle:@"Calibrate…"
+                                              action:@selector(calibrate:)
+                                       keyEquivalent:@""];
+  self.calibrate.target = self;
+  [menu addItem:self.calibrate];
   NSMenuItem* quit = [[NSMenuItem alloc] initWithTitle:@"Quit Facepalm Menu"
                                                 action:@selector(terminate:)
                                          keyEquivalent:@"q"];
@@ -299,20 +315,35 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   // The camera-in-use indicator (#37 item 8) refreshes on its own timer, so
   // it shows up to date even while the dropdown is closed, not only when
   // menuNeedsUpdate runs on opening it.
-  [self refreshCameraStatus];
+  [self refreshMenuState];
   self.cameraStatusTimer = [NSTimer scheduledTimerWithTimeInterval:kCameraStatusInterval
                                                             target:self
-                                                          selector:@selector(refreshCameraStatus)
+                                                          selector:@selector(refreshMenuState)
                                                           userInfo:nil
                                                            repeats:YES];
   if (self.openSettingsOnLaunch) [self openSettings:nil];
 }
 
-// CameraStatus!Poll, on the menu's own timer (#37 item 8).
-- (void)refreshCameraStatus {
-  const BOOL on = CameraInUse();
-  self.cameraStatus.title = on ? @"Camera on" : @"Camera off";
-  self.statusItem.button.toolTip = on ? @"Facepalm — camera on" : @"Facepalm";
+// CameraStatus!Poll, on the menu's own timer (#37 item 8), and each time
+// the menu opens (menuNeedsUpdate): decides every dynamic item's title
+// and enabled state from src/menu_state.h's DecideMenuState, the one
+// table both this menu and tools/menu/main_linux.cc's tray read
+// (docs/local-app.md, #176), so Facepalm being off is never the silent
+// cause of a preview or a calibration wizard that can never reach it.
+- (void)refreshMenuState {
+  const BOOL serviceOn = ServiceIsOn();
+  const facepalm::MenuState state =
+      facepalm::DecideMenuState({.service_on = serviceOn ? true : false,
+                                 .camera_in_use = CameraInUse() ? true : false,
+                                 .preview_open = self.previewWindow.visible ? true : false});
+  self.power.title = serviceOn ? @"Turn Off Facepalm" : @"Turn On Facepalm…";
+  self.cameraStatus.title = [NSString stringWithUTF8String:state.camera_status_title.c_str()];
+  self.statusItem.button.toolTip =
+      state.camera_status_title == "Camera on" ? @"Facepalm — camera on" : @"Facepalm";
+  self.preview.title = [NSString stringWithUTF8String:state.preview_title.c_str()];
+  self.preview.enabled = state.preview_enabled;
+  self.calibrate.title = [NSString stringWithUTF8String:state.calibrate_title.c_str()];
+  self.calibrate.enabled = state.calibrate_enabled;
 }
 
 // Applies what src/window_activation.h's WindowActivationTracker decides
@@ -370,20 +401,14 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
          [[NSData data] writeToFile:requestPath options:NSDataWritingAtomic error:error];
 }
 
-// PreviewLease!StartPreview (#37 item 8, #108, #114): creating the
-// request file is the only signal the daemon needs; it notices it on
-// the next captured frame. Needs the camera already on -- read the same
-// way the menu's own indicator does, from the daemon's status file --
-// since otherwise the window has nothing to ever show, and would open,
-// flash, and have to close itself again the moment its own first poll
-// found the same thing (#114).
+// PreviewLease!StartPreview (#37 item 8, #108, #114, #176): creating the
+// request file is a camera demand of its own now, the same way an
+// approved client subscribing already is (src/camera_demand.h), so the
+// daemon admits the camera for this alone rather than refusing unless
+// something else already has it on. It notices the request on its own
+// poll (tools/daemon/main.cc's StartPreviewDemandPoll), independent of
+// frame capture, which could not otherwise ever start.
 - (void)startPreview {
-  if (!CameraInUse()) {
-    [self showError:@"Turn on the camera, or wait for it to be used, before "
-                    @"opening the preview."
-              title:@"Camera preview could not start"];
-    return;
-  }
   const std::optional<facepalm::UserPaths> paths = PreviewPaths();
   if (!paths) {
     [self showError:@"Your home folder could not be found."
@@ -400,10 +425,11 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   }
   if (self.previewWindow == nil) [self createPreviewWindow];
   [self windowDidOpenForActivation];
-  self.preview.title = @"Hide Camera Preview";
+  self.previewCameraMisses = 0;
   [NSApp activateIgnoringOtherApps:YES];
   [self.previewWindow center];
   [self.previewWindow makeKeyAndOrderFront:nil];
+  [self refreshMenuState];
   [self refreshPreviewFrame];
   self.previewTimer = [NSTimer scheduledTimerWithTimeInterval:kPreviewRefreshInterval
                                                        target:self
@@ -437,9 +463,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   self.previewTimer = nil;
   [self removePreviewRequest];
   [self.previewWindow orderOut:nil];
-  self.preview.title = @"Show Camera Preview";
   self.previewStatus.stringValue = @"";
   [self windowDidCloseForActivation];
+  [self refreshMenuState];
 }
 
 // Opens the calibration wizard (#118, item 12 of #61): approves the
@@ -530,23 +556,32 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 // PreviewLease!Poll, on the preview window's own timer (#37 item 8,
 // #108): rereads the daemon's latest frame, rewritten atomically, so a
 // half-written file is never shown. Also stops the preview once the
-// camera itself goes off (the acceptance bar's "stops with the
-// camera"): PreviewLease already stops publishing then, but without
-// this check the window would otherwise go on showing the last frame
-// forever rather than closing. Also touches the request file (#114), so
-// the daemon keeps seeing it as fresh for as long as this window stays
-// open; a touch that fails is left for the next one, same as a dropped
-// frame, rather than treated as a reason to stop.
+// camera has genuinely stayed off for kPreviewCameraGraceMisses refreshes
+// in a row (the acceptance bar's "stops with the camera"): PreviewLease
+// already stops publishing then, but without this check the window
+// would otherwise go on showing the last frame forever rather than
+// closing. The grace period (#176) is what keeps a preview that just
+// asked for the camera itself from reading its own daemon's admission
+// catching up as abandonment and closing itself before it was ever
+// shown anything. Also touches the request file (#114), so the daemon
+// keeps seeing it as fresh for as long as this window stays open; a
+// touch that fails is left for the next one, same as a dropped frame,
+// rather than treated as a reason to stop.
 - (void)refreshPreviewFrame {
+  const std::optional<facepalm::UserPaths> paths = PreviewPaths();
+  if (paths) {
+    NSError* error = nil;
+    [self touchPreviewRequest:[NSString stringWithUTF8String:paths->preview_request.c_str()]
+                        error:&error];
+  }
   if (!CameraInUse()) {
-    [self stopPreview];
+    if (++self.previewCameraMisses >= kPreviewCameraGraceMisses) {
+      [self stopPreview];
+    }
     return;
   }
-  const std::optional<facepalm::UserPaths> paths = PreviewPaths();
+  self.previewCameraMisses = 0;
   if (!paths) return;
-  NSError* error = nil;
-  [self touchPreviewRequest:[NSString stringWithUTF8String:paths->preview_request.c_str()]
-                      error:&error];
   NSImage* image = [[NSImage alloc]
       initWithContentsOfFile:[NSString stringWithUTF8String:paths->preview_frame.c_str()]];
   if (image != nil) self.previewImageView.image = image;
@@ -590,11 +625,11 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   [alert runModal];
 }
 
-// Shows whether Facepalm is on each time the menu opens.
+// Shows whether Facepalm is on, and every item refreshMenuState decides,
+// each time the menu opens.
 - (void)menuNeedsUpdate:(NSMenu*)menu {
   (void)menu;
-  self.power.title = ServiceIsOn() ? @"Turn Off Facepalm" : @"Turn On Facepalm…";
-  [self refreshCameraStatus];
+  [self refreshMenuState];
 }
 
 // Turning on is the person's consent, so it asks first; turning off does not.
