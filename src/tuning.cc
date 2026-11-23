@@ -16,8 +16,18 @@
 namespace facepalm {
 namespace {
 
-constexpr std::string_view kHeader = "facepalm feelings 2\n";
-constexpr std::size_t kWordsPerLine = 5;
+// v1 (pre-#143) had no gaze: "<sign> <beat> <feeling> <count>". v2 adds
+// it as a third word: "<sign> <beat> <gaze> <feeling> <count>". A v1 file
+// is read, not refused: refusing it would throw away the person's own
+// picks for a file they never asked to change, unlike a calibration
+// profile, which the person simply redoes (#137's own version bump) --
+// every v1 pick is read as gaze Gaze::kUnknown, the same gaze it would
+// have carried had screen context been on all along, and Text always
+// writes v2, so the next save upgrades the file in place.
+constexpr std::string_view kHeaderV1 = "facepalm feelings 1\n";
+constexpr std::string_view kHeaderV2 = "facepalm feelings 2\n";
+constexpr std::size_t kWordsPerLineV1 = 4;
+constexpr std::size_t kWordsPerLineV2 = 5;
 
 // How many picks `picks` holds in total.
 std::int64_t Total(const std::array<std::int64_t, kFeelings>& picks) {
@@ -85,6 +95,44 @@ std::optional<std::int64_t> CountOf(std::string_view word) {
   return count;
 }
 
+// One line's own evidence, feeling and count.
+struct ParsedLine {
+  Evidence evidence;
+  Feeling feeling;
+  std::int64_t count;
+};
+
+// `words` as one line: v1's four (sign, beat, feeling, count; gaze always
+// Gaze::kUnknown, #143's migration) or v2's five (sign, beat, gaze,
+// feeling, count). nullopt when malformed.
+std::optional<ParsedLine> LineOf(const std::vector<std::string_view>& words,
+                                 bool v1) {
+  if (!IsSign(words[0])) {
+    return std::nullopt;
+  }
+  const std::optional<BeatKind> beat = BeatKindNamed(words[1]);
+  Gaze gaze = Gaze::kUnknown;
+  std::size_t next = 2;
+  if (!v1) {
+    const std::optional<Gaze> parsed = BeatGazeNamed(words[2]);
+    if (!parsed) {
+      return std::nullopt;
+    }
+    gaze = *parsed;
+    next = 3;
+  }
+  const std::optional<Feeling> feeling = FeelingNamed(words[next]);
+  const std::optional<std::int64_t> count = CountOf(words[next + 1]);
+  if (!beat || !feeling || !count) {
+    return std::nullopt;
+  }
+  return ParsedLine{
+      .evidence =
+          Evidence{.sign = std::string(words[0]), .beat = *beat, .gaze = gaze},
+      .feeling = *feeling,
+      .count = *count};
+}
+
 }  // namespace
 
 void Tuning::Count(const Evidence& evidence, Feeling feeling) {
@@ -116,7 +164,7 @@ Feeling Tuning::Read(const Evidence& evidence, Feeling generic) const {
 }
 
 std::string Tuning::Text() const {
-  std::string text(kHeader);
+  std::string text(kHeaderV2);
   for (const auto& [evidence, picks] : picks_) {
     for (std::size_t feeling = 0; feeling < picks.size(); ++feeling) {
       if (picks[feeling] > 0) {
@@ -131,32 +179,40 @@ std::string Tuning::Text() const {
 }
 
 std::optional<Tuning> Tuning::Parse(std::string_view text) {
-  if (!text.starts_with(kHeader) || !text.ends_with('\n')) {
+  bool v1 = false;
+  std::size_t header_size = 0;
+  std::size_t words_per_line = kWordsPerLineV2;
+  if (text.starts_with(kHeaderV2)) {
+    header_size = kHeaderV2.size();
+  } else if (text.starts_with(kHeaderV1)) {
+    header_size = kHeaderV1.size();
+    v1 = true;
+    words_per_line = kWordsPerLineV1;
+  } else {
     return std::nullopt;
   }
-  text.remove_prefix(kHeader.size());
+  if (!text.ends_with('\n')) {
+    return std::nullopt;
+  }
+  text.remove_prefix(header_size);
   Tuning tuning;
   while (!text.empty()) {
     const std::size_t end = text.find('\n');
     const std::vector<std::string_view> words = Words(text.substr(0, end));
     text.remove_prefix(end + 1);
-    if (words.size() != kWordsPerLine || !IsSign(words[0])) {
+    if (words.size() != words_per_line) {
       return std::nullopt;
     }
-    const std::optional<BeatKind> beat = BeatKindNamed(words[1]);
-    const std::optional<Gaze> gaze = BeatGazeNamed(words[2]);
-    const std::optional<Feeling> feeling = FeelingNamed(words[3]);
-    const std::optional<std::int64_t> count = CountOf(words[4]);
-    if (!beat || !gaze || !feeling || !count) {
+    const std::optional<ParsedLine> line = LineOf(words, v1);
+    if (!line) {
       return std::nullopt;
     }
-    Picks& picks = tuning.picks_[Evidence{
-        .sign = std::string(words[0]), .beat = *beat, .gaze = *gaze}];
-    std::int64_t& picked = picks[static_cast<std::size_t>(*feeling)];
+    std::int64_t& picked =
+        tuning.picks_[line->evidence][static_cast<std::size_t>(line->feeling)];
     if (picked != 0) {
       return std::nullopt;
     }
-    picked = *count;
+    picked = line->count;
   }
   return tuning;
 }

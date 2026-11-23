@@ -292,16 +292,30 @@ TEST(FeelingStoreOpenTest, RefusesADataFileTooLargeShortOrNotFacepalms) {
   }
 }
 
-// #143 bumped the format from 1 to 2 for the added gaze word, the same
-// "old data is simply not recognized" version check src/calibration_store.cc
-// already takes for #137's own bump: a file a pre-#143 daemon saved is
-// refused outright, not migrated.
-TEST(FeelingStoreOpenTest, RefusesAPreGazeFile) {
+// #143 bumped the format from 1 to 2 for the added gaze word, but a file a
+// pre-#143 daemon saved is read, not refused: refusing it would throw away
+// the person's own picks for a file they never asked to change, unlike a
+// calibration profile, which the person simply redoes (#137's own version
+// bump). Its picks read with gaze unknown, and the next save writes the
+// file back as v2.
+TEST(FeelingStoreOpenTest, ReadsAV1FileAndSavesItBackAsV2) {
   const auto io =
       GoodIo("facepalm feelings 1\nbrows_down question annoyance 3\n");
-  EXPECT_CALL(*io, Close(kDataFd));
+  const auto store = Opened(io);
+  ASSERT_TRUE(store);
+  EXPECT_THAT(store->Read(Frown(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+  std::string written;
+  EXPECT_CALL(*io, Write(kTempFd, _, _))
+      .WillOnce([&](int, const void* data, std::size_t size) {
+        written.assign(static_cast<const char*>(data), size);
+        return static_cast<ssize_t>(size);
+      });
 
-  EXPECT_THAT(Refused(io), Eq("the feelings file is unsafe or not facepalm's"));
+  EXPECT_TRUE(store->Learn(Frown(), Feeling::kAnnoyance));
+
+  EXPECT_THAT(written, Eq("facepalm feelings 2\n"
+                          "brows_down question unknown annoyance 4\n"));
 }
 
 // FeelingFeedback!Begin to ReplyOk: a pick is saved by renaming a synced

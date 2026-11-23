@@ -267,12 +267,44 @@ TEST(TuningTextTest, ReadsAFileWithNoPicks) {
       Optional(testing::Property(&Tuning::Text, Eq("facepalm feelings 2\n"))));
 }
 
+// #143: a v1 file (pre-#143, no gaze word) is read, not refused --
+// refusing it would throw away the person's own picks for a file they
+// never asked to change, unlike a calibration profile, which the person
+// simply redoes (#137's own version bump). Each v1 pick reads as gaze
+// Gaze::kUnknown, and the next save upgrades the file to v2.
+TEST(TuningTextTest, ReadsAV1FileWithGazeUnknownAndSavesItAsV2) {
+  const std::optional<Tuning> parsed =
+      Tuning::Parse("facepalm feelings 1\nbrows_down question annoyance 3\n");
+
+  ASSERT_TRUE(parsed.has_value());
+  const Tuning read = parsed.value_or(Tuning());
+  EXPECT_THAT(read.Read(FrownAtAQuestion(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+  EXPECT_THAT(read.Text(), Eq("facepalm feelings 2\n"
+                              "brows_down question unknown annoyance 3\n"));
+}
+
+// Below kLeastPicks for one v1 file's own evidence, the same fallback
+// (#143) pools it with a v2 pick of a different gaze, read after the v1
+// file has been migrated in.
+TEST(TuningTextTest, AV1PicksEvidenceStillPoolsWithOtherGazes) {
+  const std::optional<Tuning> parsed =
+      Tuning::Parse("facepalm feelings 1\nbrows_down question annoyance 1\n");
+  ASSERT_TRUE(parsed.has_value());
+  const Tuning tuning =
+      Picked(parsed.value_or(Tuning()), FrownOnContentAtAQuestion(),
+             Feeling::kAnnoyance, 2);
+
+  EXPECT_THAT(tuning.Read(FrownAtAQuestion(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+}
+
 TEST(TuningTextTest, RefusesAnythingElse) {
   for (const std::string_view text : {
            "",
-           "facepalm feelings 1\n",
            "facepalm feelings 3\n",
            "facepalm feelings 2",
+           "facepalm feelings 1",
            "facepalm feelings 2\nsmile question on_content engagement 1",
            "facepalm feelings 2\n\n",
            "facepalm feelings 2\nSmile question on_content engagement 1\n",
@@ -286,6 +318,10 @@ TEST(TuningTextTest, RefusesAnythingElse) {
            "facepalm feelings 2\nsmile question on_content engagement\n",
            "facepalm feelings 2\nsmile question on_content engagement 1 1\n",
            "facepalm feelings 2\nsmile question engagement 1\n",
+           "facepalm feelings 1\nsmile answer engagement 1\n",
+           "facepalm feelings 1\nsmile question happy 1\n",
+           "facepalm feelings 1\nsmile question engagement 1 1\n",
+           "facepalm feelings 1\nsmile question on_content engagement 1\n",
        }) {
     EXPECT_THAT(Tuning::Parse(text), Eq(std::nullopt)) << text;
   }

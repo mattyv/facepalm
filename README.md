@@ -228,9 +228,11 @@ made since, each with its reason, are in the
     (engagement, annoyance) can still come from the person's labels before
     enough of them share one gaze. The counts file's own header bumped
     from `facepalm feelings 1` to `facepalm feelings 2` for the added
-    gaze word; a file from before #143 has none, so it is simply refused,
-    the same version check #137's own bump takes in
-    `src/calibration_store`, with no migration.
+    gaze word; unlike a calibration profile's own version bump
+    (`src/calibration_store`, #137), a file from before #143 is read, not
+    refused -- each of its picks reads with gaze `unknown`, and the next
+    save writes the file back as v2, so the person's own picks are never
+    thrown away for a file they never asked to change.
 -   `src/feeling_store`: keeps those counts in one file private to the
     person, `facepalm/feelings` in `$XDG_CONFIG_HOME` or `~/.config` unless
     the daemon is given `--feelings-file PATH`. It is the file's only

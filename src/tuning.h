@@ -50,13 +50,16 @@ class Tuning {
   // The counts as text: a "facepalm feelings 2" line, then one
   // "<sign> <beat> <gaze> <feeling> <count>" line for each feeling picked,
   // `gaze` in the beat's own wording (src/screen_context.h's
-  // BeatGazeName, #143). Bumped from 1 to 2 for the added `gaze` word: a
-  // file a pre-#143 daemon saved has none, so Parse simply refuses it,
-  // the same "old data is simply not recognized" the calibration
-  // profile's own version bump takes (src/calibration_store.cc), with no
-  // migration needed -- the person's picks start over.
+  // BeatGazeName, #143). Always v2, even when Parse read a v1 file: the
+  // next save upgrades it.
   [[nodiscard]] std::string Text() const;
-  // The counts `text` holds, or nullopt when it is not what Text writes.
+  // The counts `text` holds, read as v2 or, migrated, as v1 (#143: a pre-
+  // #143 file has no gaze word, so each of its picks is read with
+  // Gaze::kUnknown, the gaze it would have carried had screen context
+  // been on all along -- unlike a calibration profile (#137's own
+  // version bump), refusing it outright would throw away the person's
+  // own picks for a file they never asked to change). nullopt when it is
+  // neither.
   static std::optional<Tuning> Parse(std::string_view text);
 
  private:

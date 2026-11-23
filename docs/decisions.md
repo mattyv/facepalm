@@ -38,19 +38,29 @@ a line saying which entry replaced it.
     (`TuningGazeTest.AtOrAboveTheMinimumForOneGazeReadsItAlone`): two
     gazes of the same evidence can then disagree, which is the point of
     adding gaze as a feature at all.
--   **Decision (the counts file's version bumps from 1 to 2, refused, not
-    migrated):** `Tuning::Text`/`Parse`'s header and each line's word
-    count change for the added `gaze` word
-    (`src/screen_context.h`'s `BeatGazeName`/`BeatGazeNamed`, the same
-    wording a beat's own reply already uses, not `Name(Gaze)`'s
-    `this_screen`/`other_screen`). A file a pre-#143 daemon saved has no
-    such word, so `Parse` simply rejects it as it already rejects any
-    other malformed file, and `FeelingStore::Open` refuses to open at
-    all -- the same "old data is simply not recognized" shape
-    `src/calibration_store.cc` already takes for #137's own bump from 1
-    to 2, with no migration code written for either. The person's picks
-    start over; nothing silently reinterprets old counts under the wrong
-    schema.
+-   **Decision (the counts file's version bumps from 1 to 2, migrated on
+    read, not refused):** `Tuning::Text`/`Parse`'s header and each line's
+    word count change for the added `gaze` word (`src/screen_context.h`'s
+    `BeatGazeName`/`BeatGazeNamed`, the same wording a beat's own reply
+    already uses, not `Name(Gaze)`'s `this_screen`/`other_screen`). A
+    file a pre-#143 daemon saved has no such word; `Parse` reads it as
+    v1 (four words: sign, beat, feeling, count), giving every one of its
+    picks gaze `Gaze::kUnknown` -- the gaze it would have carried had
+    screen context always been on -- and `Text` always writes v2, so the
+    next save upgrades the file in place.
+-   **Decision rejected (refusing a v1 file, the way
+    `src/calibration_store.cc` refuses a pre-#137 calibration profile):**
+    the first cut of this change followed that precedent outright --
+    `Parse` rejected any header but the current one, so
+    `FeelingStore::Open` refused a pre-#143 file entirely. Rejected once
+    reviewed, because the two files are not alike: a calibration profile
+    missing is a normal, expected state (`uncalibrated`) the daemon
+    already runs in, so the person simply redoes the short calibration
+    session: no data of theirs is lost. A feelings file is the person's
+    own accumulated picks (#35) -- refusing to open it would silently
+    reset every one of them the first time they upgrade past #143, for a
+    file they never touched and a format change they have no reason to
+    know about. Migrating in place, above, keeps them instead.
 
 ## 2026-11-22: The eye/gaze/squint/calibration/look-away defaults are tuned on #139's recordings, closing #137, #139 and #150
 

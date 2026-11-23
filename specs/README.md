@@ -1203,6 +1203,7 @@ fail its tests in `test/tuning_test.cc`:
 | Read never falls back to every gaze of the evidence (#143) | `TuningGazeTest.BelowTheMinimumForOneGazeFallsBackToEveryGazeOfIt`, `TuningGazeTest.PicksAcrossGazesCanStillNameAFeelingNoGenericRuleGives` |
 | Read always falls back, ignoring an evidence's own gaze even once it has enough (#143) | `TuningGazeTest.AtOrAboveTheMinimumForOneGazeReadsItAlone` |
 | The fallback pools a different sign or beat too, not only gaze (#143) | `TuningGazeTest.PicksTuneOnlyTheirOwnSignAndBeatAcrossGazes` |
+| A v1 file (no gaze word) is refused rather than read (#143) | `TuningTextTest.ReadsAV1FileWithGazeUnknownAndSavesItAsV2` |
 
 The integration test `test/integration/tuning.test.mjs` runs the whole path
 against the real feed, store and service: three `annoyance` picks for a frown at
@@ -1210,10 +1211,12 @@ question beats change the next frown's read at a question, not at a proposal;
 they last when the service restarts; and `reset feelings` restores `confused`.
 Gaze defaults to `unknown` in that test (no screen context source), so its
 own counts file carries the word; `TuningTextTest` and
-`FeelingStoreOpenTest.RefusesAPreGazeFile` cover the gaze word itself and
-the version bump (#143) that a pre-#143 file is simply refused, not
-migrated, following `src/calibration_store.cc`'s own precedent for #137's
-bump.
+`FeelingStoreOpenTest.ReadsAV1FileAndSavesItBackAsV2` cover the gaze word
+itself and the version bump (#143): unlike `src/calibration_store.cc`'s own
+precedent for #137's bump, a pre-#143 file is read, not refused, since
+refusing it would throw away the person's own picks for a file they never
+asked to change -- each of its picks reads with gaze `unknown`, and the
+next save writes it back as v2.
 
 ## `Service`: the background service and its connections
 
