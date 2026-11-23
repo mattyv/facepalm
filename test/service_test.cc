@@ -560,6 +560,52 @@ TEST_F(HangUpEndsTest, AHangUpDuringABeatDisconnectsTheClientOnlyOnce) {
   service_.Stop();
 }
 
+// Regression for #162: BeginStop's `connection.name && !connection.left`
+// skips a connection Watched's watcher has already left, without touching
+// the feed a second time, but only when BeginStop's own read of that
+// connection happens before Serve's cleanup resets `name` to empty; a
+// concurrent Stop races that reset, so this side of the && (left already
+// true, so the body is skipped) was covered only when the scheduler
+// happened to run Stop's loop first, which macOS CI's runner sometimes
+// did not. Holding "agent"'s Wait from returning until BeginStop has
+// already run -- confirmed through the listener's Close, which Stop calls
+// right after BeginStop returns -- keeps `name` set and `left` already
+// true when BeginStop reads this connection, every run.
+TEST_F(HangUpEndsTest, AStopFindingAnAlreadyLeftWaiterSkipsItsOwnDisconnect) {
+  service_.Start();
+  std::promise<void> waiting;
+  std::promise<void> disconnected;
+  std::promise<void> resume;
+  const auto left = disconnected.get_future().share();
+  const auto resumed = resume.get_future().share();
+  std::once_flag once;
+  EXPECT_CALL(feed_, Wait("agent", _)).WillOnce([&] {
+    waiting.set_value();
+    resumed.wait_for(2 * kPrompt);
+    return std::optional<Feed::Delivery>();
+  });
+  EXPECT_CALL(feed_, Disconnect("agent")).Times(1).WillRepeatedly([&] {
+    std::call_once(once, [&] { disconnected.set_value(); });
+  });
+  const auto peer = Named("agent");
+  peer->Send("wait 60000");
+  ASSERT_THAT(waiting.get_future().wait_for(kPrompt),
+              Eq(std::future_status::ready));
+
+  peer->HangUp();
+  ASSERT_THAT(left.wait_for(kPrompt), Eq(std::future_status::ready));
+
+  const auto stopped = std::async(std::launch::async, [&] { service_.Stop(); });
+  {
+    std::unique_lock lock(queue_->mutex);
+    ASSERT_TRUE(queue_->changed.wait_for(lock, kPrompt,
+                                         [&] { return queue_->closed; }));
+  }
+  resume.set_value();
+
+  EXPECT_THAT(stopped.wait_for(kPrompt), Eq(std::future_status::ready));
+}
+
 TEST_F(HangUpEndsTest, AWaitThatEndsOnItsOwnLeavesTheClientConnected) {
   service_.Start();
   EXPECT_CALL(feed_, Wait("agent", _))
@@ -1074,11 +1120,28 @@ TEST_F(ServiceWithCamerasTest, ListsTheDirectorysCameras) {
   service_.Stop();
 }
 
+// AcceptAll's erase_if finds a connection already done only once a prior
+// one has fully run Serve to its end, after Leave; waiting here for
+// Disconnect, each hang-up's own last feed call, before the next Named
+// leaves only the uncontended lock around `done` itself between them,
+// rather than racing the whole next handshake against it (#162).
 TEST_F(NothingAfterStopTest, FinishedConnectionsAreCleanedUp) {
   service_.Start();
+  // Tried last, behind each loop's own expectation below: catches "last"'s
+  // own Disconnect from Stop's BeginStop, not one of this loop's hang-ups.
+  EXPECT_CALL(feed_, Disconnect(_)).Times(testing::AnyNumber());
   for (int i = 0; i < 3; ++i) {
-    const auto peer = Named("agent" + std::to_string(i));
+    const std::string name = "agent" + std::to_string(i);
+    std::promise<void> disconnected;
+    EXPECT_CALL(feed_, Disconnect(name)).WillOnce([&] {
+      disconnected.set_value();
+    });
+    const auto peer = Named(name);
+
     peer->HangUp();
+
+    ASSERT_THAT(disconnected.get_future().wait_for(kPrompt),
+                Eq(std::future_status::ready));
   }
   const auto last = Named("last");
 

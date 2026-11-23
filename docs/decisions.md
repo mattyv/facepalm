@@ -77,6 +77,40 @@ a line saying which entry replaced it.
     for live wiring also asks for a dedicated "widen the eyes" fixture to
     tighten them against a real one.
 
+## 2026-11-23: BeginStop's already-left branch is held deterministically, not diagnosed by luck, closing #162
+
+-   **Decision (the flaky branch is `connection.name && !connection.left` in
+    `Service::BeginStop`, not `Watched`'s `AwaitHangUp`):** that `&&`
+    skips a connection Watched's watcher already left without touching
+    the feed again, but only when `BeginStop`'s own read runs before
+    Serve's cleanup resets `name`; a concurrent `Stop` races that reset,
+    and both outcomes look identical to every existing assertion (no
+    second `Disconnect` either way), which is why #143's heavy stress
+    testing of `AwaitHangUp` (1012 runs, 30x repeats, 8-way parallel) never
+    caught it: it was never the branch moving. `test/service_test.cc`'s
+    new `AStopFindingAnAlreadyLeftWaiterSkipsItsOwnDisconnect` holds
+    `Wait` from returning until `Stop`'s `BeginStop` has already run,
+    confirmed through the listener's `Close` (the next thing `Stop` calls
+    after `BeginStop` returns), so `name` is still set and `left` already
+    true every run, not only when the scheduler happened to land that way.
+-   **Decision (tighten, not fully pin, the `erase_if` "done" branch in
+    `AcceptAll`):** `FinishedConnectionsAreCleanedUp` connected the next
+    client right after each hang-up with no synchronisation at all, racing
+    the whole next handshake against the hung-up connection finishing
+    `Serve`. It now waits for that connection's own `Disconnect` call
+    before the next `Named`, which removes that whole handshake from the
+    window and leaves only the uncontended lock around `connection.done`
+    itself. Closing that last sliver outright would need a test hook on
+    `done` with no other purpose, for a gap that is a few instructions
+    under an uncontended mutex (no syscall, so no scheduler point) rather
+    than a wait with scheduling discretion; rejected as disproportionate
+    to the risk. The CI artifact `scripts/coverage.sh` and
+    `.github/workflows/ci.yml` now write and upload on a macOS coverage
+    failure -- the raw profiles plus `llvm-cov show -show-branches=count`
+    for any file below its floor -- is the backstop if this sliver, or
+    anything else timing-dependent, ever does flip: the next failure names
+    the exact branch instead of only the missing percentage.
+
 ## 2026-11-23: The personal read weighs a beat's own gaze, never the rule, closing #143
 
 -   **Decision (gaze is `Evidence`'s third field, not a fourth map):**
