@@ -262,7 +262,7 @@ TEST(EyeSignsOfTest, LongBlinksFixtureReadsALongBlink) {
 // widened_eyes_threshold (0.15) is reasoned from (src/eye_signs.h's own
 // header comment).
 TEST(EyeSignsOfTest, EveryFixtureBaselineIsNotWidened) {
-  for (const std::string& name :
+  for (const std::string name :
        {"blinks.probe", "long_blinks.probe", "eyes_to_corners.probe",
         "fully_away.probe", "gaze_other_screen.probe", "glance_keyboard.probe",
         "head_turn_eyes_centered.probe", "reading_other_screen.probe",
@@ -277,7 +277,7 @@ TEST(EyeSignsOfTest, EveryFixtureBaselineIsNotWidened) {
 // a normal (not elevated) blink rate -- natural blinking at most, never a
 // deliberate run of them.
 TEST(EyeSignsOfTest, EveryOtherFixtureBaselineIsNormal) {
-  for (const std::string& name :
+  for (const std::string name :
        {"eyes_to_corners.probe", "fully_away.probe", "gaze_other_screen.probe",
         "glance_keyboard.probe", "head_turn_eyes_centered.probe",
         "reading_other_screen.probe", "thinking_aversion.probe"}) {
