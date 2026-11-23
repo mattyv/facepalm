@@ -64,6 +64,56 @@ a line saying which entry replaced it.
     screen to exercise meaningfully; `menu_store_checks` still builds and
     passes with the changed file linked in.
 
+## 2026-11-23: Blink rate, a long blink and widened eyes are wired live into the beat's own evidence, the same buffer and callback shape gaze already uses, closing #165
+
+-   **Decision (one buffer, not two; eye signs ride alongside gaze's own
+    `Sample`/`Between`):** rather than a separate reader and reporter for
+    eye signs, `ScreenContextReader::OnSample` grew a fifth argument
+    (`const std::optional<EyeSignSample>&`, nullopt on a frame with no
+    face) and `ScreenContextReporter::Sample` a sixth
+    (`const std::optional<EyeSignSample>&`, defaulted so every existing
+    call keeps compiling), feeding a second `std::deque` alongside
+    `samples_`, evicted by the same `max_window_ms` on every call --
+    even one that gave it nothing to add, since a long stretch of
+    missing faces should still age the buffer out. The alternative, a
+    standalone `EyeSignsReader`/`EyeSignsReporter` pair mirroring
+    `ScreenContextReader`/`ScreenContextReporter` exactly, was rejected:
+    it would duplicate the mutex, the eviction loop and the daemon's own
+    per-frame hook for no benefit, when the two signals are already
+    sampled on the same frame, at the same cadence, by the same
+    `OnFace`.
+-   **Decision (the eye sign's own timestamp is replaced with `Sample`'s
+    `at_ms`, not kept):** `EyeSignSample::timestamp_ms` is also used
+    standalone, by fixture replay and `SampleFrom`'s own frame-capture
+    clock (#145); `ScreenContextReporter::Sample` overwrites it with
+    `at_ms`, the wall clock `GazeSample::at_ms` already uses, before
+    buffering, so `EyeSignsBetween`'s bounds -- asked in the same wall-
+    clock basis `ReactionFeed` marks a beat's start and end on -- agree
+    with what is stored, rather than drifting against the camera's own
+    capture-time clock.
+-   **Decision (one more `ReactionFeed` constructor parameter,
+    `EyeSignsWindowFn`, mirroring `GazeWindowFn` exactly):**
+    `ReactionFeed::Beat` asks it the same `[started_ms, ended_ms)` it
+    asks `gaze_window_`, and folds the three fields into the evidence
+    right where gaze already is -- never onto `Interpretation`, since
+    blink rate, a long blink and widened eyes are the personal read's
+    own feature (#145), not a client-facing reply field the way gaze is;
+    `specs/FeelingBeat.tla`'s `ContextNeverChangesFeeling` and
+    `ThinkingGuardFires` are unaffected, since neither guard ever reads
+    them.
+-   **Decision (`scripts/record_eye_fixtures.sh` grows a tenth fixture,
+    `widened_eyes`, instead of leaving #145's reasoned-not-measured
+    threshold as is):** #145's own `widened_eyes_threshold` (0.15) and
+    `widened_eyes_hold_ms` (200) were reasoned from the absence of a
+    genuine "widen the eyes" cue across #139's original nine fixtures,
+    not measured against one. Recording a tenth with exactly that cue
+    (`FIXTURES`'s own new entry, its bats test's counts bumped from nine
+    to ten) lets a later change tighten both against a real positive,
+    the way #145's own decisions entry asked for; the fixture itself is
+    not recorded in this change (an agent working this issue does not
+    open the camera, #139's own rule), only the script's own capability
+    to record it.
+
 ## 2026-11-23: Blink rate and a long blink join the personal read as coarse signs; widened eyes too, on a reasoned ceiling rather than a measured positive, closing #145
 
 -   **Decision (three more `Evidence` fields, following #143's own

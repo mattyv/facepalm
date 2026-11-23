@@ -1,10 +1,13 @@
 #!/bin/bash
 #
 # Guides the user through recording camera_probe fixtures for #139's eyes
-# line: nine short sessions, each with four spoken cues CUE_SECONDS apart,
+# line: ten short sessions, each with four spoken cues CUE_SECONDS apart,
 # saved as test/fixtures/eyes/<name>.probe. Each is camera_probe's full
 # log, numbers only; camera_probe is never given a recording directory
-# here, so it never writes images.
+# here, so it never writes images. widened_eyes (#145/#165) is the one
+# with a genuine "widen the eyes" cue, added after the original nine had
+# none: src/eye_signs.h's own widened_eyes_threshold was reasoned from
+# their shared absence of one, not measured against a true positive.
 #
 # Usage: record_eye_fixtures.sh
 # Env (all optional, mainly for tests): CAMERA_PROBE, FACEPALM_MODEL,
@@ -33,6 +36,7 @@ FIXTURES+=('glance_keyboard|Look at the screen.|Glance down at the keyboard.|Loo
 FIXTURES+=('thinking_aversion|Look at the camera, as if just asked a question.|Look away to think, as if answering a hard question.|Look back at the camera with your answer.|Look away to think again, for an even harder question.')
 FIXTURES+=('reading_other_screen|Look at the screen in front of you.|Read something on your other screen for a while.|Keep reading the other screen.|Look back at the screen in front of you.')
 FIXTURES+=('long_blinks|Look straight ahead normally.|Close your eyes slowly, hold a couple seconds, then open.|Rest your eyes open for a moment.|Close your eyes slowly again, hold a few seconds, then open.')
+FIXTURES+=('widened_eyes|Look straight ahead normally.|Widen your eyes as if surprised, and hold.|Relax.|Widen your eyes again, and hold.')
 readonly FIXTURES
 
 fail() {

@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 
+#include "src/eye_signs.h"
 #include "src/feed.h"
 #include "src/feed_clients.h"
 #include "src/feelings.h"
@@ -47,11 +48,20 @@ class ReactionFeed : public Feed {
   using GazeWindowFn =
       std::function<GazeWindow(std::int64_t start_ms, std::int64_t end_ms,
                                const std::optional<ContentRect>& content)>;
+  // Reads blink rate, a long blink and widened eyes over [start_ms,
+  // end_ms) (#145/#165): src/screen_context_reporter.h's own
+  // EyeSignsBetween in the daemon, mocked in tests. nullptr (the
+  // default) answers every beat every field unknown, for a daemon with
+  // screen context disabled (the same reporter buffers both), or a test
+  // with no eye-sign source to give.
+  using EyeSignsWindowFn =
+      std::function<EyeSigns(std::int64_t start_ms, std::int64_t end_ms)>;
 
   ReactionFeed(int capacity, Tuner& tuner,
                Clock clock = std::chrono::steady_clock::now,
                NowMs now_ms = UnixMilliseconds,
-               GazeWindowFn gaze_window = nullptr);
+               GazeWindowFn gaze_window = nullptr,
+               EyeSignsWindowFn eye_signs_window = nullptr);
 
   // Connect: a client starts with no backlog. False, changing nothing, when
   // the name is already connected (specs/Service.tla's UniqueNames).
@@ -82,9 +92,13 @@ class ReactionFeed : public Feed {
   // [start, end) on now_ms_'s own clock; a question beat gaze_window_
   // reads as averted at the end reads unknown however the cues went
   // (FeelingBeat.tla's GuardAvertedUnknown, the thinking guard), never
-  // any other feeling gaze would not otherwise have given. The same gaze
-  // is folded into the evidence given to tuner_.Read and later Feel
-  // (#143), so the personal read tunes on it too.
+  // any other feeling gaze would not otherwise have given. The same
+  // window's blink rate, long blink and widened eyes come from
+  // eye_signs_window_ (#145/#165), asked over the same [start, end) --
+  // never Rule's own input either, specs/FeelingBeat.tla's
+  // ContextNeverChangesFeeling untouched by #165 the same way #143 left
+  // it. Both are folded into the evidence given to tuner_.Read and later
+  // Feel, so the personal read tunes on all four.
   std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
                                std::chrono::milliseconds window,
                                std::optional<ContentRect> content) override;
@@ -150,6 +164,7 @@ class ReactionFeed : public Feed {
   const Clock clock_;
   const NowMs now_ms_;
   const GazeWindowFn gaze_window_;
+  const EyeSignsWindowFn eye_signs_window_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::deque<Entry> timeline_;  // Oldest first.

@@ -40,6 +40,7 @@
 #include "src/daemon_options.h"
 #include "src/daemon_status.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/face_analyzer.h"
 #include "src/face_model.h"
 #include "src/face_readers.h"
@@ -354,8 +355,9 @@ class Engine : public DaemonController, public DaemonPipeline {
             [this](const std::optional<HeadRotation>& pose,
                    const std::optional<HeadRotation>& resting,
                    const std::optional<EyeSignal>& eye,
-                   const std::optional<EyeSignal>& eye_resting) {
-              SampleScreenContext(pose, resting, eye, eye_resting);
+                   const std::optional<EyeSignal>& eye_resting,
+                   const std::optional<EyeSignSample>& eye_sign) {
+              SampleScreenContext(pose, resting, eye, eye_resting, eye_sign);
             }),
         // Outlives any one camera session too (#141, as screen_context_
         // reader_ does, #61 item 11): its own kGone tracking, and the
@@ -401,19 +403,34 @@ class Engine : public DaemonController, public DaemonPipeline {
                       calibration_profile,
                       EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
                                .vertical = config.eye_gaze_vertical_gain},
-                      config.eye_gaze_head_only_yaw_degrees)
+                      config.eye_gaze_head_only_yaw_degrees,
+                      ScreenContextReporter::kDefaultMaxWindowMs,
+                      EyeSignSettings{
+                          .elevated_blinks_per_minute =
+                              config.eye_signs_elevated_blinks_per_minute,
+                          .long_blink_ms = config.eye_signs_long_blink_ms,
+                          .widened_eyes_threshold =
+                              config.eye_signs_widened_eyes_threshold,
+                          .widened_eyes_hold_ms =
+                              config.eye_signs_widened_eyes_hold_ms,
+                          .min_window_ms = config.eye_signs_min_window_ms})
                 : std::nullopt),
         calibration_profile_(CopyProfile(calibration_profile)),
         feelings_(std::move(feelings)),
         status_path_(std::move(status_path)),
-        feed_(kFeedCapacity, *feelings_, std::chrono::steady_clock::now,
-              UnixMilliseconds,
-              // #142, #144: BeatGazeWindow is declared below, already
-              // built by the time a beat ever calls this.
-              [this](std::int64_t start_ms, std::int64_t end_ms,
-                     const std::optional<ContentRect>& content) {
-                return BeatGazeWindow(start_ms, end_ms, content);
-              }),
+        feed_(
+            kFeedCapacity, *feelings_, std::chrono::steady_clock::now,
+            UnixMilliseconds,
+            // #142, #144: BeatGazeWindow is declared below, already
+            // built by the time a beat ever calls this.
+            [this](std::int64_t start_ms, std::int64_t end_ms,
+                   const std::optional<ContentRect>& content) {
+              return BeatGazeWindow(start_ms, end_ms, content);
+            },
+            // #145/#165: BeatEyeSignsWindow is declared below too.
+            [this](std::int64_t start_ms, std::int64_t end_ms) {
+              return BeatEyeSignsWindow(start_ms, end_ms);
+            }),
         clients_(
             [this](std::string summary, std::string detail,
                    std::int64_t published_ms,
@@ -606,17 +623,20 @@ class Engine : public DaemonController, public DaemonPipeline {
     look_away_reader_.SetProfile(&*calibration_profile_);
   }
 
-  // screen_context_reader_'s own OnSample callback (#142): every frame,
-  // regardless of whether it carries a reaction, so a beat's window
-  // holds every frame's gaze. A named method, not the lambda itself, so
-  // its own branch does not count toward Engine's constructor (where the
-  // lambda is built)'s cognitive complexity.
+  // screen_context_reader_'s own OnSample callback (#142; eye_sign added
+  // by #145/#165): every frame, regardless of whether it carries a
+  // reaction, so a beat's window holds every frame's gaze and eye
+  // signs. A named method, not the lambda itself, so its own branch does
+  // not count toward Engine's constructor (where the lambda is built)'s
+  // cognitive complexity.
   void SampleScreenContext(const std::optional<HeadRotation>& pose,
                            const std::optional<HeadRotation>& resting,
                            const std::optional<EyeSignal>& eye,
-                           const std::optional<EyeSignal>& eye_resting) {
+                           const std::optional<EyeSignal>& eye_resting,
+                           const std::optional<EyeSignSample>& eye_sign) {
     if (reporter_) {
-      reporter_->Sample(pose, resting, eye, eye_resting, UnixMilliseconds());
+      reporter_->Sample(pose, resting, eye, eye_resting, UnixMilliseconds(),
+                        eye_sign);
     }
   }
 
@@ -628,6 +648,16 @@ class Engine : public DaemonController, public DaemonPipeline {
       const std::optional<ContentRect>& content) const {
     return reporter_ ? reporter_->Between(start_ms, end_ms, content)
                      : GazeWindow{};
+  }
+
+  // feed_'s own EyeSignsWindowFn (#145/#165): what a beat's own personal
+  // read tunes on for blink rate, a long blink and widened eyes.
+  // EyeSigns{} (every field unknown) with screen context disabled, the
+  // same reporter_ gaze shares.
+  [[nodiscard]] EyeSigns BeatEyeSignsWindow(std::int64_t start_ms,
+                                            std::int64_t end_ms) const {
+    return reporter_ ? reporter_->EyeSignsBetween(start_ms, end_ms)
+                     : EyeSigns{};
   }
 
   FramePipeline::Analyzers MakeAnalyzers(std::string& error) {

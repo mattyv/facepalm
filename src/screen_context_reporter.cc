@@ -8,9 +8,11 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "src/calibration.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/head_pose.h"
 #include "src/protocol.h"
 #include "src/screen_context.h"
@@ -36,7 +38,8 @@ std::string PixelNumber(double value) {
 ScreenContextReporter::ScreenContextReporter(
     ScreenSource& source, GazeSettings settings, bool titles_enabled,
     const CalibrationProfile* profile, EyeGains default_gains,
-    double head_only_yaw_degrees, std::int64_t max_window_ms)
+    double head_only_yaw_degrees, std::int64_t max_window_ms,
+    EyeSignSettings eye_sign_settings)
     // NOLINTEND(bugprone-easily-swappable-parameters)
     : source_(source),
       settings_(settings),
@@ -44,6 +47,7 @@ ScreenContextReporter::ScreenContextReporter(
       default_gains_(default_gains),
       head_only_yaw_degrees_(head_only_yaw_degrees),
       max_window_ms_(max_window_ms),
+      eye_sign_settings_(eye_sign_settings),
       profile_(profile) {}
 
 void ScreenContextReporter::SetProfile(const CalibrationProfile* profile) {
@@ -119,11 +123,12 @@ std::string ScreenContextReporter::Json(
 // See the declaration (src/screen_context_reporter.h) for why these four
 // are never swappable in practice.
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
-void ScreenContextReporter::Sample(const std::optional<HeadRotation>& pose,
-                                   const std::optional<HeadRotation>& resting,
-                                   const std::optional<EyeSignal>& eye,
-                                   const std::optional<EyeSignal>& eye_resting,
-                                   std::int64_t at_ms) {
+void ScreenContextReporter::Sample(
+    const std::optional<HeadRotation>& pose,
+    const std::optional<HeadRotation>& resting,
+    const std::optional<EyeSignal>& eye,
+    const std::optional<EyeSignal>& eye_resting, std::int64_t at_ms,
+    const std::optional<EyeSignSample>& eye_sign) {
   // NOLINTEND(bugprone-easily-swappable-parameters)
   const ScreenSide side = SideOf(source_.Screens());
   const std::scoped_lock lock(mutex_);
@@ -137,6 +142,18 @@ void ScreenContextReporter::Sample(const std::optional<HeadRotation>& pose,
   // emptied by it either: no need to guard front() against that.
   while (at_ms - samples_.front().at_ms > max_window_ms_) {
     samples_.pop_front();
+  }
+  // #145/#165: a separate buffer, since a frame with no face (eye_sign
+  // nullopt) still advances the clock these evict by, but has nothing
+  // of its own to push.
+  if (eye_sign) {
+    EyeSignSample stamped = *eye_sign;
+    stamped.timestamp_ms = at_ms;
+    eye_signs_samples_.push_back(stamped);
+  }
+  while (!eye_signs_samples_.empty() &&
+         at_ms - eye_signs_samples_.front().timestamp_ms > max_window_ms_) {
+    eye_signs_samples_.pop_front();
   }
 }
 
@@ -185,6 +202,18 @@ GazeWindow ScreenContextReporter::Between(
     }
   }
   return window;
+}
+
+EyeSigns ScreenContextReporter::EyeSignsBetween(std::int64_t start_ms,
+                                                std::int64_t end_ms) const {
+  const std::scoped_lock lock(mutex_);
+  std::vector<EyeSignSample> window;
+  for (const EyeSignSample& sample : eye_signs_samples_) {
+    if (sample.timestamp_ms >= start_ms && sample.timestamp_ms < end_ms) {
+      window.push_back(sample);
+    }
+  }
+  return EyeSignsOf(window, eye_sign_settings_);
 }
 
 }  // namespace facepalm

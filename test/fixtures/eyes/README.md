@@ -26,6 +26,13 @@ printing its four cues, and saves the log once `camera_probe` exits.
 | `thinking_aversion.probe` | look at the camera, as if just asked a question; look away to think, as if answering a hard one; look back with your answer; look away again, for an even harder one |
 | `reading_other_screen.probe` | look at the near screen; read the other screen for a while; keep reading it; look back at the near screen |
 | `long_blinks.probe` | look ahead normally; close your eyes slowly, hold a couple seconds, then open; rest; close your eyes slowly again, hold longer, then open |
+| `widened_eyes.probe` | look straight ahead normally; widen your eyes as if surprised, and hold; relax; widen your eyes again, and hold |
+
+Added by #145/#165: the original nine carry no cue that deliberately
+widens the eyes, so `src/eye_signs.h`'s own `widened_eyes_threshold`
+default was reasoned from their shared absence of one (every fixture's
+own eyeWide peaks at 0.051 at most), not measured against a true
+positive; recording this tenth lets it be tightened against one.
 
 Each file is missing until the user records it; this is deliberate (#139):
 an agent working this issue does not open the camera. `eyes_probe_test.cc`

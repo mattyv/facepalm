@@ -13,6 +13,7 @@
 #include "src/camera_controller.h"
 #include "src/expressions.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/face_model.h"
 #include "src/head_pose.h"
 
@@ -26,6 +27,10 @@ struct Pose {
   double yaw = 0;
   double pitch = 0;
   float eye_look_out_left = 0;  // Blendshape 15, for Eye signal tests.
+  // eyeBlinkLeft/Right (9, 10) and eyeWideLeft/Right (21, 22), for
+  // EyeSignSample tests (#145/#165, src/eye_signs.h's own SampleFrom).
+  float eye_blink = 0;
+  float eye_wide = 0;
 };
 
 // As test/look_away_reader_test.cc's FaceAt: a face whose transformation
@@ -49,6 +54,10 @@ Face FaceAt(Pose pose) {
   }
   face.pose_column_major[15] = 1;
   face.blendshapes[15] = pose.eye_look_out_left;
+  face.blendshapes[9] = pose.eye_blink;
+  face.blendshapes[10] = pose.eye_blink;
+  face.blendshapes[21] = pose.eye_wide;
+  face.blendshapes[22] = pose.eye_wide;
   return face;
 }
 
@@ -154,13 +163,15 @@ TEST_F(ScreenContextReaderTest, ADegeneratePoseIsSkipped) {
 
 // The on_sample tests below stand for #142's own per-frame hook into
 // ScreenContextReporter::Sample (main.cc's own wiring): told the same
-// four readings OnFace/OnNoFace just updated, once a frame regardless of
-// whether it carries a reaction.
+// four readings OnFace/OnNoFace just updated, plus one frame's own eye
+// sign (#145/#165), once a frame regardless of whether it carries a
+// reaction.
 struct Sample {
   std::optional<HeadRotation> pose;
   std::optional<HeadRotation> resting;
   std::optional<EyeSignal> eye;
   std::optional<EyeSignal> eye_resting;
+  std::optional<EyeSignSample> eye_sign;
 };
 
 class OnSampleTest : public ::testing::Test {
@@ -184,11 +195,13 @@ class OnSampleTest : public ::testing::Test {
       [this](const std::optional<HeadRotation>& pose,
              const std::optional<HeadRotation>& resting,
              const std::optional<EyeSignal>& eye,
-             const std::optional<EyeSignal>& eye_resting) {
+             const std::optional<EyeSignal>& eye_resting,
+             const std::optional<EyeSignSample>& eye_sign) {
         samples_.push_back({.pose = pose,
                             .resting = resting,
                             .eye = eye,
-                            .eye_resting = eye_resting});
+                            .eye_resting = eye_resting,
+                            .eye_sign = eye_sign});
       }};
 };
 
@@ -213,6 +226,25 @@ TEST_F(OnSampleTest, OnFaceTellsItTheFourReadings) {
   EXPECT_EQ(sample.eye_resting.has_value(), reader_.EyeResting().has_value());
 }
 
+// #145/#165: the eye sign is SampleFrom's own, read from this exact
+// frame's face, not eye_tracker_'s median-filtered reading -- it is
+// given even while EyeGazeTracker is still learning (sample.eye is
+// nullopt above), since SampleFrom needs no resting level.
+TEST_F(OnSampleTest, OnFaceTellsItThisFramesOwnEyeSign) {
+  reader_.OnFace(FaceAt({.eye_blink = 0.6F, .eye_wide = 0.2F}),
+                 /*width=*/640, /*height=*/480, now_ms_, reactions_);
+
+  ASSERT_THAT(samples_, ::testing::SizeIs(1));
+  const std::optional<EyeSignSample>& eye_sign = samples_.at(0).eye_sign;
+  if (!eye_sign.has_value()) {
+    ADD_FAILURE() << "no eye sign";
+    return;
+  }
+  EXPECT_TRUE(eye_sign->blink);
+  EXPECT_NEAR(eye_sign->eye_wide, 0.2, 1e-6);
+  EXPECT_EQ(eye_sign->timestamp_ms, now_ms_);
+}
+
 TEST_F(OnSampleTest, OnNoFaceTellsItNoPoseButKeepsTheRestingLevel) {
   for (int frame = 0; frame < 60; ++frame) {
     now_ms_ += kFrameMs;
@@ -228,6 +260,8 @@ TEST_F(OnSampleTest, OnNoFaceTellsItNoPoseButKeepsTheRestingLevel) {
   EXPECT_EQ(samples_.at(0).pose, std::nullopt);
   EXPECT_EQ(samples_.at(0).eye, std::nullopt);
   EXPECT_TRUE(samples_.at(0).resting.has_value());
+  // #145/#165: no face to read eyeBlink or eyeWide from either.
+  EXPECT_EQ(samples_.at(0).eye_sign, std::nullopt);
 }
 
 }  // namespace
