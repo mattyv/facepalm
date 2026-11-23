@@ -245,5 +245,46 @@ TEST(ContentHitFromTest, PositivePitchMovesTowardTheScreensOwnBottom) {
             ContentHit::kYes);
 }
 
+// MacosScreenSource (src/macos/screen_context_macos.mm) is the only
+// caller, flipping Cocoa's y-up frames and NSEvent's y-up mouse location
+// into ScreenRect and MousePosition's own top-left-origin, y-down space
+// (#168, #169). Each case below is a monitor arrangement a real desktop
+// can have, named by where that screen sits relative to the primary one
+// the flip is against.
+TEST(YDownFromYUpTest, ThePrimaryScreenItselfFlipsToItsOwnTopAtZero) {
+  EXPECT_DOUBLE_EQ(
+      YDownFromYUp(/*y=*/0, /*height=*/800, /*primary_height=*/800), 0);
+}
+
+TEST(YDownFromYUpTest, APointOnThePrimaryFlipsTheSameWayWithNoHeight) {
+  // NSEvent's mouse location has no height: a point 300 up from the
+  // primary's own bottom is 500 down from its top, 800 tall.
+  EXPECT_DOUBLE_EQ(
+      YDownFromYUp(/*y=*/300, /*height=*/0, /*primary_height=*/800), 500);
+}
+
+TEST(YDownFromYUpTest, AShorterScreenLeftOfThePrimarySitsLowerInYDownSpace) {
+  // Same y-up origin as the primary (bottom-aligned), but only 600 tall:
+  // its own top sits 200 below the primary's, in y-down space. x is not
+  // this function's concern -- left of the primary differs only in x,
+  // which the caller carries over unflipped.
+  EXPECT_DOUBLE_EQ(
+      YDownFromYUp(/*y=*/0, /*height=*/600, /*primary_height=*/800), 200);
+}
+
+TEST(YDownFromYUpTest, AScreenAboveThePrimaryGetsANegativeY) {
+  // Its own bottom edge touches the primary's top (y-up y = 800), 600
+  // tall: it sits entirely above y-down's own origin.
+  EXPECT_DOUBLE_EQ(
+      YDownFromYUp(/*y=*/800, /*height=*/600, /*primary_height=*/800), -600);
+}
+
+TEST(YDownFromYUpTest, AScreenBelowThePrimaryStartsAtThePrimarysOwnHeight) {
+  // Its own top edge touches the primary's bottom (y-up y + height = 0):
+  // its y-down top sits right where the primary's own bottom does.
+  EXPECT_DOUBLE_EQ(
+      YDownFromYUp(/*y=*/-600, /*height=*/600, /*primary_height=*/800), 800);
+}
+
 }  // namespace
 }  // namespace facepalm
