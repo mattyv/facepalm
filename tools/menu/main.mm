@@ -309,6 +309,10 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
                                          keyEquivalent:@"q"];
   quit.target = NSApp;
   [menu addItem:quit];
+  // Off, so the enabled states DecideMenuState sets stick (#183): NSMenu's
+  // automatic enabling would otherwise re-enable every item whose target
+  // answers its action each time the menu opens.
+  menu.autoenablesItems = NO;
   menu.delegate = self;
   self.statusItem.menu = menu;
   [self menuNeedsUpdate:menu];
