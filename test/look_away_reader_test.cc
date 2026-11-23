@@ -4,10 +4,13 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <numbers>
+#include <thread>
 #include <vector>
 
 #include "src/calibration.h"
@@ -38,8 +41,11 @@ struct Pose {
 
 // A face whose transformation matrix is turned `pose.yaw` and then tipped
 // `pose.pitch`, Ry(yaw) * Rx(pitch), the order HeadRotationFrom
-// (src/head_pose.cc) reads.
-Face FaceAt(Pose pose) {
+// (src/head_pose.cc) reads, with `eye_look_out` set on src/eye_gaze.cc's
+// own eyeLookOutLeft (15) and eyeLookInRight (14) blendshapes alike, so
+// EyeSignalFrom's horizontal signal (#170) reads exactly `eye_look_out`:
+// (eye_look_out - 0 + eye_look_out - 0) / 2.
+Face FaceAt(Pose pose, double eye_look_out = 0) {
   const double cy = std::cos(pose.yaw * kDegree);
   const double sy = std::sin(pose.yaw * kDegree);
   const double cp = std::cos(pose.pitch * kDegree);
@@ -58,6 +64,8 @@ Face FaceAt(Pose pose) {
     }
   }
   face.pose_column_major[15] = 1;
+  face.blendshapes[14] = static_cast<float>(eye_look_out);
+  face.blendshapes[15] = static_cast<float>(eye_look_out);
   return face;
 }
 
@@ -76,13 +84,14 @@ Face FaceAt(Pose pose) {
 // ExpressionTracker, and the reaction it reports.
 class LookAwayReaderTest : public ::testing::Test {
  protected:
-  // `seconds` of frames, at 15 a second, with the head at `pose`.
-  void Hold(double seconds, Pose pose = {}) {
+  // `seconds` of frames, at 15 a second, with the head at `pose` and,
+  // for #170's own gains test, the eyes looking out by `eye_look_out`.
+  void Hold(double seconds, Pose pose = {}, double eye_look_out = 0) {
     const int frames = static_cast<int>(seconds * 15);
     for (int frame = 0; frame < frames; ++frame) {
       now_ms_ += kFrameMs;
-      reader_.OnFace(FaceAt(pose), /*width=*/640, /*height=*/480, now_ms_,
-                     reactions_);
+      reader_.OnFace(FaceAt(pose, eye_look_out), /*width=*/640,
+                     /*height=*/480, now_ms_, reactions_);
     }
   }
 
@@ -255,7 +264,7 @@ TEST_F(LookAwayReaderTest, SetProfileWiresInTheOtherScreenBoxTest) {
       .yaw_degrees = 40, .pitch_degrees = 5};
   CalibrationProfile profile;
   profile.screens = {screen};
-  reader_.SetProfile(&profile);
+  reader_.SetProfile(std::make_shared<const CalibrationProfile>(profile));
 
   Hold(5);
   Hold(3, {.yaw = 30});  // Inside the profile's own box.
@@ -265,8 +274,7 @@ TEST_F(LookAwayReaderTest, SetProfileWiresInTheOtherScreenBoxTest) {
 }
 
 TEST_F(LookAwayReaderTest, SetProfileOfNullptrGoesBackToNoBoxTest) {
-  const CalibrationProfile profile;
-  reader_.SetProfile(&profile);
+  reader_.SetProfile(std::make_shared<const CalibrationProfile>());
   reader_.SetProfile(nullptr);
 
   Hold(5);
@@ -283,6 +291,62 @@ TEST_F(LookAwayReaderTest, TwoLooksAreTwoReports) {
   Hold(3, {.yaw = 30});
   Hold(1);
   EXPECT_THAT(reactions_, SizeIs(2));
+}
+
+// #170: reader_ is built with EyeGains{} (0, 0) -- with no gain of its
+// own, the eyes alone, head held at rest, never move gaze far enough to
+// read as away. Once a profile with its own gains is set, OnFace must
+// compose gaze with the profile's own gains, not reader_'s ctor value,
+// the way ScreenContextReporter::ZoneOf already does: the very same eyes
+// then read as a turn well past DetectorSettings' 15 degrees.
+TEST_F(LookAwayReaderTest, SetProfileSwapsToTheProfilesOwnGains) {
+  Hold(5);
+  Hold(3, {}, /*eye_look_out=*/1);
+  Hold(1);
+  EXPECT_THAT(reactions_, IsEmpty());
+
+  CalibrationProfile profile;
+  profile.gains = {.horizontal = 20};
+  reader_.SetProfile(std::make_shared<const CalibrationProfile>(profile));
+
+  Hold(3, {}, /*eye_look_out=*/1);
+  Hold(1);
+  EXPECT_THAT(reactions_, ElementsAre(LookedAway("averted")));
+}
+
+// facepalm#167: a second calibration used to copy-assign the profile
+// this reader already held a raw, atomic pointer to, in place, while
+// OnFace read it on another thread with no lock the writer respected.
+// SetProfile now takes shared ownership of a wholly fresh
+// CalibrationProfile each call, and OnFace/OnNoFace take their own
+// snapshot under profile_mutex_ (Profile(), src/look_away_reader.cc), so
+// profile_'s pointee is never mutated, only swapped as a whole: this is
+// this reader's own regression test for that, caught by ThreadSanitizer
+// (CI's thread-sanitizer job) before the fix.
+TEST_F(LookAwayReaderTest, SetProfileRunsSafelyAlongsideOnFaceOnAnotherThread) {
+  std::atomic<bool> stop{false};
+  std::thread frames([this, &stop] {
+    std::int64_t frame_ms = 1000;
+    while (!stop.load()) {
+      frame_ms += kFrameMs;
+      std::vector<Reaction> reactions;
+      reader_.OnFace(FaceAt({.yaw = 10}), /*width=*/640, /*height=*/480,
+                     frame_ms, reactions);
+    }
+  });
+
+  // Recalibrates with a different number of screens each time: a fresh
+  // CalibrationProfile, never one the frames thread may already hold its
+  // own reference to.
+  for (int screens = 1; screens <= 4; ++screens) {
+    CalibrationProfile profile;
+    profile.screens.assign(static_cast<std::size_t>(screens),
+                           ScreenCalibration{});
+    reader_.SetProfile(std::make_shared<const CalibrationProfile>(profile));
+  }
+
+  stop = true;
+  frames.join();
 }
 
 }  // namespace

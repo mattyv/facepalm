@@ -377,12 +377,19 @@ std::optional<std::string> SetEyeSignsElevatedBlinksPerMinute(
 // Sets eye_signs.long_blink_ms, eye_signs.widened_eyes_hold_ms or
 // eye_signs.min_window_ms (#145) from `value`, or returns why it cannot.
 // `setting.name` is one of those three, as `Set` has already checked.
+// eye_signs.min_window_ms alone has a floor of 1, not 0 (#171): EyeSignsOf
+// (src/eye_signs.cc) divides a window's blink count by its own length in
+// milliseconds, and a window no shorter than this floor is never zero.
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::optional<std::string> SetEyeSignsMs(const Setting& setting,
                                          Config& config) {
+  const bool is_min_window = setting.name == "eye_signs.min_window_ms";
+  const int floor = is_min_window ? 1 : 0;
   const std::optional<int> milliseconds = Number<int>(setting.value);
-  if (!milliseconds || *milliseconds < 0 || *milliseconds > kMostEyeSignsMs) {
-    return "expected a whole number from 0 to 10000";
+  if (!milliseconds || *milliseconds < floor ||
+      *milliseconds > kMostEyeSignsMs) {
+    return is_min_window ? "expected a whole number from 1 to 10000"
+                         : "expected a whole number from 0 to 10000";
   }
   if (setting.name == "eye_signs.long_blink_ms") {
     config.eye_signs_long_blink_ms = *milliseconds;

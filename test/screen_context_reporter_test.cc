@@ -3,9 +3,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "src/calibration.h"
@@ -137,9 +140,9 @@ TEST(ScreenContextReporterTest, ACalibrationProfileAddsTheNearestScreen) {
   EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
   EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
   EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
-  const CalibrationProfile profile = TwoScreenProfile();
-  const ScreenContextReporter reporter(source, kSettings,
-                                       /*titles_enabled=*/false, &profile);
+  const ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false,
+      std::make_shared<const CalibrationProfile>(TwoScreenProfile()));
   const std::optional<HeadRotation> pose = HeadRotation{.yaw_degrees = 25};
 
   EXPECT_EQ(reporter.Json(pose, kRest),
@@ -151,9 +154,9 @@ TEST(ScreenContextReporterTest, NoPoseLeavesTheCalibratedScreenOut) {
   EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
   EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
   EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
-  const CalibrationProfile profile = TwoScreenProfile();
-  const ScreenContextReporter reporter(source, kSettings,
-                                       /*titles_enabled=*/false, &profile);
+  const ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false,
+      std::make_shared<const CalibrationProfile>(TwoScreenProfile()));
 
   EXPECT_EQ(reporter.Json(std::nullopt, kRest), R"({"gaze":"unknown"})");
 }
@@ -163,9 +166,9 @@ TEST(ScreenContextReporterTest, AnEmptyProfileLeavesTheCalibratedScreenOut) {
   EXPECT_CALL(source, CurrentApp(false)).WillOnce(Return(std::nullopt));
   EXPECT_CALL(source, Mouse()).WillOnce(Return(std::nullopt));
   EXPECT_CALL(source, Screens()).WillOnce(Return(std::vector<ScreenRect>{}));
-  const CalibrationProfile empty;
-  const ScreenContextReporter reporter(source, kSettings,
-                                       /*titles_enabled=*/false, &empty);
+  const ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false,
+      std::make_shared<const CalibrationProfile>());
 
   EXPECT_EQ(reporter.Json(kRest, kRest), R"({"gaze":"this_screen"})");
 }
@@ -211,8 +214,9 @@ TEST(ScreenContextReporterTest, AProfilesOwnGainsTakeOverFromTheDefault) {
   CalibrationProfile profile;
   profile.gains = {.horizontal = 30};
   profile.screens = {ScreenCalibration{}};  // One screen, centred at (0, 0).
-  const ScreenContextReporter reporter(source, kSettings,
-                                       /*titles_enabled=*/false, &profile);
+  const ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false,
+      std::make_shared<const CalibrationProfile>(profile));
   const EyeSignal eye{.horizontal = 1};
   const EyeSignal eye_resting{};
 
@@ -315,6 +319,24 @@ TEST(BetweenTest, TheMajorityZoneWins) {
   EXPECT_EQ(window.gaze, Gaze::kThisScreen);
 }
 
+// #171: a tie between zones keeps the lowest Gaze enum value among them
+// (kThisScreen, here), not whichever Sample saw first -- this sample
+// order would read as kAway if "first seen" were the rule, since it is
+// the one Sample saw first.
+TEST(BetweenTest, ATiedZoneKeepsTheLowestGazeValueNotTheFirstSeen) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  const std::optional<HeadRotation> away = HeadRotation{.yaw_degrees = 90};
+  reporter.Sample(away, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/200);
+
+  const GazeWindow window = reporter.Between(0, 1000, std::nullopt);
+
+  EXPECT_EQ(window.gaze, Gaze::kThisScreen);
+}
+
 TEST(BetweenTest, OldSamplesPastMaxWindowMsAreForgotten) {
   MockScreenSource source;
   EXPECT_CALL(source, Screens())
@@ -339,6 +361,23 @@ TEST(BetweenTest, TheMajorityContentHitWins) {
       .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
   ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
   reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/200);
+
+  const GazeWindow window = reporter.Between(0, 1000, kCentre);
+
+  EXPECT_EQ(window.content, ContentHit::kYes);
+}
+
+// #171: a tie between yes and no keeps yes, not whichever Sample saw
+// first -- this sample order would read as kNo if "first seen" were the
+// rule, since it is the one Sample saw first.
+TEST(BetweenTest, ATiedContentHitKeepsYesNotTheFirstSeen) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  const std::optional<HeadRotation> away = HeadRotation{.yaw_degrees = 90};
+  reporter.Sample(away, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
   reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/200);
 
   const GazeWindow window = reporter.Between(0, 1000, kCentre);
@@ -535,11 +574,52 @@ TEST(ScreenContextReporterTest, SetProfileSwapsWhatNextCallReads) {
   ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
   EXPECT_EQ(reporter.Json(kRest, kRest), R"({"gaze":"this_screen"})");
 
-  const CalibrationProfile profile = TwoScreenProfile();
-  reporter.SetProfile(&profile);
+  reporter.SetProfile(
+      std::make_shared<const CalibrationProfile>(TwoScreenProfile()));
 
   EXPECT_EQ(reporter.Json(kRest, kRest),
             R"({"gaze":"this_screen","calibrated_screen":0})");
+}
+
+// facepalm#167: a second calibration used to copy-assign the profile
+// reporter_ and look_away_reader_ already held a raw pointer to, in
+// place, while they read it on another thread with no lock the writer
+// respected -- a different screen count reallocated screens_ under a
+// live NearestCalibratedScreen iterator (use-after-free), the same count
+// tore doubles. SetProfile now takes shared ownership of a wholly fresh
+// CalibrationProfile each call, so profile_'s pointee is never mutated,
+// only swapped as a whole under mutex_ (ScreenContextReporter::Json's
+// own lock): this is this reporter's own regression test for that,
+// caught by ThreadSanitizer (CI's thread-sanitizer job) before the fix.
+TEST(ScreenContextReporterTest,
+     SetProfileRunsSafelyAlongsideJsonOnAnotherThread) {
+  MockScreenSource source;
+  EXPECT_CALL(source, CurrentApp(false)).WillRepeatedly(Return(std::nullopt));
+  EXPECT_CALL(source, Mouse()).WillRepeatedly(Return(std::nullopt));
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{}));
+  ScreenContextReporter reporter(source, kSettings, /*titles_enabled=*/false);
+  const std::optional<HeadRotation> pose = HeadRotation{.yaw_degrees = 10};
+
+  std::atomic<bool> stop{false};
+  std::thread reader([&reporter, &pose, &stop] {
+    while (!stop.load()) {
+      EXPECT_FALSE(reporter.Json(pose, kRest).empty());
+    }
+  });
+
+  // Recalibrates with a different number of screens each time: a fresh
+  // CalibrationProfile, never one the reader thread may already hold its
+  // own reference to.
+  for (int screens = 1; screens <= 4; ++screens) {
+    CalibrationProfile profile;
+    profile.screens.assign(static_cast<std::size_t>(screens),
+                           ScreenCalibration{});
+    reporter.SetProfile(std::make_shared<const CalibrationProfile>(profile));
+  }
+
+  stop = true;
+  reader.join();
 }
 
 }  // namespace

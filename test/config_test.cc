@@ -451,8 +451,27 @@ TEST(ParseConfigTest, RefusesAnEyeSignsMillisecondsOutsideZeroTo10000) {
               Eq("line 1: expected a whole number from 0 to 10000"));
   EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_hold_ms = 10001"),
               Eq("line 1: expected a whole number from 0 to 10000"));
+}
+
+// #171: eye_signs.min_window_ms alone has a floor of 1, not 0 -- a window
+// no shorter than this is never zero-length, so EyeSignsOf's own blink
+// rate (src/eye_signs.cc) never divides by zero.
+TEST(ParseConfigTest, RefusesAnEyeSignsMinWindowMsBelowOne) {
+  EXPECT_THAT(ErrorFor("eye_signs.min_window_ms = 0"),
+              Eq("line 1: expected a whole number from 1 to 10000"));
   EXPECT_THAT(ErrorFor("eye_signs.min_window_ms = 1.5"),
-              Eq("line 1: expected a whole number from 0 to 10000"));
+              Eq("line 1: expected a whole number from 1 to 10000"));
+  EXPECT_THAT(ErrorFor("eye_signs.min_window_ms = 10001"),
+              Eq("line 1: expected a whole number from 1 to 10000"));
+}
+
+TEST(ParseConfigTest, AcceptsAnEyeSignsMinWindowMsOfOne) {
+  std::string error;
+  const std::optional<Config> parsed =
+      ParseConfig("eye_signs.min_window_ms = 1\n", error);
+  ASSERT_TRUE(parsed.has_value()) << error;
+  const Config config = parsed.value_or(Config{});
+  EXPECT_THAT(config.eye_signs_min_window_ms, Eq(1));
 }
 
 TEST(ParseConfigTest, RefusesAWidenedEyesThresholdOutsideZeroToOne) {

@@ -172,8 +172,18 @@ std::optional<CalibrationSession::Status> CalibrationSession::Next(
 std::optional<CalibrationSession::Status> CalibrationSession::AdvanceOrRefuse(
     std::string& error) {
   if (RestingStep()) {
+    // #171: every frame of the resting step blinked, so eye_sample_
+    // never accumulated anything -- refused the same way the gains step
+    // below refuses too little head travel, rather than saving a
+    // placeholder {0, 0} that would bias ComposeGaze's own
+    // eye-relative-to-resting term for every later step.
+    if (eye_sample_count_ == 0) {
+      error = "keep your eyes open while you look at the dot";
+      ResetStep();
+      return std::nullopt;
+    }
     resting_ = sample_;
-    resting_eye_ = eye_sample_count_ > 0 ? eye_sample_ : EyeSignal{};
+    resting_eye_ = eye_sample_;
   } else if (GainsStep()) {
     const std::optional<EstimatedGains> estimated =
         EstimateGains(gains_samples_, settings_.min_head_travel_degrees,

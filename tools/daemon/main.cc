@@ -251,15 +251,18 @@ facepalm::CalibrationSettings CalibrationSettingsFor(
       .head_only_yaw_degrees = config.eye_gaze_head_only_yaw_degrees};
 }
 
-// `*profile`, or nullopt with no profile given (#61 item 12): Engine's own
-// copy, so a session finishing later can replace it (#136, #137) rather
-// than only borrowing main()'s local for the Engine's whole lifetime.
-std::optional<facepalm::CalibrationProfile> CopyProfile(
+// A fresh copy of `*profile`, shared ownership, or nullptr with no
+// profile given (#61 item 12): Engine's own, so a session finishing
+// later can replace it wholesale (#136, #137, #167) rather than only
+// borrowing main()'s local for the Engine's whole lifetime, or mutating
+// it in place while reporter_/look_away_reader_ read their own
+// snapshot of it on another thread.
+std::shared_ptr<const facepalm::CalibrationProfile> SharedProfile(
     const facepalm::CalibrationProfile* profile) {
   if (profile == nullptr) {
-    return std::nullopt;
+    return nullptr;
   }
-  return *profile;
+  return std::make_shared<const facepalm::CalibrationProfile>(*profile);
 }
 
 // Where a finished calibration session saves its profile (#116): empty,
@@ -359,6 +362,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                    const std::optional<EyeSignSample>& eye_sign) {
               SampleScreenContext(pose, resting, eye, eye_resting, eye_sign);
             }),
+        calibration_profile_(SharedProfile(calibration_profile)),
         // Outlives any one camera session too (#141, as screen_context_
         // reader_ does, #61 item 11): its own kGone tracking, and the
         // calibration profile OnCalibrationFinished swaps into it below,
@@ -387,7 +391,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                     config.looking_away_other_screen_margin_degrees},
             EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
                      .vertical = config.eye_gaze_vertical_gain},
-            config.eye_gaze_head_only_yaw_degrees, calibration_profile),
+            config.eye_gaze_head_only_yaw_degrees, calibration_profile_),
         // std::in_place, not a temporary moved in: ScreenContextReporter
         // holds a mutex (SetProfile's own, #137), so it is neither
         // copyable nor movable.
@@ -400,7 +404,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                               config.screen_context_other_screen_degrees,
                           .away_degrees = config.looking_away_degrees},
                       config.screen_context_window_titles_enabled,
-                      calibration_profile,
+                      calibration_profile_,
                       EyeGains{.horizontal = config.eye_gaze_horizontal_gain,
                                .vertical = config.eye_gaze_vertical_gain},
                       config.eye_gaze_head_only_yaw_degrees,
@@ -415,7 +419,6 @@ class Engine : public DaemonController, public DaemonPipeline {
                               config.eye_signs_widened_eyes_hold_ms,
                           .min_window_ms = config.eye_signs_min_window_ms})
                 : std::nullopt),
-        calibration_profile_(CopyProfile(calibration_profile)),
         feelings_(std::move(feelings)),
         status_path_(std::move(status_path)),
         feed_(
@@ -612,15 +615,21 @@ class Engine : public DaemonController, public DaemonPipeline {
  private:
   // CalibrationSession's own on_finished callback (#136, #137): swaps the
   // freshly saved profile into reporter_ at once
-  // (ScreenContextReporter::SetProfile), rather than only on the next run.
+  // (ScreenContextReporter::SetProfile), rather than only on the next
+  // run. A wholly fresh shared_ptr every time (#167), never the one
+  // calibration_profile_ already names: reporter_ and look_away_reader_
+  // may still be mid-read of that one, on the camera's own thread, with
+  // no lock this method's own caller (a connection's thread, inside
+  // CalibrationSession's mutex) takes, so the object a reading names
+  // must never be mutated in place, only ever replaced wholesale.
   void OnCalibrationFinished(const CalibrationProfile& profile) {
-    calibration_profile_ = profile;
+    calibration_profile_ = std::make_shared<const CalibrationProfile>(profile);
     if (reporter_) {
-      reporter_->SetProfile(&*calibration_profile_);
+      reporter_->SetProfile(calibration_profile_);
     }
     // #141's own kOtherScreen box test reads the same freshly saved
     // profile at once, rather than only on the next run.
-    look_away_reader_.SetProfile(&*calibration_profile_);
+    look_away_reader_.SetProfile(calibration_profile_);
   }
 
   // screen_context_reader_'s own OnSample callback (#142; eye_sign added
@@ -716,15 +725,20 @@ class Engine : public DaemonController, public DaemonPipeline {
   // (#61 item 11); nullptr/nullopt with screen_context disabled.
   std::unique_ptr<ScreenSource> screen_source_;
   ScreenContextReader screen_context_reader_;
+  // The profile reporter_ and look_away_reader_ read (#61 item 12, #137):
+  // a fresh copy, shared ownership, not a borrow of main()'s own local,
+  // so calibration_session_'s on_finished callback can replace it at
+  // once (#136) rather than only on the next run -- with a wholly new
+  // object each time (#167), never mutated in place, so a reader already
+  // mid-snapshot of the one before it is never left reading a torn or
+  // freed one. Declared before look_away_reader_ and reporter_ so it is
+  // constructed first, and both can be given the very same initial
+  // shared_ptr their own constructors take below.
+  std::shared_ptr<const CalibrationProfile> calibration_profile_;
   // Outlives any one camera session, like screen_context_reader_ above
   // (#141, #61 item 11).
   LookAwayReader look_away_reader_;
   std::optional<ScreenContextReporter> reporter_;
-  // The profile reporter_ reads (#61 item 12, #137): a copy, not a
-  // borrow of main()'s own local, so calibration_session_'s on_finished
-  // callback can replace it at once (#136) rather than only on the next
-  // run.
-  std::optional<CalibrationProfile> calibration_profile_;
   std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
   std::string status_path_;
   ReactionFeed feed_;
