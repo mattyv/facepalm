@@ -152,11 +152,13 @@ made since, each with its reason, are in the
     `src/screen_context`, are the rule, tested directly; it has no
     lifecycle, so no spec. The same file's `BeatGazeName` words those four
     zones for a beat's own reply (`on_content`, `averted`, `away`,
-    `unknown`, #142), and `ContentHitFrom` reads whether gaze was mostly
-    inside a content rectangle a beat may carry (`yes`, `no`, `unknown`,
-    #144), by linear interpolation across `CoarseGazeFrom`'s own
-    uncalibrated cone -- coarse only, never angles or window titles (#83);
-    also tested directly, no lifecycle of its own. `ScreenContextReader`
+    `unknown`, #142), `BeatGazeNamed` reads one back (#143, for
+    `src/tuning`'s own counts file), and `ContentHitFrom` reads whether
+    gaze was mostly inside a content rectangle a beat may carry (`yes`,
+    `no`, `unknown`, #144), by linear interpolation across
+    `CoarseGazeFrom`'s own uncalibrated cone -- coarse only, never angles
+    or window titles (#83); also tested directly, no lifecycle of its
+    own. `ScreenContextReader`
     is a `FaceReader` that keeps the pose and eye signal (its own
     `EyeGazeTracker`) behind a mutex, read from a different thread than
     they are written on, and, given one, tells an `OnSample` callback the
@@ -200,15 +202,29 @@ made since, each with its reason, are in the
     no cue, cues of different feelings, or a window missing a dropped
     reading read as unknown. No rule gives engagement or annoyance yet; they
     are there for corrections to name (#35). It also names what a beat
-    showed, the one kind of reaction made during it and the beat's kind,
-    which a correction is counted under.
--   `src/tuning`: the person's own reads (#35): how many times they picked
-    each feeling for each reaction and kind of beat. A feeling picked at
-    least twice and more than half the time becomes the person's read for
-    it, but only once a held-out check shows it beats the generic rule: each
-    pick in turn is held out and read from the others, and those reads must
-    be right more often than the generic one. Three picks of the same
-    feeling are enough; a split between two is not.
+    showed, the one kind of reaction made during it, the beat's kind, and
+    where the person was looking during it, in the beat's own wording
+    (#143, `src/screen_context.h`'s `Gaze` and `BeatGazeName`) -- a
+    feature the person's own read (`src/tuning`) learns from, never
+    `Rule`'s own input (#142's `ContextNeverChangesFeeling`); `EvidenceOf`
+    itself leaves gaze at `kUnknown`, for `src/reaction_feed`'s `Beat` to
+    fill in from the same gaze its reply reports.
+-   `src/tuning`: the person's own reads (#35, gaze added by #143): how
+    many times they picked each feeling for each reaction, kind of beat,
+    and coarse gaze during it. A feeling picked at least twice and more
+    than half the time becomes the person's read for it, but only once a
+    held-out check shows it beats the generic rule: each pick in turn is
+    held out and read from the others, and those reads must be right more
+    often than the generic one. Three picks of the same feeling are
+    enough; a split between two is not. Below that minimum for one gaze,
+    the read instead runs over every pick of the same reaction and beat,
+    whatever gaze it was made under, so a feeling no generic rule gives
+    (engagement, annoyance) can still come from the person's labels before
+    enough of them share one gaze. The counts file's own header bumped
+    from `facepalm feelings 1` to `facepalm feelings 2` for the added
+    gaze word; a file from before #143 has none, so it is simply refused,
+    the same version check #137's own bump takes in
+    `src/calibration_store`, with no migration.
 -   `src/feeling_store`: keeps those counts in one file private to the
     person, `facepalm/feelings` in `$XDG_CONFIG_HOME` or `~/.config` unless
     the daemon is given `--feelings-file PATH`. It is the file's only

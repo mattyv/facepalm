@@ -82,7 +82,9 @@ class ReactionFeed : public Feed {
   // [start, end) on now_ms_'s own clock; a question beat gaze_window_
   // reads as averted at the end reads unknown however the cues went
   // (FeelingBeat.tla's GuardAvertedUnknown, the thinking guard), never
-  // any other feeling gaze would not otherwise have given.
+  // any other feeling gaze would not otherwise have given. The same gaze
+  // is folded into the evidence given to tuner_.Read and later Feel
+  // (#143), so the personal read tunes on it too.
   std::optional<Delivery> Beat(const std::string& client, BeatKind kind,
                                std::chrono::milliseconds window,
                                std::optional<ContentRect> content) override;

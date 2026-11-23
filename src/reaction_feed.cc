@@ -175,13 +175,19 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
   Delivery delivery = Tell(*entry);
   const std::int64_t id = next_interpretation_++;
   Expire(*entry);
-  entry->given[id] = {.given_at = clock_(), .evidence = shown.evidence};
-  lock.unlock();
-  const Feeling generic = shown.evidence
-                              ? tuner_.Read(*shown.evidence, shown.generic)
-                              : shown.generic;
+  // The beat's own gaze (#142, #144), folded into the evidence (#143)
+  // before it is given or read, so the personal read and the later Feel
+  // (FeelingFeedback!Feel) both tune on the same gaze the reply reports.
   const GazeWindow gaze_window =
       gaze_window_ ? gaze_window_(started_ms, ended_ms, content) : GazeWindow{};
+  std::optional<Evidence> evidence = shown.evidence;
+  if (evidence) {
+    evidence->gaze = gaze_window.gaze;
+  }
+  entry->given[id] = {.given_at = clock_(), .evidence = evidence};
+  lock.unlock();
+  const Feeling generic =
+      evidence ? tuner_.Read(*evidence, shown.generic) : shown.generic;
   // FeelingBeat.tla's GuardAvertedUnknown, the thinking guard (#142): a
   // question's own gaze averted at the end is read unknown however the
   // cues went -- "eyes never decide a feeling by rule" otherwise, which

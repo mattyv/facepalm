@@ -90,6 +90,11 @@ Gaze CoarseGazeFrom(const HeadRotation& gaze,
 // better there than "this screen" does.
 std::string_view BeatGazeName(Gaze gaze);
 
+// The zone BeatGazeName names, or nullopt for anything else. src/tuning.h's
+// Evidence stores a beat's own gaze this way (#143), the same wording its
+// reply already carries.
+std::optional<Gaze> BeatGazeNamed(std::string_view name);
+
 // A content rectangle a client's beat may carry (#144): the area on
 // screen its question or proposal occupies, in the same coordinate space
 // as ScreenRect (#36 item 11), consistent across one call, not across

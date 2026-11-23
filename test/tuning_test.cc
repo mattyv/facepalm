@@ -8,9 +8,13 @@
 #include <string_view>
 
 #include "src/feelings.h"
+#include "src/screen_context.h"
 
 // The tuning rule (#35): a person's picks change a read only once a
-// held-out check shows they beat the generic rule for that evidence.
+// held-out check shows they beat the generic rule for that evidence. #143
+// adds gaze as a third field of that evidence: below Tuning::kLeastPicks
+// picks for one gaze, the rule falls back to every pick of the same sign
+// and beat regardless of gaze.
 
 namespace facepalm {
 namespace {
@@ -29,6 +33,27 @@ Evidence FrownAtAProposal() {
 // A smile at a question.
 Evidence SmileAtAQuestion() {
   return {.sign = "smile", .beat = BeatKind::kQuestion};
+}
+// A frown at a question, looking at the content.
+Evidence FrownOnContentAtAQuestion() {
+  return {.sign = "brows_down",
+          .beat = BeatKind::kQuestion,
+          .gaze = Gaze::kThisScreen};
+}
+// The same frown, looking away from the content.
+Evidence FrownAvertedAtAQuestion() {
+  return {.sign = "brows_down",
+          .beat = BeatKind::kQuestion,
+          .gaze = Gaze::kOtherScreen};
+}
+// A smile at a question, looking at the content.
+Evidence SmileOnContentAtAQuestion() {
+  return {
+      .sign = "smile", .beat = BeatKind::kQuestion, .gaze = Gaze::kThisScreen};
+}
+// The same smile, away from every screen.
+Evidence SmileAwayAtAQuestion() {
+  return {.sign = "smile", .beat = BeatKind::kQuestion, .gaze = Gaze::kAway};
 }
 
 // `tuning` with `feeling` picked `times` times for `evidence`.
@@ -121,20 +146,87 @@ TEST(TuningReadTest, AnEvenSplitBeatsNothing) {
               Eq(Feeling::kUnknown));
 }
 
+// #143: gaze is a third field of the evidence. Below kLeastPicks picks for
+// one gaze, Read falls back to every pick of the same sign and beat,
+// whatever gaze it was made under.
+TEST(TuningGazeTest, BelowTheMinimumForOneGazeFallsBackToEveryGazeOfIt) {
+  // Three annoyance picks looking at the content: enough on their own.
+  // Reading the same frown looking away, which has none of its own,
+  // still finds them through the fallback.
+  const Tuning tuning =
+      Picked(Tuning(), FrownOnContentAtAQuestion(), Feeling::kAnnoyance, 3);
+
+  EXPECT_THAT(tuning.Read(FrownAvertedAtAQuestion(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+}
+
+TEST(TuningGazeTest, AtOrAboveTheMinimumForOneGazeReadsItAlone) {
+  // Three annoyance picks on the content, three confused picks averted:
+  // each gaze has enough of its own, so each is read on its own, not
+  // pooled with the other.
+  const Tuning tuning = Picked(
+      Picked(Tuning(), FrownOnContentAtAQuestion(), Feeling::kAnnoyance, 3),
+      FrownAvertedAtAQuestion(), Feeling::kConfused, 3);
+
+  EXPECT_THAT(tuning.Read(FrownOnContentAtAQuestion(), Feeling::kUnknown),
+              Eq(Feeling::kAnnoyance));
+  EXPECT_THAT(tuning.Read(FrownAvertedAtAQuestion(), Feeling::kUnknown),
+              Eq(Feeling::kConfused));
+}
+
+TEST(TuningGazeTest, PicksAcrossGazesCanStillNameAFeelingNoGenericRuleGives) {
+  // One engagement pick on the content -- below kLeastPicks on its own --
+  // and two away: pooled, the three beat the generic read, so engagement
+  // -- a feeling no generic rule gives -- still comes from the person's
+  // own labels before on_content alone ever sees enough of them (#143's
+  // own point).
+  const Tuning tuning = Picked(
+      Picked(Tuning(), SmileOnContentAtAQuestion(), Feeling::kEngagement, 1),
+      SmileAwayAtAQuestion(), Feeling::kEngagement, 2);
+
+  EXPECT_THAT(tuning.Read(SmileOnContentAtAQuestion(), Feeling::kUnknown),
+              Eq(Feeling::kEngagement));
+}
+
+TEST(TuningGazeTest, PicksTuneOnlyTheirOwnSignAndBeatAcrossGazes) {
+  // The fallback pools gaze, never sign or beat: a frown's picks never
+  // answer for a smile, or a question's for a proposal.
+  const Tuning tuning =
+      Picked(Tuning(), FrownOnContentAtAQuestion(), Feeling::kAnnoyance, 3);
+
+  EXPECT_THAT(tuning.Read(SmileOnContentAtAQuestion(), Feeling::kUnknown),
+              Eq(Feeling::kUnknown));
+  EXPECT_THAT(tuning.Read(Evidence{.sign = "brows_down",
+                                   .beat = BeatKind::kProposal,
+                                   .gaze = Gaze::kOtherScreen},
+                          Feeling::kConfused),
+              Eq(Feeling::kConfused));
+}
+
 TEST(TuningTextTest, WritesOneLinePerPickedFeeling) {
   const Tuning tuning = Picked(
       Picked(Picked(Tuning(), FrownAtAQuestion(), Feeling::kAnnoyance, 3),
              SmileAtAQuestion(), Feeling::kEngagement, 1),
       FrownAtAProposal(), Feeling::kConfused, 2);
 
-  EXPECT_THAT(tuning.Text(), Eq("facepalm feelings 1\n"
-                                "brows_down question annoyance 3\n"
-                                "brows_down proposal confused 2\n"
-                                "smile question engagement 1\n"));
+  EXPECT_THAT(tuning.Text(), Eq("facepalm feelings 2\n"
+                                "brows_down question unknown annoyance 3\n"
+                                "brows_down proposal unknown confused 2\n"
+                                "smile question unknown engagement 1\n"));
+}
+
+TEST(TuningTextTest, WritesTheGazeEachPickWasMadeUnder) {
+  const Tuning tuning = Picked(
+      Picked(Tuning(), FrownOnContentAtAQuestion(), Feeling::kAnnoyance, 3),
+      FrownAvertedAtAQuestion(), Feeling::kConfused, 2);
+
+  EXPECT_THAT(tuning.Text(), Eq("facepalm feelings 2\n"
+                                "brows_down question on_content annoyance 3\n"
+                                "brows_down question averted confused 2\n"));
 }
 
 TEST(TuningTextTest, WritesNoLinesWithNoPicks) {
-  EXPECT_THAT(Tuning().Text(), Eq("facepalm feelings 1\n"));
+  EXPECT_THAT(Tuning().Text(), Eq("facepalm feelings 2\n"));
 }
 
 TEST(TuningTextTest, ReadsBackWhatItWrote) {
@@ -152,40 +244,61 @@ TEST(TuningTextTest, ReadsBackWhatItWrote) {
               Eq(Feeling::kAnnoyance));
 }
 
+TEST(TuningTextTest, ReadsBackTheGazeItWrote) {
+  const Tuning tuning =
+      Picked(Tuning(), FrownOnContentAtAQuestion(), Feeling::kAnnoyance, 3);
+
+  const std::optional<Tuning> parsed = Tuning::Parse(tuning.Text());
+
+  ASSERT_TRUE(parsed.has_value());
+  const Tuning read = parsed.value_or(Tuning());
+  EXPECT_THAT(read.Text(), Eq(tuning.Text()));
+  EXPECT_THAT(read.Read(FrownOnContentAtAQuestion(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+  // The same picks, read by a different gaze, fall back (#143) rather
+  // than vanish.
+  EXPECT_THAT(read.Read(FrownAvertedAtAQuestion(), Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+}
+
 TEST(TuningTextTest, ReadsAFileWithNoPicks) {
   EXPECT_THAT(
-      Tuning::Parse("facepalm feelings 1\n"),
-      Optional(testing::Property(&Tuning::Text, Eq("facepalm feelings 1\n"))));
+      Tuning::Parse("facepalm feelings 2\n"),
+      Optional(testing::Property(&Tuning::Text, Eq("facepalm feelings 2\n"))));
 }
 
 TEST(TuningTextTest, RefusesAnythingElse) {
   for (const std::string_view text : {
            "",
-           "facepalm feelings 2\n",
-           "facepalm feelings 1",
-           "facepalm feelings 1\nsmile question engagement 1",
-           "facepalm feelings 1\n\n",
-           "facepalm feelings 1\nSmile question engagement 1\n",
-           "facepalm feelings 1\nsmile answer engagement 1\n",
-           "facepalm feelings 1\nsmile question happy 1\n",
-           "facepalm feelings 1\nsmile question engagement 0\n",
-           "facepalm feelings 1\nsmile question engagement x\n",
-           "facepalm feelings 1\nsmile question engagement 1x\n",
-           "facepalm feelings 1\nsmile question engagement 1000001\n",
-           "facepalm feelings 1\nsmile question engagement\n",
-           "facepalm feelings 1\nsmile question engagement 1 1\n",
+           "facepalm feelings 1\n",
+           "facepalm feelings 3\n",
+           "facepalm feelings 2",
+           "facepalm feelings 2\nsmile question on_content engagement 1",
+           "facepalm feelings 2\n\n",
+           "facepalm feelings 2\nSmile question on_content engagement 1\n",
+           "facepalm feelings 2\nsmile answer on_content engagement 1\n",
+           "facepalm feelings 2\nsmile question sideways engagement 1\n",
+           "facepalm feelings 2\nsmile question on_content happy 1\n",
+           "facepalm feelings 2\nsmile question on_content engagement 0\n",
+           "facepalm feelings 2\nsmile question on_content engagement x\n",
+           "facepalm feelings 2\nsmile question on_content engagement 1x\n",
+           "facepalm feelings 2\nsmile question away engagement 1000001\n",
+           "facepalm feelings 2\nsmile question on_content engagement\n",
+           "facepalm feelings 2\nsmile question on_content engagement 1 1\n",
+           "facepalm feelings 2\nsmile question engagement 1\n",
        }) {
     EXPECT_THAT(Tuning::Parse(text), Eq(std::nullopt)) << text;
   }
-  const std::string twice = std::string("facepalm feelings 1\n") +
-                            "smile question engagement 1\n" +
-                            "smile question engagement 2\n";
+  const std::string twice = std::string("facepalm feelings 2\n") +
+                            "smile question on_content engagement 1\n" +
+                            "smile question on_content engagement 2\n";
   EXPECT_THAT(Tuning::Parse(twice), Eq(std::nullopt));
 }
 
 TEST(TuningCountTest, AFeelingStopsCountingAtTheMostPicks) {
-  const std::string full = "facepalm feelings 1\nsmile question engagement " +
-                           std::to_string(Tuning::kMostPicks) + "\n";
+  const std::string full =
+      "facepalm feelings 2\nsmile question unknown engagement " +
+      std::to_string(Tuning::kMostPicks) + "\n";
   const std::optional<Tuning> parsed = Tuning::Parse(full);
   ASSERT_TRUE(parsed.has_value());
   Tuning tuning = parsed.value_or(Tuning());

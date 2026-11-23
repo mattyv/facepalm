@@ -788,6 +788,46 @@ TEST_F(GazeContextTest, AProposalEndingAvertedKeepsItsCuesFeeling) {
   EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kAgreement));
 }
 
+// #143: the beat's own gaze is folded into the evidence before it is read,
+// so the tuner's own Read sees the same gaze the reply reports, not just
+// the sign and beat TunedReadTest above checks.
+TEST_F(GazeContextTest, TheEvidenceReadCarriesTheWindowsGaze) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  gaze_window_ = [](std::int64_t /*start*/, std::int64_t /*end*/,
+                    const std::optional<ContentRect>& /*content*/) {
+    return GazeWindow{.gaze = Gaze::kThisScreen};
+  };
+  EXPECT_CALL(tuner_, Read(Evidence{.sign = "brows_down",
+                                    .beat = BeatKind::kQuestion,
+                                    .gaze = Gaze::kThisScreen},
+                           Feeling::kConfused))
+      .WillOnce(Return(Feeling::kAnnoyance));
+  auto beat = Mark();
+  feed_.React("Expression: brows_down", kFrownText);
+
+  EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kAnnoyance));
+}
+
+// #143: the same gaze goes into the evidence a later Feel teaches, not
+// just the one the beat was read with.
+TEST_F(GazeContextTest, TheEvidenceLearnedCarriesTheWindowsGaze) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  gaze_window_ = [](std::int64_t /*start*/, std::int64_t /*end*/,
+                    const std::optional<ContentRect>& /*content*/) {
+    return GazeWindow{.gaze = Gaze::kThisScreen};
+  };
+  auto beat = Mark();
+  feed_.React("Expression: brows_down", kFrownText);
+  const std::int64_t id = InterpretationOf(Answered(beat));
+  EXPECT_CALL(tuner_, Learn(Evidence{.sign = "brows_down",
+                                     .beat = BeatKind::kQuestion,
+                                     .gaze = Gaze::kThisScreen},
+                            Feeling::kAnnoyance))
+      .WillOnce(Return(true));
+
+  EXPECT_TRUE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
 class FeedbackTest : public BeatTest {
  protected:
   // The interpretation of a beat in which "agent" frowned.
