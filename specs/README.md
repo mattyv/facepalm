@@ -28,7 +28,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | Config | Bounds | Result | Distinct states |
 |---|---|---|---|
 | `Calibration.cfg` | six steps, one camera outage | holds | 30 |
-| `CalibrationMenu.cfg` | one menu flow against one daemon session, a cold start's camera bounded to 2 retries, every guard on | holds, with `ClosingCompletes` and `CameraWaitResolves` | 29 |
+| `CalibrationMenu.cfg` | one menu flow against one daemon session, a cold start's camera bounded to 2 retries, every guard on | holds, with `ClosingCompletes` and `CameraWaitResolves` | 78 |
 | `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,864 |
 | `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
@@ -1639,7 +1639,7 @@ property holds.
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
 | `NoStalePrompt` | Whatever the wizard shows as "prompting" is backed by a session the daemon still has. | `CalibrationFlowTest.NextTransitionsToFailedOnAnUnexpectedIdleReply`, `...OnAHangUpWithoutACancel` |
 | `NoOrphanOnClose` | Closing the window never leaves a session running with nobody left to answer for it. | `CalibrationFlowTest.WindowClosedSendsCancelWhilePrompting`, `...IsANoOpOutsidePrompting` |
-| `SessionEndsWithFlow` | A flow that has reported done or failed never still has a session the daemon thinks is running (#128): whatever ended this flow's own view also ended, or already found ended, the one it was responsible for. | `CalibrationFlowTest.NextSendsCancelAndReportsItsOwnErrorOnARefusal`, `...KeepsItsOwnErrorEvenWhenTheCleanupCancelFails` |
+| `SessionEndsWithFlow` | A flow that has reported done or failed never still has a session the daemon thinks is running (#128): whatever ended this flow's own view also ended, or already found ended, the one it was responsible for. A refusal (#177) is not such an ending: the daemon's session stays running, and so does the flow's own "prompting". | `CalibrationFlowTest.NextStaysPromptingWithTheDaemonsHintOnARefusal`, `...NextCarriesARefusalHintWithPunctuation` |
 | `ResultShownOnDone` | A finished flow always shows the count it ended on (#135, #137): the wizard never reaches "done" silently (#136's finding). | `CalibrationFlowTest.NextTransitionsToDoneWithTheScreensCalibrated` |
 | `WindowMovedWhilePrompting` | Every step shown while prompting has had the window moved onto the screen it names (#135). | Not unit-testable: `tools/menu/calibration_window_macos.mm`'s `moveToScreenForStep:` and `calibration_window_linux.cc`'s `MoveToScreenForStep` are AppKit/Qt glue, untested by this repo's own convention (the window files carry no test file); a hand check on a real Mac and Ubuntu with two screens shows the window moving |
 | `ClosingCompletes` | Something must happen: once Cancel or the window's close button has asked the daemon to end the session, that always finishes. | Every `CalibrationFlowTest` case that calls `Cancel()` or `WindowClosed()` observes a terminal `View()` before returning, since `CalibrateClientIo::ReadLine` is synchronous in the real POSIX and Qt glue (`tools/posix_calibrate_client_io.h`, `tools/menu/main_linux.cc`'s `QtCalibrateClientIo`) and in every mock |
@@ -1651,7 +1651,7 @@ Each mutation, and what TLC found:
 |---|---|
 | `GuardFailOnDisconnect = FALSE`: a failed or hung-up `calibrate next` leaves the wizard showing the step that is no longer real | `NoStalePrompt`, 5 states |
 | `GuardCancelOnClose = FALSE`: the window's close button tears the window down without ever sending `calibrate cancel` | `NoOrphanOnClose`, 8 states |
-| `GuardCancelOnRefusal = FALSE`: a refused `calibrate next` reports the failure without ever sending `calibrate cancel`, the design `ApplyReply` had before this fix | `SessionEndsWithFlow`, 22 states |
+| `GuardRefusalStaysOpen = FALSE`: a refused `calibrate next` reaches `"failed"` instead of staying `"prompting"` on the same step, the design `ApplyStatus` had before #177's fix | `SessionEndsWithFlow`, 21 states |
 | `GuardShowResult = FALSE`: a finished flow never sets its own result text | `ResultShownOnDone` |
 | `GuardMoveWindow = FALSE`: a step never moves the window onto the screen it names | `WindowMovedWhilePrompting` |
 | No fairness on `CancelSucceeds`/`CancelFails` | `ClosingCompletes`: a flow stuck in `"closing"` forever, stuttering once its own cancel request is on the wire |
@@ -1674,15 +1674,20 @@ The same synchronicity is why `"opening"` is never itself observed through
 default) runs to a `"prompting"` or `"failed"` conclusion inside the one
 call `tools/menu/main.mm`'s and `main_linux.cc`'s button handlers already
 make synchronously, so what the model sees as several steps is, in the
-code, one. `NextRefused` is likewise one call: a refused `calibrate next`
-sends `calibrate cancel` and reads its reply before `Next` returns, rather
-than the window ever showing an intermediate state, which is what lets
-`GuardCancelOnRefusal`'s fix set `sessionLive' = FALSE` unconditionally
-within the one action, matching the code exactly; `NextRefused` also
-covers #137's weak-step refusal (`specs/Calibration.tla`'s `Refuse`), since
-`ParseCalibrationReply` (`src/calibration_flow.cc`) reads a weak-step
-refusal exactly the way it reads any other -- a bare `{"error":...}` --
-needing no action of its own. `NextFinishes` is also where `resultShown'`
+code, one. `NextRefused` is likewise one call, and one of #177's own fix:
+`src/calibration.cc`'s `Next` only ever resets the step it refused
+(`ResetStep`, or for a failed save, leaves it exactly captured), never the
+session, so the daemon's reply comes back as a normal, still-running
+`Status` with `refusal` set (`protocol::CalibrationStatusJson`'s own
+`"refused"` field, #177), not the `{"error":...}` the design before this
+fix could not tell apart from the session itself having ended; `ApplyStatus`
+reads it into `View::hint` and stays `"prompting"`, so `GuardRefusalStaysOpen`'s
+fix leaves `sessionLive` and `state` alone within the one action, matching
+the code exactly -- there is no cancel left for this call to send.
+`NextRefused` also covers #137's weak-step refusal (`specs/Calibration.tla`'s
+`Refuse`), since `ParseCalibrationReply` (`src/calibration_flow.cc`) reads a
+weak-step refusal exactly the way it reads any other refusal, needing no
+action of its own. `NextFinishes` is also where `resultShown'`
 is set (`ApplyStatus` reading `Status::screens` into `View::screens`, the
 result both #135 and #137 end on); `OpenSucceeds`, `RetrySucceeds` and
 `NextContinues` are also where `windowOnScreen'` is set, standing for

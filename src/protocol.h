@@ -103,10 +103,14 @@ std::string ErrorJson(std::string_view message);
 
 // {"ok":true,"calibration":{"state":"running","index":i,"total":n,
 // "step":"resting"}}, "step":"gains" for #137's fixate-and-turn step, or
-// "step":"screen","screen":s,"point":".." for a screen's point;
-// {"ok":true,"calibration":{"state":"done","screens":n}} once the last
-// step is finished and saved, naming the screens just calibrated (#135,
-// #137).
+// "step":"screen","screen":s,"point":".." for a screen's point; any of
+// these three also carries "refused":".." when the Next() just answered
+// was refused (#177: no pose captured yet, #137's weak-step checks, or a
+// failed save) -- the step named is the same one being retried, not a
+// new one, and the session is still running, unlike an {"error":..}
+// reply, which ends it. {"ok":true,"calibration":{"state":"done",
+// "screens":n}} once the last step is finished and saved, naming the
+// screens just calibrated (#135, #137).
 std::string CalibrationStatusJson(const CalibrationController::Status& status);
 
 // {"ok":true,"cameras":[{"id":"..","name":"..","built_in":true}]} (item 10

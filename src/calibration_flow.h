@@ -41,6 +41,13 @@ class CalibrationFlow {
     CalibrationPoint point = CalibrationPoint::kCentre;
     int index = 0;
     int total = 0;
+    // Non-empty only right after Next() was refused for this same step
+    // (#177): the daemon's own hint why, for the window to show in place
+    // of the step's own prompt, with Next still there to retry. Empty
+    // otherwise.
+    // = {} looks redundant but is not: see Status::refusal's own comment
+    // (src/calibration.h) for why clang-tidy needs it here too.
+    std::string hint = {};  // NOLINT(readability-redundant-member-init)
     // Set only while state == kDone (#135, #137): the result line the
     // wizard ends on, "Calibrated N screens."
     int screens = 0;
@@ -76,8 +83,12 @@ class CalibrationFlow {
   // not up yet, up to kMaxCameraWaits times, rather than failing outright
   // on a cold start (#128). Called once, right after construction.
   void Start(int screens);
-  // CalibrationMenu.tla's NextContinues/NextFinishes/NextFails: sends
-  // "calibrate next". A no-op unless CurrentView().state == kPrompting.
+  // CalibrationMenu.tla's NextContinues/NextFinishes/NextFails/
+  // NextRefused: sends "calibrate next". A no-op unless
+  // CurrentView().state == kPrompting. A step the daemon refuses (#177)
+  // stays in kPrompting, on the same step, with CurrentView().hint set to
+  // the daemon's reason, rather than ending the wizard the way any other
+  // failure does.
   void Next();
   // CalibrationMenu.tla's UserCancel, followed by CancelSucceeds or
   // CancelFails: sends "calibrate cancel" and waits for its reply. A no-op
@@ -98,8 +109,10 @@ class CalibrationFlow {
   void Fail(std::string error);
   // Reads the daemon's next reply and parses it the way
   // ParseCalibrationReply (calibration_flow.cc) does; nullopt, with
-  // `error`, on a hang-up or a refusal, for the caller to decide what to
-  // do about.
+  // `error`, on a hang-up or the daemon reporting its session already
+  // over. A step the daemon refuses (#177) comes back as a normal Status
+  // instead, with Status::refusal set, not nullopt: the session is still
+  // running.
   std::optional<CalibrationController::Status> ReadStatus(std::string& error);
   // Applies a status ReadStatus already found: CalibrationMenu.tla's
   // NextContinues/NextFinishes, or a defensive Fail for a status this

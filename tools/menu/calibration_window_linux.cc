@@ -111,6 +111,19 @@ QString ResultText(int screens) {
       .arg(screens == 1 ? QStringLiteral("") : QStringLiteral("s"));
 }
 
+// The daemon's own hint on a refused step (#177), sentence-cased, with the
+// retry it still invites: "Look further toward that corner, away from the
+// centre. Click Next to try again." Shown in place of StepPrompt while
+// view.hint is set, so the person sees why the step did not advance
+// without the wizard ending over it.
+QString RefusalText(const std::string& hint) {
+  QString reason = QString::fromStdString(hint);
+  if (!reason.isEmpty()) {
+    reason = reason.left(1).toUpper() + reason.mid(1);
+  }
+  return QStringLiteral("%1. Click Next to try again.").arg(reason);
+}
+
 // A QLocalSocket behind src/calibrate_cli.h's CalibrateClientIo (#118),
 // the tray's own equivalent of tools/posix_calibrate_client_io.h: plain
 // Qt glue, untested by this repo's own convention, the same as
@@ -263,7 +276,8 @@ void CalibrationWindow::Render() {
   switch (view.state) {
     case facepalm::CalibrationFlow::State::kPrompting:
       MoveToScreenForStep(view);
-      label_->setText(StepPrompt(view));
+      label_->setText(view.hint.empty() ? StepPrompt(view)
+                                        : RefusalText(view.hint));
       primary_->setText(QStringLiteral("Next"));
       primary_->setVisible(true);
       secondary_->setText(QStringLiteral("Cancel"));

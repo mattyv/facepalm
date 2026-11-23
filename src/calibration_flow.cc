@@ -67,8 +67,11 @@ std::optional<int> IntField(std::string_view json, std::string_view key) {
 // `{"ok":true}` (hello's or a cancel's own reply, which never carries a
 // "calibration" object) and `{"calibration":{"state":"idle"}}` both parse
 // as Status{running=false, done=false}, exactly as the daemon's own
-// "nothing more to say" replies. nullopt, with `error`, for `{"error":...}`
-// or any reply this cannot make sense of.
+// "nothing more to say" replies. A refused Next() (#177) parses as a
+// normal, still-running Status with `refusal` set, naming the same step
+// being retried -- never this function's own nullopt, which is only for
+// `{"error":...}` (the session itself is over) or any reply this cannot
+// make sense of, with `error` saying why.
 std::optional<CalibrationController::Status> ParseCalibrationReply(
     std::string_view line, std::string& error) {
   if (line.starts_with(kErrorPrefix)) {
@@ -89,6 +92,9 @@ std::optional<CalibrationController::Status> ParseCalibrationReply(
   status.running = true;
   status.index = IntField(line, "index").value_or(0);
   status.total = IntField(line, "total").value_or(0);
+  // #177: present only when the Next() this line answers was refused;
+  // absent, and so left empty here, for a step shown for the first time.
+  status.refusal = StringField(line, "refused").value_or(std::string());
   const std::string step = StringField(line, "step").value_or(std::string());
   if (step == "resting") {
     status.resting_step = true;
@@ -148,6 +154,7 @@ void CalibrationFlow::ApplyStatus(const CalibrationController::Status& status) {
                .point = status.point,
                .index = status.index,
                .total = status.total,
+               .hint = status.refusal,
                .error = {}};
 }
 
@@ -200,29 +207,15 @@ void CalibrationFlow::Next() {
     return;
   }
   io_.WriteLine("calibrate next");
-  const std::optional<std::string> reply = io_.ReadLine();
-  if (!reply) {
-    // The connection is already gone: nothing is left to send a cancel
-    // to, unlike the refusal below.
-    Fail("connection closed before a reply arrived");
-    return;
-  }
+  // specs/CalibrationMenu.tla's NextContinues/NextFinishes/NextRefused all
+  // read as a normal Status here (#177: a refused step comes back with
+  // Status::refusal set, still running, rather than as an error), so only
+  // NextFails -- the daemon's own session already over by the time this
+  // reply arrived, with nothing left to cancel -- reaches ReadStatus's
+  // nullopt.
   std::string error;
-  const std::optional<CalibrationController::Status> status =
-      ParseCalibrationReply(*reply, error);
+  const std::optional<CalibrationController::Status> status = ReadStatus(error);
   if (!status) {
-    // specs/CalibrationMenu.tla's NextRefused: the daemon's own session
-    // may still be running (no pose captured yet, or its save failed,
-    // src/calibration.cc's Next) with nobody left to finish it once this
-    // flow reports the failure below and stops calling Next; telling it
-    // to cancel first, in this same call, is what keeps
-    // SessionEndsWithFlow (state \in {failed, done} => ~sessionLive) true
-    // regardless of what was refused for -- the attempt costs nothing
-    // when the daemon already has no session of its own to cancel
-    // (#128). Its own reply is not worth failing over a second time: the
-    // refusal already decided what the person sees.
-    io_.WriteLine("calibrate cancel");
-    io_.ReadLine();
     Fail(error);
     return;
   }

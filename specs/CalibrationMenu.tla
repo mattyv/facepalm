@@ -37,7 +37,7 @@
 \* names (#135): a per-step, not a per-flow, fact, since each step can
 \* name a different screen.
 EXTENDS Naturals
-CONSTANTS GuardFailOnDisconnect, GuardCancelOnClose, GuardCancelOnRefusal,
+CONSTANTS GuardFailOnDisconnect, GuardCancelOnClose, GuardRefusalStaysOpen,
           GuardShowResult, GuardMoveWindow, MaxCameraWaits
 VARIABLES state, sessionLive, cancelSent, danglingSession, cameraUp,
           cameraWaits, resultShown, windowOnScreen, unshownResult,
@@ -173,20 +173,23 @@ NextFails ==
 \* still running (src/calibration.cc's Next: no sample captured yet for
 \* this step, its save failed, or #137's weak-step check, specs/
 \* Calibration.tla's Refuse) -- unlike NextFails, nothing outside this
-\* flow has ended the session, so somebody has to tell the daemon to give
-\* it up (#128). Ordinarily (GuardCancelOnRefusal) CalibrationFlow::Next
-\* sends "calibrate cancel" before reporting the failure, in the same call
-\* (its ReadLine is synchronous, the same reasoning as ClosingCompletes
-\* below), so sessionLive ends FALSE either way the cancel itself turns
-\* out; with the guard disabled it reports the failure and leaves the
-\* session exactly as it was, which SessionEndsWithFlow below catches.
+\* flow has ended the session: the daemon only reset the one step
+\* (ResetStep, or for a failed save, left it exactly captured), waiting on
+\* a fresh attempt (#177). Ordinarily (GuardRefusalStaysOpen)
+\* CalibrationFlow::Next reports the daemon's own reply as a normal
+\* Status, carrying its hint, so the flow stays "prompting" on the same
+\* step with Next still there to retry, never touching sessionLive -- the
+\* daemon's session was never given up. With the guard disabled it reaches
+\* "failed" instead, ending the whole wizard over a step the daemon never
+\* gave up on, which SessionEndsWithFlow below catches: sessionLive is
+\* still TRUE (the daemon kept the session running) while state would be
+\* "failed".
 NextRefused ==
     /\ state = "prompting" /\ sessionLive
-    /\ state' = "failed"
-    /\ sessionLive' = IF GuardCancelOnRefusal THEN FALSE ELSE sessionLive
-    /\ cancelSent' = (cancelSent \/ GuardCancelOnRefusal)
-    /\ UNCHANGED <<danglingSession, cameraUp, cameraWaits, resultShown,
-                  windowOnScreen, unshownResult, unmovedWindow>>
+    /\ state' = IF GuardRefusalStaysOpen THEN "prompting" ELSE "failed"
+    /\ UNCHANGED <<sessionLive, cancelSent, danglingSession, cameraUp,
+                  cameraWaits, resultShown, windowOnScreen, unshownResult,
+                  unmovedWindow>>
 
 \* Cancel is pressed: CalibrationFlow::Cancel always sends "calibrate
 \* cancel" and waits for its reply before the window goes away.
