@@ -11,18 +11,21 @@
 #include <utility>
 #include <vector>
 
+#include "src/eye_signs.h"
 #include "src/feelings.h"
 #include "src/tuner.h"
 
 namespace facepalm {
 
 ReactionFeed::ReactionFeed(int capacity, Tuner& tuner, Clock clock,
-                           NowMs now_ms, GazeWindowFn gaze_window)
+                           NowMs now_ms, GazeWindowFn gaze_window,
+                           EyeSignsWindowFn eye_signs_window)
     : capacity_(capacity),
       tuner_(tuner),
       clock_(std::move(clock)),
       now_ms_(std::move(now_ms)),
-      gaze_window_(std::move(gaze_window)) {}
+      gaze_window_(std::move(gaze_window)),
+      eye_signs_window_(std::move(eye_signs_window)) {}
 
 ReactionFeed::Client* ReactionFeed::Ready(const std::string& name) {
   const auto found = clients_.find(name);
@@ -180,9 +183,18 @@ std::optional<ReactionFeed::Delivery> ReactionFeed::Beat(
   // (FeelingFeedback!Feel) both tune on the same gaze the reply reports.
   const GazeWindow gaze_window =
       gaze_window_ ? gaze_window_(started_ms, ended_ms, content) : GazeWindow{};
+  // The same window's blink rate, long blink and widened eyes (#145),
+  // folded in the same way (#165): a feature the personal read alone
+  // weighs, never Rule's own input (gaze_window.gaze's own thinking
+  // guard below is unaffected).
+  const EyeSigns eye_signs =
+      eye_signs_window_ ? eye_signs_window_(started_ms, ended_ms) : EyeSigns{};
   std::optional<Evidence> evidence = shown.evidence;
   if (evidence) {
     evidence->gaze = gaze_window.gaze;
+    evidence->blink_rate = eye_signs.blink_rate;
+    evidence->long_blink = eye_signs.long_blink;
+    evidence->widened_eyes = eye_signs.widened_eyes;
   }
   entry->given[id] = {.given_at = clock_(), .evidence = evidence};
   lock.unlock();

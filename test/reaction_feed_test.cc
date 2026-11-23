@@ -10,6 +10,7 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/eye_signs.h"
 #include "src/feelings.h"
 #include "src/screen_context.h"
 #include "src/tuner.h"
@@ -94,13 +95,23 @@ class ReactionFeedTest : public ::testing::Test {
   // beat then answers GazeWindow{}, Gaze::kUnknown with no content, the
   // same as a daemon with screen context disabled (#142, #144).
   ReactionFeed::GazeWindowFn gaze_window_;
-  ReactionFeed feed_{/*capacity=*/2, tuner_, [this] { return now_; },
-                     [this] { return now_ms_; },
-                     [this](std::int64_t start, std::int64_t end,
-                            const std::optional<ContentRect>& content) {
-                       return gaze_window_ ? gaze_window_(start, end, content)
-                                           : GazeWindow{};
-                     }};
+  // Unset (the default for every test but the eye-signs ones below):
+  // every beat then answers EyeSigns{}, every field unknown, the same as
+  // a daemon with screen context disabled (#145/#165, the same reporter
+  // buffers gaze and eye signs alike).
+  ReactionFeed::EyeSignsWindowFn eye_signs_window_;
+  ReactionFeed feed_{
+      /*capacity=*/2,
+      tuner_,
+      [this] { return now_; },
+      [this] { return now_ms_; },
+      [this](std::int64_t start, std::int64_t end,
+             const std::optional<ContentRect>& content) {
+        return gaze_window_ ? gaze_window_(start, end, content) : GazeWindow{};
+      },
+      [this](std::int64_t start, std::int64_t end) {
+        return eye_signs_window_ ? eye_signs_window_(start, end) : EyeSigns{};
+      }};
 };
 
 using NoRepeatTest = ReactionFeedTest;
@@ -822,6 +833,119 @@ TEST_F(GazeContextTest, TheEvidenceLearnedCarriesTheWindowsGaze) {
   EXPECT_CALL(tuner_, Learn(Evidence{.sign = "brows_down",
                                      .beat = BeatKind::kQuestion,
                                      .gaze = Gaze::kThisScreen},
+                            Feeling::kAnnoyance))
+      .WillOnce(Return(true));
+
+  EXPECT_TRUE(feed_.Feel("agent", id, Feeling::kAnnoyance));
+}
+
+// ReactionFeed's own default for a caller that gives it no EyeSignsWindowFn
+// at all, the same way ReactionFeedGazeDefaultTest proves it for gaze: a
+// daemon with screen context disabled, following main.cc's own ternary.
+// Unlike gaze and content, blink rate, a long blink and widened eyes carry
+// no field of their own on Interpretation (#145 is the personal read's
+// feature alone, never the live reply's), so this is read through the
+// evidence tuner_.Read is given instead.
+TEST(ReactionFeedEyeSignsDefaultTest,
+     NoEyeSignsWindowFnAnswersEveryFieldUnknown) {
+  NiceMock<MockTuner> tuner;
+  ON_CALL(tuner, Read).WillByDefault(ReturnArg<1>());
+  ReactionFeed feed(/*capacity=*/2, tuner);
+  ASSERT_TRUE(feed.Connect("agent"));
+  EXPECT_CALL(tuner,
+              Read(Evidence{.sign = "brows_down", .beat = BeatKind::kQuestion},
+                   Feeling::kConfused));
+  auto beat = std::async(std::launch::async, [&feed] {
+    return feed.Beat("agent", BeatKind::kQuestion, kBeat, std::nullopt);
+  });
+  while (!feed.Waiting("agent")) {
+    std::this_thread::yield();
+  }
+  feed.React("Expression: brows_down", kFrownText);
+
+  Answered(beat);
+}
+
+// The eye-signs tests below stand for #145's and #165's own context the
+// personal read alone tunes on: blink rate, a long blink and widened
+// eyes over the beat's own window. Never Rule's own input
+// (specs/FeelingBeat.tla's ContextNeverChangesFeeling untouched), so,
+// unlike gaze, none of this ever appears on Interpretation.
+using EyeSignsContextTest = BeatTest;
+
+// The test fixture's own feed_ always gives ReactionFeed a forwarding
+// lambda (so eye_signs_window_ below can be set per test); this is about
+// that lambda's own fallback when eye_signs_window_ is left unset, not
+// about ReactionFeed's own default (ReactionFeedEyeSignsDefaultTest
+// above).
+TEST_F(EyeSignsContextTest, NoEyeSignsSourceReadsEveryFieldUnknown) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  EXPECT_CALL(tuner_,
+              Read(Evidence{.sign = "brows_down", .beat = BeatKind::kQuestion},
+                   Feeling::kConfused));
+  auto beat = Mark();
+  feed_.React("Expression: brows_down", kFrownText);
+
+  Answered(beat);
+}
+
+TEST_F(EyeSignsContextTest, TheEyeSignsWindowReadsTheBeatsOwnWindow) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  now_ms_ = 5000;
+  std::int64_t seen_start = -1;
+  std::int64_t seen_end = -1;
+  eye_signs_window_ = [&](std::int64_t start, std::int64_t end) {
+    seen_start = start;
+    seen_end = end;
+    return EyeSigns{};
+  };
+
+  feed_.Beat("agent", BeatKind::kQuestion, kShort, std::nullopt);
+
+  EXPECT_THAT(seen_start, Eq(5000));
+  EXPECT_THAT(seen_end, Eq(5000));
+}
+
+// #145/#165: the beat's own blink rate, long blink and widened eyes are
+// folded into the evidence before it is read, so the tuner's own Read
+// sees the same ones the window gave, not just sign, beat and gaze.
+TEST_F(EyeSignsContextTest, TheEvidenceReadCarriesTheWindowsEyeSigns) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  eye_signs_window_ = [](std::int64_t /*start*/, std::int64_t /*end*/) {
+    return EyeSigns{.blink_rate = BlinkRate::kElevated,
+                    .long_blink = LongBlink::kYes,
+                    .widened_eyes = WidenedEyes::kYes};
+  };
+  EXPECT_CALL(tuner_, Read(Evidence{.sign = "brows_down",
+                                    .beat = BeatKind::kQuestion,
+                                    .blink_rate = BlinkRate::kElevated,
+                                    .long_blink = LongBlink::kYes,
+                                    .widened_eyes = WidenedEyes::kYes},
+                           Feeling::kConfused))
+      .WillOnce(Return(Feeling::kAnnoyance));
+  auto beat = Mark();
+  feed_.React("Expression: brows_down", kFrownText);
+
+  EXPECT_THAT(FeelingOf(Got(Answered(beat))), Eq(Feeling::kAnnoyance));
+}
+
+// #145/#165: the same three fields go into the evidence a later Feel
+// teaches, not just the one the beat was read with.
+TEST_F(EyeSignsContextTest, TheEvidenceLearnedCarriesTheWindowsEyeSigns) {
+  ASSERT_TRUE(feed_.Connect("agent"));
+  eye_signs_window_ = [](std::int64_t /*start*/, std::int64_t /*end*/) {
+    return EyeSigns{.blink_rate = BlinkRate::kElevated,
+                    .long_blink = LongBlink::kYes,
+                    .widened_eyes = WidenedEyes::kYes};
+  };
+  auto beat = Mark();
+  feed_.React("Expression: brows_down", kFrownText);
+  const std::int64_t id = InterpretationOf(Answered(beat));
+  EXPECT_CALL(tuner_, Learn(Evidence{.sign = "brows_down",
+                                     .beat = BeatKind::kQuestion,
+                                     .blink_rate = BlinkRate::kElevated,
+                                     .long_blink = LongBlink::kYes,
+                                     .widened_eyes = WidenedEyes::kYes},
                             Feeling::kAnnoyance))
       .WillOnce(Return(true));
 

@@ -10,6 +10,7 @@
 #include "src/camera_controller.h"
 #include "src/expressions.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/face_model.h"
 #include "src/face_reader.h"
 #include "src/head_pose.h"
@@ -31,16 +32,20 @@ namespace facepalm {
 // itself a spec-worthy state machine.
 class ScreenContextReader : public FaceReader {
  public:
-  // Told the same four readings OnFace/OnNoFace just updated, once a
-  // frame regardless of whether it carries a reaction (#142): the
-  // daemon's own hook into ScreenContextReporter::Sample, so a beat's
-  // window holds every frame's gaze, not only the ones a reaction
-  // happened to land on. nullptr (the default) tells no one.
+  // Told the same four readings OnFace/OnNoFace just updated, plus one
+  // frame's own eye sign (src/eye_signs.h's SampleFrom, #145/#165) --
+  // nullopt on OnNoFace, since there is no face to read eyeBlink or
+  // eyeWide from -- once a frame regardless of whether it carries a
+  // reaction (#142): the daemon's own hook into
+  // ScreenContextReporter::Sample, so a beat's window holds every
+  // frame's gaze and eye signs, not only the ones a reaction happened to
+  // land on. nullptr (the default) tells no one.
   using OnSample =
       std::function<void(const std::optional<HeadRotation>& pose,
                          const std::optional<HeadRotation>& resting,
                          const std::optional<EyeSignal>& eye,
-                         const std::optional<EyeSignal>& eye_resting)>;
+                         const std::optional<EyeSignal>& eye_resting,
+                         const std::optional<EyeSignSample>& eye_sign)>;
 
   ScreenContextReader(ExpressionTracker::Settings tracker,
                       EyeGazeTracker::Settings eye_tracker,
@@ -72,6 +77,10 @@ class ScreenContextReader : public FaceReader {
   OnSample on_sample_;
   ExpressionTracker tracker_;
   EyeGazeTracker eye_tracker_;
+  // eye_tracker's own blink_threshold, kept apart to build each frame's
+  // EyeSignSample (#145/#165): SampleFrom reads a frame's own blink flag
+  // at this same threshold, not eye_tracker_'s median-filtered one.
+  double blink_threshold_;
   std::optional<HeadRotation> pose_;
   std::optional<HeadRotation> resting_;
   std::optional<EyeSignal> eye_;

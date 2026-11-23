@@ -38,25 +38,27 @@ teardown() {
   rm -rf "${WORK}"
 }
 
-@test "records all nine fixtures, each with its own probe log and cues" {
+@test "records all ten fixtures, each with its own probe log and cues" {
   run_script
   [[ "${status}" -eq 0 ]] || false
   [[ "${output}" == *'=== head_turn_eyes_centered ==='* ]] || false
   [[ "${output}" == *'Look at the top-left corner without moving your head.'* ]] \
     || false
+  [[ "${output}" == *'=== widened_eyes ==='* ]] || false
   [[ "${output}" == *'All fixtures recorded in'* ]] || false
   local fixtures="${WORK}/test/fixtures/eyes" probes probe_count calls
   [[ -f "${fixtures}/head_turn_eyes_centered.probe" ]] || false
   [[ -f "${fixtures}/long_blinks.probe" ]] || false
+  [[ -f "${fixtures}/widened_eyes.probe" ]] || false
   probes="$(find "${fixtures}" -name '*.probe')"
   probe_count="$(wc -l <<<"${probes}")"
   calls="$(wc -l <"${CALLS}")"
-  [[ "${probe_count}" -eq 9 ]] || false
+  [[ "${probe_count}" -eq 10 ]] || false
   [[ "$(<"${fixtures}/blinks.probe")" == *'eyes 10 0.1'* ]] || false
   [[ "$(<"${fixtures}/blinks.probe")" != *'blendshapes'* ]] || false
   [[ "$(<"${fixtures}/blinks.probe")" != *'gesture_raw'* ]] || false
   [[ "$(<"${fixtures}/blinks.probe")" != *'gesture_probs'* ]] || false
-  [[ "${calls}" -eq 9 ]] || false
+  [[ "${calls}" -eq 10 ]] || false
 }
 
 @test "passes the configured seconds, fps and model to camera_probe" {
