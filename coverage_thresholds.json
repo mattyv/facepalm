@@ -480,6 +480,13 @@
       "functions": 100
     }
   },
+  "src/eye_signs.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/window_activation.cc": {
     "unit": {
       "lines": 100,

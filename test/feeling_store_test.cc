@@ -48,7 +48,8 @@ constexpr uid_t kUser = 42;
 // A frown at a question.
 Evidence Frown() { return {.sign = "brows_down", .beat = BeatKind::kQuestion}; }
 constexpr std::string_view kTuned =
-    "facepalm feelings 2\nbrows_down question unknown annoyance 3\n";
+    "facepalm feelings 3\n"
+    "brows_down question unknown unknown unknown unknown annoyance 3\n";
 
 class MockFeelingStoreIo : public FeelingStoreIo {
  public:
@@ -292,13 +293,14 @@ TEST(FeelingStoreOpenTest, RefusesADataFileTooLargeShortOrNotFacepalms) {
   }
 }
 
-// #143 bumped the format from 1 to 2 for the added gaze word, but a file a
-// pre-#143 daemon saved is read, not refused: refusing it would throw away
-// the person's own picks for a file they never asked to change, unlike a
-// calibration profile, which the person simply redoes (#137's own version
-// bump). Its picks read with gaze unknown, and the next save writes the
-// file back as v2.
-TEST(FeelingStoreOpenTest, ReadsAV1FileAndSavesItBackAsV2) {
+// #143 bumped the format from 1 to 2 for the added gaze word, and #145
+// from 2 to 3 for blink rate, a long blink and widened eyes, but a file a
+// pre-#143 or pre-#145 daemon saved is read, not refused: refusing it
+// would throw away the person's own picks for a file they never asked to
+// change, unlike a calibration profile, which the person simply redoes
+// (#137's own version bump). A v1 file's picks read with every context
+// field unknown, and the next save writes the file back as v3.
+TEST(FeelingStoreOpenTest, ReadsAV1FileAndSavesItBackAsV3) {
   const auto io =
       GoodIo("facepalm feelings 1\nbrows_down question annoyance 3\n");
   const auto store = Opened(io);
@@ -314,8 +316,39 @@ TEST(FeelingStoreOpenTest, ReadsAV1FileAndSavesItBackAsV2) {
 
   EXPECT_TRUE(store->Learn(Frown(), Feeling::kAnnoyance));
 
-  EXPECT_THAT(written, Eq("facepalm feelings 2\n"
-                          "brows_down question unknown annoyance 4\n"));
+  EXPECT_THAT(written, Eq("facepalm feelings 3\n"
+                          "brows_down question unknown unknown unknown unknown "
+                          "annoyance 4\n"));
+}
+
+// A v2 file's picks keep their own gaze, and read the three fields #145
+// added as unknown; the next save writes the file back as v3 too.
+TEST(FeelingStoreOpenTest, ReadsAV2FileAndSavesItBackAsV3) {
+  const auto io = GoodIo(
+      "facepalm feelings 2\nbrows_down question on_content annoyance 3\n");
+  const auto store = Opened(io);
+  ASSERT_TRUE(store);
+  EXPECT_THAT(store->Read({.sign = "brows_down",
+                           .beat = BeatKind::kQuestion,
+                           .gaze = Gaze::kThisScreen},
+                          Feeling::kConfused),
+              Eq(Feeling::kAnnoyance));
+  std::string written;
+  EXPECT_CALL(*io, Write(kTempFd, _, _))
+      .WillOnce([&](int, const void* data, std::size_t size) {
+        written.assign(static_cast<const char*>(data), size);
+        return static_cast<ssize_t>(size);
+      });
+
+  EXPECT_TRUE(store->Learn({.sign = "brows_down",
+                            .beat = BeatKind::kQuestion,
+                            .gaze = Gaze::kThisScreen},
+                           Feeling::kAnnoyance));
+
+  EXPECT_THAT(written,
+              Eq("facepalm feelings 3\n"
+                 "brows_down question on_content unknown unknown unknown "
+                 "annoyance 4\n"));
 }
 
 // FeelingFeedback!Begin to ReplyOk: a pick is saved by renaming a synced
@@ -347,8 +380,9 @@ TEST(AckedKeptTest, APickIsAcknowledgedOnlyOnceItsSaveIsDurable) {
   }
 
   EXPECT_TRUE(store->Learn(Frown(), Feeling::kAnnoyance));
-  EXPECT_THAT(written, Eq("facepalm feelings 2\n"
-                          "brows_down question unknown annoyance 1\n"));
+  EXPECT_THAT(written, Eq("facepalm feelings 3\n"
+                          "brows_down question unknown unknown unknown unknown "
+                          "annoyance 1\n"));
 }
 
 // The tuning follows the saved picks: the third pick changes the read.
@@ -387,8 +421,8 @@ void FailSave(NiceMock<MockFeelingStoreIo>& io, int step) {
 TEST(ReadsTheFileTest, APickWhoseSaveFailsIsNotRead) {
   for (int step = 0; step < 4; ++step) {
     const auto io = GoodIo(
-        "facepalm feelings 2\n"
-        "brows_down question unknown annoyance 2\n");
+        "facepalm feelings 3\n"
+        "brows_down question unknown unknown unknown unknown annoyance 2\n");
     const auto store = Opened(io);
     ASSERT_TRUE(store);
     FailSave(*io, step);
@@ -405,8 +439,8 @@ TEST(ReadsTheFileTest, APickWhoseSaveFailsIsNotRead) {
 TEST(ReadsTheFileTest, APickRenamedInButNotDurableIsReadButNotAcknowledged) {
   for (const bool opens : {false, true}) {
     const auto io = GoodIo(
-        "facepalm feelings 2\n"
-        "brows_down question unknown annoyance 2\n");
+        "facepalm feelings 3\n"
+        "brows_down question unknown unknown unknown unknown annoyance 2\n");
     const auto store = Opened(io);
     ASSERT_TRUE(store);
     if (opens) {
@@ -435,7 +469,7 @@ TEST(ResetForgetsTest, ForgettingSavesNoPicksAndRestoresTheGenericRead) {
       });
 
   EXPECT_TRUE(store->Forget());
-  EXPECT_THAT(written, Eq("facepalm feelings 2\n"));
+  EXPECT_THAT(written, Eq("facepalm feelings 3\n"));
   EXPECT_THAT(store->Read(Frown(), Feeling::kConfused), Eq(Feeling::kConfused));
 }
 
@@ -525,7 +559,7 @@ TEST_F(FeelingStoreFileTest, KeepsPicksInAPrivateFileAcrossRuns) {
   EXPECT_THAT(again->Read(Frown(), Feeling::kConfused),
               Eq(Feeling::kAnnoyance));
   EXPECT_TRUE(again->Forget());
-  EXPECT_THAT(Contents(), Eq("facepalm feelings 2\n"));
+  EXPECT_THAT(Contents(), Eq("facepalm feelings 3\n"));
 }
 
 // FeelingFeedback's GuardOneWriter, within the daemon: picks from several
@@ -546,9 +580,11 @@ TEST_F(FeelingStoreFileTest, PicksMadeAtOnceAreAllKept) {
   first.join();
   second.join();
 
-  EXPECT_THAT(Contents(), Eq("facepalm feelings 2\n"
-                             "brows_down question unknown annoyance " +
-                             std::to_string(2 * kPicks) + "\n"));
+  EXPECT_THAT(Contents(),
+              Eq("facepalm feelings 3\n"
+                 "brows_down question unknown unknown unknown unknown "
+                 "annoyance " +
+                 std::to_string(2 * kPicks) + "\n"));
 }
 
 TEST_F(FeelingStoreFileTest, ASecondStoreCannotOpenTheSameFile) {

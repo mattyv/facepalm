@@ -25,6 +25,8 @@ constexpr float kMostScreenContextOtherScreenDegrees = 180;
 constexpr float kMostEyeGazeGain = 200;
 constexpr int kMostEyeGazeMs = 10000;
 constexpr float kMostDegrees = 180;
+constexpr float kMostEyeSignsBlinksPerMinute = 120;
+constexpr int kMostEyeSignsMs = 10000;
 
 // `text` without spaces or tabs at either end.
 std::string_view Trim(std::string_view text) {
@@ -358,6 +360,73 @@ std::optional<std::string> SetDegreesSetting(const Setting& setting,
   return std::nullopt;
 }
 
+// Sets eye_signs.elevated_blinks_per_minute (#145) from `value`, or
+// returns why it cannot.
+std::optional<std::string> SetEyeSignsElevatedBlinksPerMinute(
+    std::string_view value, Config& config) {
+  const std::optional<float> rate = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!rate || std::isnan(*rate) || *rate < 0 ||
+      *rate > kMostEyeSignsBlinksPerMinute) {
+    return "expected a number from 0 to 120";
+  }
+  config.eye_signs_elevated_blinks_per_minute = *rate;
+  return std::nullopt;
+}
+
+// Sets eye_signs.long_blink_ms, eye_signs.widened_eyes_hold_ms or
+// eye_signs.min_window_ms (#145) from `value`, or returns why it cannot.
+// `setting.name` is one of those three, as `Set` has already checked.
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
+std::optional<std::string> SetEyeSignsMs(const Setting& setting,
+                                         Config& config) {
+  const std::optional<int> milliseconds = Number<int>(setting.value);
+  if (!milliseconds || *milliseconds < 0 || *milliseconds > kMostEyeSignsMs) {
+    return "expected a whole number from 0 to 10000";
+  }
+  if (setting.name == "eye_signs.long_blink_ms") {
+    config.eye_signs_long_blink_ms = *milliseconds;
+  } else if (setting.name == "eye_signs.widened_eyes_hold_ms") {
+    config.eye_signs_widened_eyes_hold_ms = *milliseconds;
+  } else {
+    config.eye_signs_min_window_ms = *milliseconds;
+  }
+  return std::nullopt;
+}
+
+// Sets eye_signs.widened_eyes_threshold (#145) from `value`, or returns
+// why it cannot.
+std::optional<std::string> SetEyeSignsWidenedEyesThreshold(
+    std::string_view value, Config& config) {
+  const std::optional<float> threshold = Number<float>(value);
+  // isnan too: from_chars reads "nan", and NaN passes the comparisons.
+  if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
+      *threshold > 1) {
+    return "expected a number from 0 to 1";
+  }
+  config.eye_signs_widened_eyes_threshold = *threshold;
+  return std::nullopt;
+}
+
+// Sets one of the three eye_signs.* settings (#145) from `setting`, or
+// returns why it cannot. Kept apart from Set so that function's own
+// cognitive complexity stays under the project's limit.
+std::optional<std::string> SetEyeSigns(const Setting& setting, Config& config) {
+  const std::string_view name = setting.name;
+  if (name == "eye_signs.elevated_blinks_per_minute") {
+    return SetEyeSignsElevatedBlinksPerMinute(setting.value, config);
+  }
+  if (name == "eye_signs.long_blink_ms" ||
+      name == "eye_signs.widened_eyes_hold_ms" ||
+      name == "eye_signs.min_window_ms") {
+    return SetEyeSignsMs(setting, config);
+  }
+  if (name == "eye_signs.widened_eyes_threshold") {
+    return SetEyeSignsWidenedEyesThreshold(setting.value, config);
+  }
+  return "unknown setting " + std::string(name);
+}
+
 // Sets the setting in `config`, or returns why it cannot.
 std::optional<std::string> Set(const Setting& setting, Config& config) {
   const std::string_view name = setting.name;
@@ -429,6 +498,9 @@ std::optional<std::string> Set(const Setting& setting, Config& config) {
       name == "calibration.min_spread_degrees" ||
       name == "looking_away.other_screen_margin_degrees") {
     return SetDegreesSetting(setting, config);
+  }
+  if (name.starts_with("eye_signs.")) {
+    return SetEyeSigns(setting, config);
   }
   return "unknown setting " + std::string(name);
 }

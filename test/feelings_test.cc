@@ -115,15 +115,20 @@ TEST(EvidenceOfTest, AWindowWithNoReactionIsEvidenceToo) {
                                 .beat = BeatKind::kQuestion}));
 }
 
-// #143: gaze is reaction_feed.cc's own to fill in, from the same window's
-// gaze -- EvidenceOf never sets it.
-TEST(EvidenceOfTest, LeavesGazeAtUnknownForTheCallerToFillIn) {
+// #143 (gaze), #145 (blink rate, a long blink, widened eyes): every one
+// of these is a later caller's own to fill in, from the same window --
+// EvidenceOf never sets any of them.
+TEST(EvidenceOfTest, LeavesGazeAndTheEyeSignsAtUnknownForTheCallerToFillIn) {
   const std::optional<Evidence> evidence =
       EvidenceOf(std::vector<std::string_view>{"nod"}, BeatKind::kQuestion,
                  /*complete=*/true);
 
   ASSERT_TRUE(evidence.has_value());
-  EXPECT_THAT(evidence.value_or(Evidence{}).gaze, Eq(Gaze::kUnknown));
+  const Evidence filled = evidence.value_or(Evidence{});
+  EXPECT_THAT(filled.gaze, Eq(Gaze::kUnknown));
+  EXPECT_THAT(filled.blink_rate, Eq(BlinkRate::kUnknown));
+  EXPECT_THAT(filled.long_blink, Eq(LongBlink::kUnknown));
+  EXPECT_THAT(filled.widened_eyes, Eq(WidenedEyes::kUnknown));
 }
 
 TEST(EvidenceOfTest, MixedUnsignedOrIncompleteWindowsAreNot) {

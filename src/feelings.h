@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 
+#include "src/eye_signs.h"
 #include "src/screen_context.h"
 
 // What a reaction meant (#70, item 3 of #61): the feelings facepalm reads a
@@ -92,22 +93,31 @@ bool IsSign(std::string_view word);
 inline constexpr std::string_view kNoSign = "none";
 
 // What a beat showed, which a person's corrections are counted under (#35,
-// gaze added by #143): the one kind of reaction made during it, or kNoSign,
-// what the client marked the beat after, and where they were looking during
-// it, in the beat's own wording (src/screen_context.h's Gaze and
-// BeatGazeName) -- a feature the person's own read (src/tuning.h) learns
-// from, never Rule's own input (#142's ContextNeverChangesFeeling):
-// EvidenceOf below never sets it, defaulting to kUnknown;
-// src/reaction_feed.cc's Beat fills it in from the same gaze its reply reports.
+// gaze added by #143; blink rate, a long blink and widened eyes added by
+// #145): the one kind of reaction made during it, or kNoSign, what the
+// client marked the beat after, where they were looking during it, in the
+// beat's own wording (src/screen_context.h's Gaze and BeatGazeName), and
+// the three coarse eye signs a window of samples gives
+// (src/eye_signs.h's BlinkRate, LongBlink and WidenedEyes) -- every one of
+// these a feature the person's own read (src/tuning.h) learns from, never
+// Rule's own input (#142's ContextNeverChangesFeeling, untouched by #145
+// too): EvidenceOf below never sets any of the four, leaving them at
+// their own unknown value; src/reaction_feed.cc's Beat fills gaze in from
+// the same gaze its reply reports, and a later issue's own window reader
+// would fill the other three the same way.
 struct Evidence {
   std::string sign;
   BeatKind beat;
   Gaze gaze = Gaze::kUnknown;
+  BlinkRate blink_rate = BlinkRate::kUnknown;
+  LongBlink long_blink = LongBlink::kUnknown;
+  WidenedEyes widened_eyes = WidenedEyes::kUnknown;
   friend auto operator<=>(const Evidence&, const Evidence&) = default;
 };
 
-// The evidence of a beat whose window held readings with `signs`, its gaze
-// left at Gaze::kUnknown for the caller to fill in (#143). nullopt when they
+// The evidence of a beat whose window held readings with `signs`, its
+// gaze, blink rate, long blink and widened eyes all left at their own
+// unknown value for the caller to fill in (#143, #145). nullopt when they
 // were of more than one kind, one had no sign, or the window was not
 // complete: a correction could not then say which reaction it was about.
 std::optional<Evidence> EvidenceOf(std::span<const std::string_view> signs,

@@ -1,3 +1,3 @@
-facepalm feelings 2
-nod question unknown agreement 5
-shake proposal averted disagreement 2
+facepalm feelings 3
+nod question unknown elevated no no agreement 5
+shake proposal averted normal yes yes disagreement 2

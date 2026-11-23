@@ -50,6 +50,11 @@ TEST(ParseConfigTest, AnEmptyFileGivesTheDefaults) {
   EXPECT_THAT(config.calibration_min_head_travel_degrees, FloatEq(10.0F));
   EXPECT_THAT(config.calibration_min_axis_degrees, FloatEq(4.0F));
   EXPECT_THAT(config.calibration_min_spread_degrees, FloatEq(3.0F));
+  EXPECT_THAT(config.eye_signs_elevated_blinks_per_minute, FloatEq(14.0F));
+  EXPECT_THAT(config.eye_signs_long_blink_ms, Eq(500));
+  EXPECT_THAT(config.eye_signs_widened_eyes_threshold, FloatEq(0.15F));
+  EXPECT_THAT(config.eye_signs_widened_eyes_hold_ms, Eq(200));
+  EXPECT_THAT(config.eye_signs_min_window_ms, Eq(3000));
 }
 
 TEST(ParseConfigTest, ReadsEverySetting) {
@@ -86,7 +91,12 @@ TEST(ParseConfigTest, ReadsEverySetting) {
       "eye_gaze.head_only_yaw_degrees = 40\n"
       "calibration.min_head_travel_degrees = 12\n"
       "calibration.min_axis_degrees = 5\n"
-      "calibration.min_spread_degrees = 4\n",
+      "calibration.min_spread_degrees = 4\n"
+      "eye_signs.elevated_blinks_per_minute = 18\n"
+      "eye_signs.long_blink_ms = 600\n"
+      "eye_signs.widened_eyes_threshold = 0.2\n"
+      "eye_signs.widened_eyes_hold_ms = 250\n"
+      "eye_signs.min_window_ms = 4000\n",
       error);
   ASSERT_TRUE(parsed.has_value()) << error;
   const Config config = parsed.value_or(Config{});
@@ -123,6 +133,11 @@ TEST(ParseConfigTest, ReadsEverySetting) {
   EXPECT_THAT(config.calibration_min_head_travel_degrees, FloatEq(12.0F));
   EXPECT_THAT(config.calibration_min_axis_degrees, FloatEq(5.0F));
   EXPECT_THAT(config.calibration_min_spread_degrees, FloatEq(4.0F));
+  EXPECT_THAT(config.eye_signs_elevated_blinks_per_minute, FloatEq(18.0F));
+  EXPECT_THAT(config.eye_signs_long_blink_ms, Eq(600));
+  EXPECT_THAT(config.eye_signs_widened_eyes_threshold, FloatEq(0.2F));
+  EXPECT_THAT(config.eye_signs_widened_eyes_hold_ms, Eq(250));
+  EXPECT_THAT(config.eye_signs_min_window_ms, Eq(4000));
 }
 
 TEST(ParseConfigTest, SkipsCommentsAndBlankLines) {
@@ -146,6 +161,15 @@ std::string ErrorFor(const std::string& text) {
 TEST(ParseConfigTest, RefusesAnUnknownSettingNamingTheLine) {
   EXPECT_THAT(ErrorFor("# ok\ncamera.fps = 30\n"),
               Eq("line 2: unknown setting camera.fps"));
+}
+
+// #145: eye_signs.* has its own dispatcher (SetEyeSigns, kept apart from
+// Set for its own cognitive complexity), with its own "unknown setting"
+// fallback for a name starting with eye_signs. that is still none of the
+// five it knows.
+TEST(ParseConfigTest, RefusesAnUnknownEyeSignsSetting) {
+  EXPECT_THAT(ErrorFor("eye_signs.sideways = 1\n"),
+              Eq("line 1: unknown setting eye_signs.sideways"));
 }
 
 TEST(ParseConfigTest, RefusesALineWithoutAnEqualsSign) {
@@ -408,6 +432,39 @@ TEST(ParseConfigTest, RefusesADegreesSettingOutsideZeroToOneEighty) {
               Eq("line 1: expected a number from 0 to 180"));
   EXPECT_THAT(ErrorFor("looking_away.other_screen_margin_degrees = nan"),
               Eq("line 1: expected a number from 0 to 180"));
+}
+
+TEST(ParseConfigTest, RefusesAnElevatedBlinksPerMinuteOutsideZeroTo120) {
+  EXPECT_THAT(ErrorFor("eye_signs.elevated_blinks_per_minute = -1"),
+              Eq("line 1: expected a number from 0 to 120"));
+  EXPECT_THAT(ErrorFor("eye_signs.elevated_blinks_per_minute = 120.1"),
+              Eq("line 1: expected a number from 0 to 120"));
+  EXPECT_THAT(ErrorFor("eye_signs.elevated_blinks_per_minute = fast"),
+              Eq("line 1: expected a number from 0 to 120"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 120 check.
+  EXPECT_THAT(ErrorFor("eye_signs.elevated_blinks_per_minute = nan"),
+              Eq("line 1: expected a number from 0 to 120"));
+}
+
+TEST(ParseConfigTest, RefusesAnEyeSignsMillisecondsOutsideZeroTo10000) {
+  EXPECT_THAT(ErrorFor("eye_signs.long_blink_ms = -1"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_hold_ms = 10001"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+  EXPECT_THAT(ErrorFor("eye_signs.min_window_ms = 1.5"),
+              Eq("line 1: expected a whole number from 0 to 10000"));
+}
+
+TEST(ParseConfigTest, RefusesAWidenedEyesThresholdOutsideZeroToOne) {
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_threshold = -0.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_threshold = 1.1"),
+              Eq("line 1: expected a number from 0 to 1"));
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_threshold = wide"),
+              Eq("line 1: expected a number from 0 to 1"));
+  // from_chars reads "nan", and NaN passes a < 0 || > 1 check.
+  EXPECT_THAT(ErrorFor("eye_signs.widened_eyes_threshold = nan"),
+              Eq("line 1: expected a number from 0 to 1"));
 }
 
 }  // namespace

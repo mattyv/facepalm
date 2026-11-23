@@ -142,6 +142,27 @@ TEST(EyesGazeReplayTest, PrintsComposedGazeForEachPairedFrame) {
   EXPECT_THAT(output, ::testing::HasSubstr("gaze 1000 "));
 }
 
+// #145: one eye_sign line per paired frame, the same blink flag and
+// eye-widening score src/eye_signs.h's own SampleFrom would read for a
+// live beat window.
+TEST(EyesGazeReplayTest, PrintsEyeSignForEachPairedFrame) {
+  std::ostringstream log;
+  WriteFrame(log, 1000, 0, 0,
+             {.blink_left = 0.6,
+              .blink_right = 0.7,
+              .wide_left = 0.25,
+              .wide_right = 0.25});
+  const std::string output = Replay(log.str());
+  EXPECT_THAT(output, ::testing::HasSubstr("eye_sign 1000 1 0.25"));
+}
+
+TEST(EyesGazeReplayTest, PrintsEyeSignWithBlinkZeroWhenNotBlinking) {
+  std::ostringstream log;
+  WriteFrame(log, 1000, 0, 0, {.blink_left = 0.1, .blink_right = 0.2});
+  const std::string output = Replay(log.str());
+  EXPECT_THAT(output, ::testing::HasSubstr("eye_sign 1000 0 0"));
+}
+
 // Recorded fixtures from #139 (test/fixtures/eyes/README.md): four cues,
 // six seconds apart, 15 fps, one screen.
 std::string Fixture(const std::string& name) {

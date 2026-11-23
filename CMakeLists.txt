@@ -168,8 +168,10 @@ target_link_libraries(preview_readings PUBLIC feelings)
 facepalm_unit(tuning)
 # The feelings are pure computation, so the tuning's tests run them for
 # real; screen_context for BeatGazeName/BeatGazeNamed, the beat's own
-# wording the counts file stores a pick's gaze in (#143).
-target_link_libraries(tuning PUBLIC feelings screen_context)
+# wording the counts file stores a pick's gaze in (#143); eye_signs for
+# the three Name/XNamed pairs the same file stores blink rate, a long
+# blink and widened eyes in (#145).
+target_link_libraries(tuning PUBLIC feelings screen_context eye_signs)
 # The tuning is pure computation, so the store's tests run it for real; its
 # POSIX calls are its own, and its tests run them on a real folder too.
 facepalm_unit(feeling_store)
@@ -214,6 +216,20 @@ facepalm_unit(eyes_probe)
 # can test against test/fixtures/eyes's recordings, the way gesture_replay
 # and look_away_replay do for their own lines.
 facepalm_unit(eyes_replay)
+# Blink rate, a long blink and widened eyes (#145): coarse signs for the
+# personal read alone (src/tuning.h), pure computation over a window of
+# samples a caller collects elsewhere, the way screen_context's
+# CoarseGazeFrom is over one frame's own HeadRotation. eye_gaze for
+# EyeSignalFrom's own blink flag; its own tests replay eyes_replay's
+# parsed fixtures through SampleFrom, the same conversion a live window
+# reader would make.
+facepalm_unit(eye_signs)
+target_link_libraries(eye_signs PUBLIC eye_gaze face_model)
+if(BUILD_TESTING)
+  target_link_libraries(eye_signs_test PRIVATE eyes_replay)
+  target_compile_definitions(eye_signs_test PRIVATE
+    FACEPALM_FIXTURES="${PROJECT_SOURCE_DIR}/test/fixtures")
+endif()
 # head_pose is pure computation, so the gesture model's tests run it for
 # real (it needs RotationFrom, and reuses Rotation for its own test
 # fixtures).
@@ -288,7 +304,7 @@ endif()
 # #141).
 facepalm_unit(eyes_gaze_replay)
 target_link_libraries(eyes_gaze_replay PUBLIC look_away expressions eye_gaze
-  eyes_replay facepalm_config)
+  eye_signs eyes_replay facepalm_config)
 if(BUILD_TESTING)
   target_compile_definitions(eyes_gaze_replay_test PRIVATE
     FACEPALM_FIXTURES="${PROJECT_SOURCE_DIR}/test/fixtures")
