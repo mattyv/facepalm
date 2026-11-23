@@ -38,16 +38,19 @@ llvm_tool() {
 
 #######################################
 # Measures a unit's coverage from its own tests, writing it to
-# profiles/<unit>.tsv as "lines branches functions" percentages, and prints
-# each measure below its floor. A measure with nothing to count, such as
-# branches in straight-line code, is 100.
+# profiles/<unit>.tsv as "lines branches functions" percentages and
+# printing each measure below its floor. A measure with nothing to count,
+# such as branches in straight-line code, is 100. On a shortfall, also
+# writes llvm-cov's own line-by-line, branch-by-branch report to
+# profiles/<unit>-branches.txt, so a CI failure names the exact branch
+# instead of only the percentage (#162).
 # Globals:
 #   BUILD, MEASURES, PROFILES, ROOT, SUMMARY, THRESHOLDS
 # Arguments:
 #   The unit's name, such as head_pose, and its source file, from the root.
 #######################################
 measure() {
-  local unit="$1" file="$2" profdata cov i floor
+  local unit="$1" file="$2" profdata cov i floor shortfall=0
   local -a actual query
   profdata="$(llvm_tool llvm-profdata)"
   cov="$(llvm_tool llvm-cov)"
@@ -62,8 +65,14 @@ measure() {
     floor="$(jq "${query[@]}" '.[$f].unit[$m] // 100' "${THRESHOLDS}")"
     if awk -v a="${actual[i]}" -v f="${floor}" 'BEGIN { exit !(a < f) }'; then
       echo "${file}: ${MEASURES[i]} ${actual[i]}% is below ${floor}%"
+      shortfall=1
     fi
   done
+  if [[ "${shortfall}" -eq 1 ]]; then
+    "${cov}" show -show-branches=count \
+      -instr-profile="${PROFILES}/${unit}.profdata" "${BUILD}/${unit}_test" \
+      "${ROOT}/${file}" >"${PROFILES}/${unit}-branches.txt"
+  fi
 }
 
 main() {
