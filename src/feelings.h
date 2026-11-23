@@ -101,10 +101,10 @@ inline constexpr std::string_view kNoSign = "none";
 // (src/eye_signs.h's BlinkRate, LongBlink and WidenedEyes) -- every one of
 // these a feature the person's own read (src/tuning.h) learns from, never
 // Rule's own input (#142's ContextNeverChangesFeeling, untouched by #145
-// too): EvidenceOf below never sets any of the four, leaving them at
-// their own unknown value; src/reaction_feed.cc's Beat fills gaze in from
-// the same gaze its reply reports, and a later issue's own window reader
-// would fill the other three the same way.
+// and #165 too): EvidenceOf below never sets any of the four, leaving
+// them at their own unknown value; src/reaction_feed.cc's Beat fills all
+// four in from the same window its reply's gaze (#142) and its own
+// EyeSignsWindowFn (#165) report.
 struct Evidence {
   std::string sign;
   BeatKind beat;

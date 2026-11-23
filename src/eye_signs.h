@@ -14,8 +14,9 @@ namespace facepalm {
 // like src/screen_context.h's Gaze, and read the same stateless way, over
 // samples a caller collects elsewhere. kUnknown is too short a window to
 // judge a rate from (EyeSignSettings::min_window_ms), never "no face":
-// that is for a later issue's own window reader to decide, the way
-// src/screen_context.h's GazeWindow does for gaze.
+// src/screen_context_reporter.h's own EyeSignsBetween (#165) decides
+// that itself, by never buffering a sample for a frame with none, the
+// way src/screen_context.h's GazeWindow does for gaze.
 enum class BlinkRate : std::uint8_t { kNormal, kElevated, kUnknown };
 
 // normal, elevated or unknown.
@@ -51,11 +52,11 @@ std::string_view Name(WidenedEyes widened);
 std::optional<WidenedEyes> WidenedEyesNamed(std::string_view name);
 
 // One frame's own blink flag and eye-widening score, the inputs EyeSignsOf
-// below reads a window of (#145): pure computation, so a caller -- a
-// later issue's own window reader, or a fixture replay -- collects these
-// however it samples the camera, the way src/screen_context.h's
-// CoarseGazeFrom takes one frame's own HeadRotation rather than sampling
-// it itself.
+// below reads a window of (#145): pure computation, so a caller --
+// src/screen_context_reporter.h's own live buffer (#165), or a fixture
+// replay -- collects these however it samples the camera, the way
+// src/screen_context.h's CoarseGazeFrom takes one frame's own
+// HeadRotation rather than sampling it itself.
 struct EyeSignSample {
   std::int64_t timestamp_ms = 0;
   // src/eye_gaze.h's own EyeSignalFrom, read at EyeSignSettings'
@@ -71,9 +72,10 @@ struct EyeSignSample {
 // is: eyeWideLeft and eyeWideRight at indices 21 and 22
 // (src/eyes_probe.h), and EyeSignalFrom's own blink flag at
 // `blink_threshold` (src/eye_gaze.h, the same threshold
-// EyeGazeTracker::Settings takes). Shared by a later issue's live reader
-// and this file's own fixture-replay tests, so neither reads the
-// blendshapes a second, possibly different, way.
+// EyeGazeTracker::Settings takes). Shared by
+// src/screen_context_reader.h's own live OnFace (#165) and this file's
+// own fixture-replay tests, so neither reads the blendshapes a second,
+// possibly different, way.
 EyeSignSample SampleFrom(const Face& face, double blink_threshold,
                          std::int64_t timestamp_ms);
 

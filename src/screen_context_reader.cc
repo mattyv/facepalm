@@ -10,6 +10,7 @@
 #include "src/camera_controller.h"
 #include "src/expressions.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/face_model.h"
 #include "src/head_pose.h"
 
@@ -36,7 +37,8 @@ ScreenContextReader::ScreenContextReader(ExpressionTracker::Settings tracker,
                                          OnSample on_sample)
     : on_sample_(std::move(on_sample)),
       tracker_(tracker),
-      eye_tracker_(eye_tracker) {}
+      eye_tracker_(eye_tracker),
+      blink_threshold_(eye_tracker.blink_threshold) {}
 
 void ScreenContextReader::OnFace(const Face& face, int /*width*/,
                                  int /*height*/, std::int64_t timestamp_ms,
@@ -48,6 +50,12 @@ void ScreenContextReader::OnFace(const Face& face, int /*width*/,
   }
   Scores scores{};
   std::ranges::copy(face.blendshapes, scores.begin());
+  // SampleFrom reads `face` directly (#145/#165), the same frame
+  // tracker_/eye_tracker_ just read, not the mutex-guarded eye_tracker_
+  // reading above: that one is median-filtered and blink-skipped, a
+  // different signal from one frame's own blink flag and eyeWide score.
+  const EyeSignSample eye_sign =
+      SampleFrom(face, blink_threshold_, timestamp_ms);
   std::unique_lock lock(mutex_);
   tracker_.Update(scores, *pose, timestamp_ms);
   eye_tracker_.Update(face, timestamp_ms);
@@ -61,7 +69,8 @@ void ScreenContextReader::OnFace(const Face& face, int /*width*/,
   const std::optional<EyeSignal> sampled_eye_resting = eye_resting_;
   lock.unlock();
   if (on_sample_) {
-    on_sample_(sampled_pose, sampled_resting, sampled_eye, sampled_eye_resting);
+    on_sample_(sampled_pose, sampled_resting, sampled_eye, sampled_eye_resting,
+               eye_sign);
   }
 }
 
@@ -73,8 +82,8 @@ void ScreenContextReader::OnNoFace() {
   const std::optional<EyeSignal> sampled_eye_resting = eye_resting_;
   lock.unlock();
   if (on_sample_) {
-    on_sample_(std::nullopt, sampled_resting, std::nullopt,
-               sampled_eye_resting);
+    on_sample_(std::nullopt, sampled_resting, std::nullopt, sampled_eye_resting,
+               std::nullopt);
   }
 }
 

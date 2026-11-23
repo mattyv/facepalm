@@ -194,12 +194,14 @@ facepalm_unit(screen_context_reporter)
 # The gaze rule, ComposeGaze and protocol::Quoted are pure computation, so
 # the reporter's tests run them for real; only ScreenSource, the OS seam,
 # is mocked.
-target_link_libraries(screen_context_reporter PUBLIC screen_context protocol calibration eye_gaze)
+target_link_libraries(screen_context_reporter PUBLIC screen_context protocol calibration eye_gaze
+  eye_signs)
 facepalm_unit(screen_context_reader)
 # ScreenContextReader's tests run the real ExpressionTracker, EyeGazeTracker
 # and head_pose (also pure computation), as expression_reader's and
 # look_away_reader's do, for the same reason.
-target_link_libraries(screen_context_reader PUBLIC expressions head_pose eye_gaze)
+target_link_libraries(screen_context_reader PUBLIC expressions head_pose eye_gaze
+  eye_signs)
 facepalm_unit(head_pose)
 # The eye-in-head signal, its composition with head pose into a coarse
 # gaze angle, and the gains step's own estimate (#137): pure computation,

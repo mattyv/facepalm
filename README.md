@@ -100,17 +100,25 @@ made since, each with its reason, are in the
     personal read alone (`src/tuning`), never `Rule`'s own input
     (`specs/FeelingBeat.tla`'s `Interpret` is untouched). `EyeSignsOf` is
     pure computation over a window of `EyeSignSample`s a caller collects
-    elsewhere (a later issue's own window reader, the way
-    `ScreenContextReporter::Between` already does for gaze); `SampleFrom`
-    builds one sample from a frame's own `Face`, the same blink flag
-    (`src/eye_gaze`'s `EyeSignalFrom`) and eyeWide blendshapes
-    `src/eyes_gaze_replay`'s own `eye_sign` line reads. None of #139's
-    nine fixtures carries a cue that deliberately widens the eyes, so
+    elsewhere; `SampleFrom` builds one sample from a frame's own `Face`,
+    the same blink flag (`src/eye_gaze`'s `EyeSignalFrom`) and eyeWide
+    blendshapes `src/eyes_gaze_replay`'s own `eye_sign` line reads.
+    `ScreenContextReader::OnFace` builds one every live frame
+    (`blink_threshold_`, read from its own `EyeGazeTracker::Settings`)
+    and `ScreenContextReporter::Sample`/`EyeSignsBetween` buffer and
+    read them over a beat's window (#165), the same way `Sample`/
+    `Between` already do for gaze -- in the same buffer, time-bounded by
+    the same `max_window_ms`, so a frame with no face samples gaze as
+    `Gaze::kUnknown` but contributes nothing here, since there is no
+    eyeBlink or eyeWide to read. None of #139's original nine fixtures
+    carries a cue that deliberately widens the eyes, so
     `eye_signs.widened_eyes_threshold`'s own default is reasoned from
     every fixture's own eyeWide ceiling (0.051 at most), not measured
     against a true positive -- `src/eye_signs.h`'s own header comment
     says so again where the setting's default lives
     (`src/config.h`'s `kDefaultEyeSignsWidenedEyesThreshold`).
+    `scripts/record_eye_fixtures.sh` grew a tenth, `widened_eyes` (#165),
+    with a genuine one, for the user to record and tighten it against.
 -   `src/eye_gaze`: coarse gaze reads head pose composed with eye-in-head
     signal, not head pose alone (#137). `EyeSignalFrom` reads the eye-look
     blendshapes `src/eyes_probe` already formats, into a horizontal and
@@ -188,8 +196,11 @@ made since, each with its reason, are in the
     is a `FaceReader` that keeps the pose and eye signal (its own
     `EyeGazeTracker`) behind a mutex, read from a different thread than
     they are written on, and, given one, tells an `OnSample` callback the
-    same four readings every frame, reaction or not (#142: main.cc's own
-    hook into `ScreenContextReporter::Sample`, below).
+    same four readings every frame, plus `src/eye_signs`'s own
+    `EyeSignSample` (#145/#165, `SampleFrom` read at its own
+    `blink_threshold_`, nullopt with no face to read eyeBlink or eyeWide
+    from), reaction or not (#142: main.cc's own hook into
+    `ScreenContextReporter::Sample`, below).
     `ScreenContextReporter` composes gaze with `src/eye_gaze`'s
     `ComposeGaze` and builds the `context` JSON from `ScreenSource`, the
     mockable seam its tests take in place of
@@ -197,8 +208,10 @@ made since, each with its reason, are in the
     `src/linux/screen_context_linux` (X11, through XWayland where a
     Wayland session runs one); its own `Sample`/`Between` keep a short,
     time-bounded buffer of composed gaze for a beat's window to ask about
-    (#142, #144), independent of whether any reading was made in it.
-    Window titles need macOS's Screen Recording
+    (#142, #144), independent of whether any reading was made in it, and a
+    second buffer of eye signs alongside it (`EyeSignsBetween`, #165),
+    evicted by the same `max_window_ms` even on a frame that gave it
+    nothing to add. Window titles need macOS's Screen Recording
     permission and can hold private text, so they default off. The
     platform sources need a real desktop session and have no unit tests or
     coverage floor, following `src/macos/avfoundation_session`'s
@@ -218,9 +231,14 @@ made since, each with its reason, are in the
     inside it (#144); gaze never changes the feeling by rule, the one
     exception being `GuardAvertedUnknown`, the thinking guard: a question
     beat ending averted reads unknown however the cues went, so the client
-    waits rather than acts on a guess. The person can then
-    say how they really felt, once per interpretation and within five
-    minutes, following `specs/FeelingFeedback.tla` (#35).
+    waits rather than acts on a guess. The same window's blink rate, long
+    blink and widened eyes (#145) are read the same way
+    (`ScreenContextReporter::EyeSignsBetween`, injected as
+    `EyeSignsWindowFn`, #165) and folded into the evidence alongside gaze,
+    but never shown on the reply at all: a feature the personal read
+    alone weighs, so there is no guard to write for them. The person can
+    then say how they really felt, once per interpretation and within
+    five minutes, following `specs/FeelingFeedback.tla` (#35).
 -   `src/feelings`: the six feelings a reaction is read as, and the only list
     of them: agreement, disagreement, engagement, annoyance, confused and
     unknown. Its generic rule reads a beat's nods as agreement, its shakes

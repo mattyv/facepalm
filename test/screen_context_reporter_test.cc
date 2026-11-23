@@ -10,6 +10,7 @@
 
 #include "src/calibration.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/head_pose.h"
 #include "src/screen_context.h"
 #include "src/screen_source.h"
@@ -384,6 +385,142 @@ TEST(BetweenTest, ASampleWithNoRestingPoseCountsAsUnknownContent) {
   const GazeWindow window = reporter.Between(0, 1000, kCentre);
 
   EXPECT_EQ(window.content, ContentHit::kUnknown);
+}
+
+// The EyeSignsBetween tests below stand for #145's and #165's own beat
+// context: blink rate, a long blink and widened eyes over a window of
+// Sample calls, fed alongside the same calls' own gaze (#142). None of
+// this ever changes the generic feeling by rule
+// (specs/FeelingBeat.tla's ContextNeverChangesFeeling, untouched).
+
+constexpr EyeSignSettings kEyeSignSettings = {.elevated_blinks_per_minute = 14,
+                                              .long_blink_ms = 500,
+                                              .widened_eyes_threshold = 0.15,
+                                              .widened_eyes_hold_ms = 200,
+                                              .min_window_ms = 3000};
+
+TEST(EyeSignsBetweenTest, NoSamplesInRangeIsUnknown) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  const ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false, nullptr, EyeGains{},
+      CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+      ScreenContextReporter::kDefaultMaxWindowMs, kEyeSignSettings);
+
+  const EyeSigns signs = reporter.EyeSignsBetween(0, 1000);
+
+  EXPECT_EQ(signs.blink_rate, BlinkRate::kUnknown);
+  EXPECT_EQ(signs.long_blink, LongBlink::kUnknown);
+  EXPECT_EQ(signs.widened_eyes, WidenedEyes::kUnknown);
+}
+
+// A frame with no face (eye_sign left at its default, nullopt) samples
+// gaze as usual but contributes nothing of its own here.
+TEST(EyeSignsBetweenTest, AFrameWithNoFaceContributesNoSample) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false, nullptr, EyeGains{},
+      CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+      ScreenContextReporter::kDefaultMaxWindowMs, kEyeSignSettings);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/100);
+
+  const EyeSigns signs = reporter.EyeSignsBetween(0, 1000);
+
+  EXPECT_EQ(signs.blink_rate, BlinkRate::kUnknown);
+}
+
+TEST(EyeSignsBetweenTest, SamplesOutsideTheRangeAreIgnored) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false, nullptr, EyeGains{},
+      CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+      ScreenContextReporter::kDefaultMaxWindowMs, kEyeSignSettings);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/400,
+                  EyeSignSample{.blink = true, .eye_wide = 0.2});
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/2000,
+                  EyeSignSample{.blink = true, .eye_wide = 0.2});
+
+  const EyeSigns signs = reporter.EyeSignsBetween(500, 1000);
+
+  EXPECT_EQ(signs.blink_rate, BlinkRate::kUnknown);
+  EXPECT_EQ(signs.widened_eyes, WidenedEyes::kUnknown);
+}
+
+// Each eye_sign's own timestamp_ms is replaced with Sample's own at_ms
+// (the wall clock), whatever it carried in, so EyeSignsBetween's bounds
+// agree with it.
+TEST(EyeSignsBetweenTest, EyeSignTimestampsAreReplacedWithAtMs) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false, nullptr, EyeGains{},
+      CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+      ScreenContextReporter::kDefaultMaxWindowMs, kEyeSignSettings);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/500,
+                  EyeSignSample{.timestamp_ms = 999999, .blink = true});
+
+  const EyeSigns signs = reporter.EyeSignsBetween(0, 1000);
+
+  EXPECT_EQ(signs.long_blink, LongBlink::kNo);
+}
+
+TEST(EyeSignsBetweenTest, OldSamplesPastMaxWindowMsAreForgotten) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  constexpr std::int64_t kShortMaxWindowMs = 100;
+  ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false, nullptr, EyeGains{},
+      CalibrationSettings::kDefaultHeadOnlyYawDegrees, kShortMaxWindowMs,
+      kEyeSignSettings);
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/0,
+                  EyeSignSample{.eye_wide = 0.2});
+  // 150ms later, more than max_window_ms past the first sample: it drops,
+  // the same way an old GazeSample does (BetweenTest's own
+  // OldSamplesPastMaxWindowMsAreForgotten).
+  reporter.Sample(std::nullopt, kRest, std::nullopt, std::nullopt,
+                  /*at_ms=*/150);
+
+  const EyeSigns signs = reporter.EyeSignsBetween(0, 200);
+
+  EXPECT_EQ(signs.widened_eyes, WidenedEyes::kUnknown);
+}
+
+// A run of elevated-looking blinks, each its own Sample call, read the
+// same way EyeSignsOfTest's own synthetic samples are (src/eye_signs.h);
+// this is only proving the buffer feeds EyeSignsOf at all, not
+// reproving its own rule.
+TEST(EyeSignsBetweenTest, SamplesInRangeAreClassifiedByEyeSignsOf) {
+  MockScreenSource source;
+  EXPECT_CALL(source, Screens())
+      .WillRepeatedly(Return(std::vector<ScreenRect>{kMain}));
+  ScreenContextReporter reporter(
+      source, kSettings, /*titles_enabled=*/false, nullptr, EyeGains{},
+      CalibrationSettings::kDefaultHeadOnlyYawDegrees,
+      ScreenContextReporter::kDefaultMaxWindowMs, kEyeSignSettings);
+  // Four separate one-sample blink runs over 10 s (each closed by a
+  // following false sample, as a real blink's own next frame would):
+  // 24 a minute, past kEyeSignSettings' own elevated_blinks_per_minute
+  // (14), the same math
+  // EyeSignsOfTest.ManyBlinksOverTheSameWindowIsElevated already proves.
+  for (const std::int64_t at_ms : {0, 2500, 5000, 7500}) {
+    reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, at_ms,
+                    EyeSignSample{.blink = true});
+    reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, at_ms + 66,
+                    EyeSignSample{.blink = false});
+  }
+  reporter.Sample(kRest, kRest, std::nullopt, std::nullopt, /*at_ms=*/10000,
+                  EyeSignSample{.blink = false});
+
+  const EyeSigns signs = reporter.EyeSignsBetween(0, 10001);
+
+  EXPECT_EQ(signs.blink_rate, BlinkRate::kElevated);
 }
 
 TEST(ScreenContextReporterTest, SetProfileSwapsWhatNextCallReads) {

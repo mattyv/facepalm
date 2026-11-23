@@ -8,6 +8,7 @@
 
 #include "src/calibration.h"
 #include "src/eye_gaze.h"
+#include "src/eye_signs.h"
 #include "src/head_pose.h"
 #include "src/screen_context.h"
 #include "src/screen_source.h"
@@ -38,7 +39,10 @@ class ScreenContextReporter {
   // "calibrated_screen" to Json's result, and its own gains (`profile`'s,
   // once given) take over from `default_gains` for every ComposeGaze
   // call Json makes. `head_only_yaw_degrees` is ComposeGaze's own.
-  // `max_window_ms` bounds Sample's own buffer (#142).
+  // `max_window_ms` bounds Sample's own buffer (#142), gaze and eye
+  // signs (#145/#165) alike. `eye_sign_settings` is EyeSignsBetween's
+  // own (#165); a default-constructed one (every field 0) is only ever
+  // passed by a test with no eye signs of its own to classify.
   //
   // `head_only_yaw_degrees` and `max_window_ms` are never swappable in
   // practice: every call site passes both from distinct, named sources
@@ -51,7 +55,8 @@ class ScreenContextReporter {
                         EyeGains default_gains = {},
                         double head_only_yaw_degrees =
                             CalibrationSettings::kDefaultHeadOnlyYawDegrees,
-                        std::int64_t max_window_ms = kDefaultMaxWindowMs);
+                        std::int64_t max_window_ms = kDefaultMaxWindowMs,
+                        EyeSignSettings eye_sign_settings = {});
 
   // {"active_app":"...","window_title":"...","mouse":{"x":..,"y":..},
   // "gaze":"...","calibrated_screen":n}, with active_app, window_title and
@@ -88,16 +93,21 @@ class ScreenContextReporter {
   // constructor's own `profile` carries.
   void SetProfile(const CalibrationProfile* profile);
 
-  // Samples this frame's composed gaze into the window Between can later
-  // ask about (#142): the same four readings Json takes, without
-  // building its JSON. Called once a frame regardless of whether a
-  // reading is made (ScreenContextReader's own OnSample, in the daemon),
-  // so a beat's window holds every frame since, not only the ones a
-  // reaction happened to land on. `at_ms` is the wall clock at the
-  // moment of the call (src/feed_clients.h's own UnixMilliseconds, the
-  // same clock ReactionFeed marks a beat's own start and end on), not
-  // the frame's own capture-clock timestamp, so Between's bounds and
-  // this buffer's timestamps agree.
+  // Samples this frame's composed gaze, and, given one, its own eye
+  // sign (#145/#165), into the windows Between and EyeSignsBetween can
+  // later ask about (#142): the same four readings Json takes, without
+  // building its JSON, plus `eye_sign` (nullopt on a frame with no face
+  // to read it from, src/screen_context_reader.h's own OnSample).
+  // Called once a frame regardless of whether a reading is made
+  // (ScreenContextReader's own OnSample, in the daemon), so a beat's
+  // window holds every frame since, not only the ones a reaction
+  // happened to land on. `at_ms` is the wall clock at the moment of the
+  // call (src/feed_clients.h's own UnixMilliseconds, the same clock
+  // ReactionFeed marks a beat's own start and end on), not the frame's
+  // own capture-clock timestamp, so Between/EyeSignsBetween's bounds
+  // and this buffer's timestamps agree -- `eye_sign`'s own timestamp_ms
+  // is replaced with `at_ms` for the same reason, whatever it carried
+  // in.
   //
   // See Json's own declaration for why `pose`/`resting` and
   // `eye`/`eye_resting` are never swappable in practice.
@@ -105,7 +115,8 @@ class ScreenContextReporter {
   void Sample(const std::optional<HeadRotation>& pose,
               const std::optional<HeadRotation>& resting,
               const std::optional<EyeSignal>& eye,
-              const std::optional<EyeSignal>& eye_resting, std::int64_t at_ms);
+              const std::optional<EyeSignal>& eye_resting, std::int64_t at_ms,
+              const std::optional<EyeSignSample>& eye_sign = std::nullopt);
   // NOLINTEND(bugprone-easily-swappable-parameters)
 
   // The majority gaze (#142), and, given `content`, whether gaze was
@@ -118,6 +129,13 @@ class ScreenContextReporter {
   [[nodiscard]] GazeWindow Between(
       std::int64_t start_ms, std::int64_t end_ms,
       const std::optional<ContentRect>& content) const;
+
+  // EyeSignsOf (src/eye_signs.h) over every eye sign Sample was given in
+  // [start_ms, end_ms) (#145/#165): every field unknown with none in
+  // range, the same way Between reads Gaze::kUnknown. The constructor's
+  // own `eye_sign_settings` is EyeSignsOf's own thresholds.
+  [[nodiscard]] EyeSigns EyeSignsBetween(std::int64_t start_ms,
+                                         std::int64_t end_ms) const;
 
  private:
   // One Sample call's own reading (#142, #144): the zone CoarseGazeFrom
@@ -152,9 +170,12 @@ class ScreenContextReporter {
   EyeGains default_gains_;
   double head_only_yaw_degrees_;
   const std::int64_t max_window_ms_;
+  const EyeSignSettings eye_sign_settings_;
   mutable std::mutex mutex_;
   const CalibrationProfile* profile_;
   std::deque<GazeSample> samples_;  // Oldest first; under mutex_.
+  // Oldest first; under mutex_ (#145/#165).
+  std::deque<EyeSignSample> eye_signs_samples_;
 };
 
 }  // namespace facepalm
