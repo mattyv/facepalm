@@ -22,9 +22,23 @@ constexpr std::string_view kErrorPrefix = R"({"error":)";
 // own.
 constexpr std::string_view kClientName = "calibrate";
 
-// The string value of `"key":"value"` in `json`, or nullopt. `json` and
-// `key` are never swappable in practice -- every call site below passes a
-// literal key -- so the mistake this warns about cannot happen here.
+// The highest control character protocol::Quoted (src/protocol.cc) ever
+// writes as \u00xx: it escapes every byte below ' ' (0x20) that way,
+// '\n' through its own dedicated \n excepted.
+constexpr unsigned kMaxEscapedCodePoint = 0x1f;
+// \u is always followed by exactly this many hex digits.
+constexpr std::size_t kUnicodeEscapeHexDigits = 4;
+
+// The string value of `"key":"value"` in `json`, with every escape
+// protocol::Quoted (src/protocol.cc) can have written -- \" \\ \n and
+// \u00xx for a control character -- undone, or nullopt for a missing
+// field, an unterminated string (including one ending on a lone,
+// unpaired backslash, or mid-\u-escape, either of which a truncated read
+// can still leave on the wire), or an escape Quoted never writes:
+// anything other than those four, or a \u naming a code point above
+// kMaxEscapedCodePoint. `json` and `key` are never swappable in practice
+// -- every call site below passes a literal key -- so the mistake this
+// warns about cannot happen here.
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 std::optional<std::string> StringField(std::string_view json,
                                        std::string_view key) {
@@ -33,12 +47,50 @@ std::optional<std::string> StringField(std::string_view json,
   if (start == std::string_view::npos) {
     return std::nullopt;
   }
-  const std::size_t value_start = start + needle.size();
-  const std::size_t value_end = json.find('"', value_start);
-  if (value_end == std::string_view::npos) {
-    return std::nullopt;
+  std::string value;
+  for (std::size_t i = start + needle.size(); i < json.size(); ++i) {
+    const char c = json[i];
+    if (c == '"') {
+      return value;
+    }
+    if (c != '\\') {
+      value += c;
+      continue;
+    }
+    if (++i >= json.size()) {
+      return std::nullopt;  // a trailing, unpaired backslash
+    }
+    switch (json[i]) {
+      case '"':
+        value += '"';
+        break;
+      case '\\':
+        value += '\\';
+        break;
+      case 'n':
+        value += '\n';
+        break;
+      case 'u': {
+        if (i + kUnicodeEscapeHexDigits >= json.size()) {
+          return std::nullopt;  // too few hex digits left to read safely
+        }
+        unsigned code_point = 0;
+        const char* hex_begin = json.data() + i + 1;
+        const char* hex_end = hex_begin + kUnicodeEscapeHexDigits;
+        const std::from_chars_result result =
+            std::from_chars(hex_begin, hex_end, code_point, 16);
+        if (result.ptr != hex_end || code_point > kMaxEscapedCodePoint) {
+          return std::nullopt;
+        }
+        value += static_cast<char>(code_point);
+        i += kUnicodeEscapeHexDigits;
+        break;
+      }
+      default:
+        return std::nullopt;  // not an escape Quoted ever writes
+    }
   }
-  return std::string(json.substr(value_start, value_end - value_start));
+  return std::nullopt;  // ran off the end with no closing quote
 }
 
 // The integer value of `"key":N` in `json`, or nullopt. See StringField

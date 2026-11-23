@@ -8,6 +8,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "src/calibration.h"
+#include "src/protocol.h"
 
 namespace facepalm {
 namespace {
@@ -148,6 +149,108 @@ TEST_F(CalibrationFlowTest, StartReachesFailedOnAHelloRefused) {
   EXPECT_THAT(view.error, Eq("client not approved"));
   // No "calibrate start" is ever sent once hello is refused.
   EXPECT_THAT(Sent(), ElementsAre("hello calibrate"));
+}
+
+// #178: StringField undoes every escape protocol::Quoted (src/protocol.cc)
+// can write, round-tripped here through the real ErrorJson rather than a
+// literal, so a refusal carrying a quote, a backslash, a newline and a
+// control character comes back exactly as the daemon meant it, not
+// truncated at the first escaped quote.
+TEST_F(CalibrationFlowTest,
+       StartReachesFailedOnAHelloRefusalWithEscapedCharacters) {
+  RecordWrites();
+  const std::string message = "disk full: \"C:\\data\"\n\x01 -- try again";
+  EXPECT_CALL(io_, ReadLine).WillOnce(Return(protocol::ErrorJson(message)));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(view.error, Eq(message));
+}
+
+// A lone backslash right where the line ends -- never something Quoted
+// writes, but something a daemon crash mid-write could still leave on the
+// wire -- is an unterminated string, the same as running off the end with
+// no backslash at all (NextTreatsATruncatedReplyAsFailure below).
+TEST_F(CalibrationFlowTest, StartTreatsATrailingBackslashAsFailure) {
+  RecordWrites();
+  const std::string truncated_after_backslash = R"({"error":"disk\)";
+  EXPECT_CALL(io_, ReadLine).WillOnce(Return(truncated_after_backslash));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(view.error, Eq(truncated_after_backslash));
+}
+
+// A \u escape truncated before its 4 hex digits arrive -- with the whole
+// line ending right there, nothing to even misread as a closing quote --
+// is also an unterminated string, not a crash reading past the buffer.
+TEST_F(CalibrationFlowTest, StartTreatsATruncatedUnicodeEscapeAsFailure) {
+  RecordWrites();
+  const std::string truncated_in_escape = R"({"error":"disk \u12)";
+  EXPECT_CALL(io_, ReadLine).WillOnce(Return(truncated_in_escape));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(view.error, Eq(truncated_in_escape));
+}
+
+// \u followed by something other than 4 hex digits is not an escape
+// Quoted ever writes, so it is refused rather than read as whatever
+// from_chars happened to stop at.
+TEST_F(CalibrationFlowTest, StartTreatsANonHexUnicodeEscapeAsFailure) {
+  RecordWrites();
+  const std::string bad_hex = R"({"error":"disk \u00zz full"})";
+  EXPECT_CALL(io_, ReadLine).WillOnce(Return(bad_hex));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(view.error, Eq(bad_hex));
+}
+
+// \u00xx is the only form Quoted ever writes, always for a control
+// character below 0x20; a \u naming anything else is refused rather than
+// silently decoded, since nothing this client reads could have written
+// it.
+TEST_F(CalibrationFlowTest,
+       StartTreatsAUnicodeEscapeAboveControlRangeAsFailure) {
+  RecordWrites();
+  const std::string out_of_range = R"({"error":"disk \u0041 full"})";
+  EXPECT_CALL(io_, ReadLine).WillOnce(Return(out_of_range));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(view.error, Eq(out_of_range));
+}
+
+// Quoted never writes a bare \t -- a control character always goes
+// through \u00xx instead (see protocol.cc's Quoted) -- so this is refused
+// like any other escape it does not emit.
+TEST_F(CalibrationFlowTest, StartTreatsAnUnknownEscapeAsFailure) {
+  RecordWrites();
+  const std::string unknown_escape = R"({"error":"disk \t full"})";
+  EXPECT_CALL(io_, ReadLine).WillOnce(Return(unknown_escape));
+  CalibrationFlow flow = Make();
+
+  flow.Start(1);
+
+  const CalibrationFlow::View& view = flow.CurrentView();
+  EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kFailed));
+  EXPECT_THAT(view.error, Eq(unknown_escape));
 }
 
 TEST_F(CalibrationFlowTest,

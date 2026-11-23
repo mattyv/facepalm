@@ -281,6 +281,12 @@ facepalm_unit(calibrate_cli)
 # daemon's reply, so tools/menu/main.mm and main_linux.cc stay thin glue.
 facepalm_unit(calibration_flow)
 target_link_libraries(calibration_flow PUBLIC calibration)
+if(BUILD_TESTING)
+  # #178: the round-trip tests build their replies with protocol::Quoted's
+  # own ErrorJson rather than a literal, so the fix stays undoing exactly
+  # what that function writes.
+  target_link_libraries(calibration_flow_test PRIVATE protocol)
+endif()
 facepalm_unit(session_camera)
 # The daemon's readers are pure computation, so their factory's tests make
 # them for real. screen_context_reader (#61 item 11) is the one exception:
@@ -378,6 +384,7 @@ if(FACEPALM_FUZZTEST)
   facepalm_fuzz_test(tuning LIBS tuning feelings)
   facepalm_fuzz_test(frame_times LIBS frame_times)
   facepalm_fuzz_test(calibration_store LIBS calibration_store head_pose)
+  facepalm_fuzz_test(calibration_flow LIBS calibration_flow protocol)
   facepalm_fuzz_test(cameras_listing LIBS cameras_listing)
   facepalm_fuzz_test(feelings LIBS feelings)
   facepalm_fuzz_test(head_pose LIBS head_pose)
