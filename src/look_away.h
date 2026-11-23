@@ -42,8 +42,12 @@ struct LookAwayReport {
 // reported once the gaze returns within half of that, with how it read
 // and how long it lasted. A nod or a shake leaves the resting pose for
 // less than Settings::hold_ms, so neither is reported (a glance). Roll is
-// a tilt, not a look away, and is not read. specs/LookAway.tla models the
-// rule.
+// a tilt, not a look away, and is not read. A look already open survives
+// a gap long enough that ExpressionTracker relearns the resting pose
+// afresh (#157): nothing is judged while there is no resting pose to
+// judge it against, but the look itself is never cleared by that alone,
+// so it is still reported once relearning finishes and the gaze is read
+// against the new resting pose. specs/LookAway.tla models the rule.
 class LookAwayDetector {
  public:
   // Their defaults live in Config.

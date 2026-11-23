@@ -44,8 +44,13 @@ bool ReplayLookingAway(std::istream& input, std::ostream& output) {
     if (kind == "gesture_no_face") {
       // #141's kGone: no timestamp of its own, as LookAwayReader::OnNoFace
       // has none (src/look_away_reader.cc); `last` is the closest reading
-      // available, the way it reads there too.
-      detector.Update(std::nullopt, tracker.RestingPose(), nullptr, last);
+      // available, the way it reads there too. Before any head_pose line
+      // has set it, `last` is still only its own placeholder, never a
+      // real one (#157, matching LookAwayReader's own had_face_ guard),
+      // so there is nothing yet to open or continue a look from.
+      if (last != -1) {
+        detector.Update(std::nullopt, tracker.RestingPose(), nullptr, last);
+      }
       continue;
     }
     if (kind != "head_pose") {

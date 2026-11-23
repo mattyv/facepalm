@@ -60,14 +60,20 @@ void LookAwayReader::OnFace(const Face& face, int /*width*/, int /*height*/,
   if (!pose) {
     return;  // As a frame with no face: nothing to learn or judge.
   }
+  had_face_ = true;
   last_timestamp_ms_ = timestamp_ms;
   // Read before tracker_.Update, below, which may itself just now relearn
   // the resting pose afresh after a gap (#141): were this frame judged
-  // against that brand new resting pose instead, the one frame that ends
-  // a look spanning the gap (such as a kGone one) would see no resting
+  // against that brand new resting pose instead, it would see no resting
   // pose yet (ExpressionTracker::RestingPose's own three-second
-  // relearning window) and lose the look it was closing, rather than the
-  // next one that opens against the new posture.
+  // relearning window) rather than the one from before the gap, losing a
+  // frame's chance to close the look it was closing. Only a chance, not
+  // the only one any more (#157): LookAwayDetector::Update itself no
+  // longer drops a look that is still open once relearning does start, so
+  // a face reacquired too far off the old resting pose for this one frame
+  // to read as home still reports, once relearning finishes and the gaze
+  // is read against the new one; this is purely a latency optimisation
+  // for the common case, not what makes that correct.
   const std::optional<HeadRotation> resting = tracker_.RestingPose();
   Scores scores{};
   std::ranges::copy(face.blendshapes, scores.begin());
@@ -85,6 +91,15 @@ void LookAwayReader::OnFace(const Face& face, int /*width*/, int /*height*/,
 }
 
 void LookAwayReader::OnNoFace() {
+  if (!had_face_) {
+    // #157: last_timestamp_ms_ is still only its own default, never a
+    // real reading -- there is nothing yet to measure a look's duration
+    // from, so this no-face stretch is not yet meaningful to open or
+    // continue one (LookAwayDetector's own Update would still accept a
+    // real timestamp from its very first frame, same as any other; the
+    // reader just does not have one yet).
+    return;
+  }
   // #141's kGone: no face to compose gaze from. ExpressionTracker's own
   // resting pose is read, not touched -- it keeps whatever it already
   // learned until a face returns and its own Update runs again, the way

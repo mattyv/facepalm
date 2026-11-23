@@ -84,7 +84,13 @@ bool ReplayEyesAndLookAway(std::istream& input, std::ostream& output,
     if (kind == "gesture_no_face") {
       pending_pose.reset();
       output << "no_face " << last << '\n';
-      detector.Update(std::nullopt, tracker.RestingPose(), nullptr, last);
+      // Before any paired frame has set `last`, it is still only its own
+      // placeholder, never a real timestamp (#157, matching
+      // LookAwayReader's own had_face_ guard, src/look_away_reader.cc):
+      // there is nothing yet to open or continue a look from.
+      if (last != -1) {
+        detector.Update(std::nullopt, tracker.RestingPose(), nullptr, last);
+      }
       continue;
     }
     if (kind == "head_pose") {
