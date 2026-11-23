@@ -138,6 +138,8 @@ target_link_libraries(settings_document PUBLIC facepalm_config)
 facepalm_unit(client_token)
 facepalm_unit(client_approvals)
 facepalm_unit(daemon_control)
+facepalm_unit(camera_demand)
+facepalm_unit(menu_state)
 facepalm_unit(preview_lease)
 facepalm_unit(preview_publisher)
 target_link_libraries(preview_publisher PUBLIC preview_lease frame)
@@ -401,7 +403,7 @@ if(FACEPALM_LINUX_TRAY)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
     client_token user_paths daemon_status single_instance calibration_flow calibration
-    cameras_listing Qt6::Widgets Qt6::Network)
+    cameras_listing menu_state Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -460,13 +462,13 @@ if(APPLE)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
     client_token user_paths daemon_status calibration_flow calibration cameras_listing
-    window_activation "-framework AppKit")
+    window_activation menu_state "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm tools/menu/calibration_window_macos.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
       client_approvals client_token user_paths daemon_status calibration_flow calibration
-      cameras_listing window_activation GTest::gtest_main "-framework AppKit")
+      cameras_listing window_activation menu_state GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 
@@ -553,7 +555,7 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     avfoundation_session camera_controller facepalm_config frame_pipeline face_analyzer
     expression_reader gesture_reader look_away_reader screen_context_reader
     screen_context_reporter screen_context_macos reaction_feed feeling_store service
-    unix_socket face_model facepalm_mediapipe preview_lease preview_publisher preview_readings preview_request
+    unix_socket face_model facepalm_mediapipe camera_demand preview_lease preview_publisher preview_readings preview_request
     preview_jpeg "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
@@ -634,7 +636,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     look_away_reader screen_context_reader screen_context_reporter screen_context
     reaction_feed feeling_store service session_camera unix_socket v4l2_hotplug v4l2_session
     face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
-    ${X11_LIBRARIES} ${XRANDR_LIBRARY} preview_lease preview_publisher preview_readings preview_request
+    ${X11_LIBRARIES} ${XRANDR_LIBRARY} camera_demand preview_lease preview_publisher preview_readings preview_request
     preview_jpeg)
   target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
