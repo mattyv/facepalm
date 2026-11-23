@@ -24,6 +24,7 @@
 #include <optional>
 #include <span>
 #include <sstream>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -719,15 +720,21 @@ class Engine : public DaemonController, public DaemonPipeline {
     if (preview_request_path_.empty()) {
       return;
     }
-    std::thread([this] {
-      for (;;) {
+    // A member jthread, not a detached one: it captures `this`, so it must
+    // stop and be joined before the Engine it points into is destroyed.
+    preview_demand_poll_ = std::jthread([this](const std::stop_token& stop) {
+      std::mutex sleep_mutex;
+      std::condition_variable_any sleep;
+      while (!stop.stop_requested()) {
         const bool fresh = IsFreshPreviewRequest(
             preview_request_path_, UnixMilliseconds(), FileModifiedMs);
         control_queue_(
             [this, fresh] { camera_demand_.SetPreviewDemand(fresh); });
-        std::this_thread::sleep_for(kPreviewDemandPollInterval);
+        std::unique_lock lock(sleep_mutex);
+        sleep.wait_for(lock, stop, kPreviewDemandPollInterval,
+                       [] { return false; });
       }
-    }).detach();
+    });
   }
 
   // CameraStatus!Publish. A daemon started with no --status path (such as
@@ -822,6 +829,9 @@ class Engine : public DaemonController, public DaemonPipeline {
   SessionCamera camera_;
   CameraController controller_;
   FramePipeline pipeline_;
+  // Declared last, so it is destroyed first: its destructor requests a
+  // stop and joins the poll before any member the poll reads goes away.
+  std::jthread preview_demand_poll_;
 };
 
 // Approves or revokes a client, for the approve and revoke commands.
