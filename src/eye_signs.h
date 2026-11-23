@@ -36,14 +36,17 @@ std::string_view Name(LongBlink blink);
 std::optional<LongBlink> LongBlinkNamed(std::string_view name);
 
 // Whether the eyes read as widened, held past
-// EyeSignSettings::widened_eyes_hold_ms (#145). #139's nine fixtures carry
-// no cue that deliberately widens the eyes (every session's own eyeWide
-// stays under 0.051 at its peak, test/fixtures/eyes/README.md's own
-// recordings), so EyeSignSettings::widened_eyes_threshold is reasoned from
-// that ceiling, not measured against a true positive (this file's own
-// header comment says so again where the constant is defined); a
-// dedicated fixture would let it be tightened later. kUnknown with no
-// samples at all.
+// EyeSignSettings::widened_eyes_hold_ms, while not reading as a mere
+// sideways glance (EyeSignSettings::widened_eyes_max_side_look, #145,
+// #165's own follow-up): eyeWide alone cannot tell a genuine widen from
+// looking aside, which lifts eyeWide too (test/fixtures/eyes's own
+// gaze_other_screen.probe and reading_other_screen.probe read a eyeWide
+// peak past widened_eyes_threshold while the eyes are turned well past
+// widened_eyes_max_side_look). widened_eyes_threshold and
+// widened_eyes_hold_ms are now measured against a recorded true positive,
+// test/fixtures/eyes/widened_eyes.probe (src/config.h's own header
+// comment on kDefaultEyeSignsWidenedEyesThreshold carries the numbers).
+// kUnknown with no samples at all.
 enum class WidenedEyes : std::uint8_t { kNo, kYes, kUnknown };
 
 // no, yes or unknown.
@@ -65,14 +68,20 @@ struct EyeSignSample {
   // The mean of eyeWideLeft and eyeWideRight (src/eyes_probe.h's own
   // blendshape indices 21 and 22), 0 to 1.
   double eye_wide = 0;
+  // How far the eyes are turned horizontally, whichever direction (#145,
+  // #165): the larger of the mean of eyeLookInLeft/Right (indices 13, 14)
+  // and the mean of eyeLookOutLeft/Right (15, 16), 0 to 1. Guards
+  // WidenedEyes (EyeSignSettings::widened_eyes_max_side_look) against a
+  // sideways glance, which also lifts eyeWide.
+  double side_look = 0;
 };
 
 // Builds one EyeSignSample from `face` at `timestamp_ms`, reading `face`
 // the way src/eyes_gaze_replay.cc's own FaceFromEyes-built Face already
-// is: eyeWideLeft and eyeWideRight at indices 21 and 22
-// (src/eyes_probe.h), and EyeSignalFrom's own blink flag at
-// `blink_threshold` (src/eye_gaze.h, the same threshold
-// EyeGazeTracker::Settings takes). Shared by
+// is: eyeWideLeft and eyeWideRight at indices 21 and 22, eyeLookIn and
+// eyeLookOut at 13/14 and 15/16 (all src/eyes_probe.h's own indices), and
+// EyeSignalFrom's own blink flag at `blink_threshold` (src/eye_gaze.h,
+// the same threshold EyeGazeTracker::Settings takes). Shared by
 // src/screen_context_reader.h's own live OnFace (#165) and this file's
 // own fixture-replay tests, so neither reads the blendshapes a second,
 // possibly different, way.
@@ -88,6 +97,10 @@ struct EyeSignSettings {
   std::int64_t long_blink_ms;
   double widened_eyes_threshold;
   std::int64_t widened_eyes_hold_ms;
+  // The ceiling on EyeSignSample::side_look a widened run must stay under
+  // (#145, #165): keeps a held sideways glance, which also lifts eyeWide,
+  // from reading as widened eyes.
+  double widened_eyes_max_side_look;
   // BlinkRate reads kUnknown under this, the same "not enough to judge
   // yet" guard src/eye_gaze.h's own resting_ms takes, rather than let a
   // short window's own single blink read as an implausibly high rate.
@@ -110,7 +123,9 @@ struct EyeSigns {
 // under `settings.min_window_ms`; LongBlink from the longest such run's
 // own span, at or past `settings.long_blink_ms`; WidenedEyes from the
 // longest run of samples at or past `settings.widened_eyes_threshold`'s
-// own `eye_wide`, at or past `settings.widened_eyes_hold_ms`. Every sign
+// own `eye_wide` *and* under `settings.widened_eyes_max_side_look`'s own
+// `side_look` (#165: a held sideways glance also lifts eyeWide), at or
+// past `settings.widened_eyes_hold_ms`. Every sign
 // is kUnknown with no samples at all. `samples` need not come from one
 // steady frame rate: each run's own span is read from its first and last
 // sample's own timestamps, not counted in frames.

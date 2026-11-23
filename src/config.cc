@@ -401,21 +401,26 @@ std::optional<std::string> SetEyeSignsMs(const Setting& setting,
   return std::nullopt;
 }
 
-// Sets eye_signs.widened_eyes_threshold (#145) from `value`, or returns
-// why it cannot.
-std::optional<std::string> SetEyeSignsWidenedEyesThreshold(
-    std::string_view value, Config& config) {
-  const std::optional<float> threshold = Number<float>(value);
+// Sets eye_signs.widened_eyes_threshold or
+// eye_signs.widened_eyes_max_side_look (#145, #165) from `setting`, or
+// returns why it cannot. `setting.name` is one of those two, as SetEyeSigns
+// has already checked.
+std::optional<std::string> SetEyeSignsFraction(const Setting& setting,
+                                               Config& config) {
+  const std::optional<float> fraction = Number<float>(setting.value);
   // isnan too: from_chars reads "nan", and NaN passes the comparisons.
-  if (!threshold || std::isnan(*threshold) || *threshold < 0 ||
-      *threshold > 1) {
+  if (!fraction || std::isnan(*fraction) || *fraction < 0 || *fraction > 1) {
     return "expected a number from 0 to 1";
   }
-  config.eye_signs_widened_eyes_threshold = *threshold;
+  if (setting.name == "eye_signs.widened_eyes_threshold") {
+    config.eye_signs_widened_eyes_threshold = *fraction;
+  } else {
+    config.eye_signs_widened_eyes_max_side_look = *fraction;
+  }
   return std::nullopt;
 }
 
-// Sets one of the three eye_signs.* settings (#145) from `setting`, or
+// Sets one of the six eye_signs.* settings (#145, #165) from `setting`, or
 // returns why it cannot. Kept apart from Set so that function's own
 // cognitive complexity stays under the project's limit.
 std::optional<std::string> SetEyeSigns(const Setting& setting, Config& config) {
@@ -428,8 +433,9 @@ std::optional<std::string> SetEyeSigns(const Setting& setting, Config& config) {
       name == "eye_signs.min_window_ms") {
     return SetEyeSignsMs(setting, config);
   }
-  if (name == "eye_signs.widened_eyes_threshold") {
-    return SetEyeSignsWidenedEyesThreshold(setting.value, config);
+  if (name == "eye_signs.widened_eyes_threshold" ||
+      name == "eye_signs.widened_eyes_max_side_look") {
+    return SetEyeSignsFraction(setting, config);
   }
   return "unknown setting " + std::string(name);
 }

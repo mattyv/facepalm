@@ -135,16 +135,40 @@ struct Config {
   // blinks hold it for 4,264 ms and 5,264 ms. 500 ms clears the ordinary
   // blinks by 2.5x and stays 8.5x under the shortest long one.
   //
-  // kDefaultEyeSignsWidenedEyesThreshold (0.15) and
-  // kDefaultEyeSignsWidenedEyesHoldMs (200): no #139 fixture carries a cue
-  // that deliberately widens the eyes, so neither number is measured
-  // against a true positive, only reasoned from the absence of one --
-  // every fixture's own eyeWide peaks at 0.051 at most
-  // (reading_other_screen.probe), so 0.15 clears that ceiling 3x over,
-  // and 200 ms matches kDefaultExpressionsHoldMs, the hold this codebase
-  // already uses to tell a held expression from a flicker. A dedicated
-  // "widen the eyes" fixture would let this be tuned against a real
-  // positive instead.
+  // kDefaultEyeSignsWidenedEyesThreshold (0.025),
+  // kDefaultEyeSignsWidenedEyesHoldMs (1000) and
+  // kDefaultEyeSignsWidenedEyesMaxSideLook (0.2): measured against #165's
+  // own tenth fixture, test/fixtures/eyes/widened_eyes.probe, which carries
+  // a genuine "widen your eyes" cue (the original nine do not). eye_wide
+  // (the mean of eyeWideLeft/Right) over that fixture's own four 6 s cue
+  // windows: ahead (resting) mean 0.007, max 0.013; widen mean 0.015, max
+  // 0.031; relax mean 0.007; widen2 mean 0.022, max 0.030 -- a weak signal
+  // for this user, peaking at 0.031, but clearly above the ahead/relax
+  // baseline. 0.025 sits between that baseline and both widen cues' own
+  // means.
+  //
+  // eye_wide alone cannot tell this from a sideways glance, which lifts it
+  // too: every other fixture's own eye_wide peaks higher still -- up to
+  // 0.051 (reading_other_screen.probe) and 0.036 (gaze_other_screen.probe)
+  // -- and holds there for long runs (91 and 99 frames at or past 0.02,
+  // against widened_eyes.probe's own 39). What tells them apart is how far
+  // the eyes are turned horizontally (EyeSignSample::side_look, the larger
+  // of mean eyeLookIn and mean eyeLookOut): at eye_wide >= 0.02, it reads
+  // 0.08 for widened_eyes.probe and 0.09 for thinking_aversion.probe,
+  // against 0.35 to 0.36 for the two other-screen fixtures.
+  // widened_eyes_max_side_look (0.2) sits well clear of both groups.
+  //
+  // widened_eyes_hold_ms (1000, up from the old reasoned 200) matches
+  // widened_eyes.probe's own longest run at or past the threshold (39
+  // frames, about 2.6 s at 15 fps), comfortably past 1000 ms while staying
+  // clear of thinking_aversion.probe's own longest run at the same bar
+  // (4 frames): a brief flicker, not a held widen.
+  //
+  // This sign stays weak for this user specifically (its own true positive
+  // peaks at 0.031, a small lift over a 0.007 baseline); it only ever
+  // feeds the personal read's own tuning (src/tuning.h), never
+  // specs/FeelingBeat.tla's own Rule, so an occasionally silent sign costs
+  // nothing but a feature that rarely fires.
   //
   // kDefaultEyeSignsMinWindowMs (3000): BlinkRate reads unknown under
   // this, the same "not enough to judge yet" guard eye_gaze.resting_ms
@@ -152,8 +176,9 @@ struct Config {
   // implausibly high rate.
   static constexpr float kDefaultEyeSignsElevatedBlinksPerMinute = 14.0F;
   static constexpr int kDefaultEyeSignsLongBlinkMs = 500;
-  static constexpr float kDefaultEyeSignsWidenedEyesThreshold = 0.15F;
-  static constexpr int kDefaultEyeSignsWidenedEyesHoldMs = 200;
+  static constexpr float kDefaultEyeSignsWidenedEyesThreshold = 0.025F;
+  static constexpr int kDefaultEyeSignsWidenedEyesHoldMs = 1000;
+  static constexpr float kDefaultEyeSignsWidenedEyesMaxSideLook = 0.2F;
   static constexpr int kDefaultEyeSignsMinWindowMs = 3000;
 
   int frames_per_second = kDefaultFramesPerSecond;
@@ -207,6 +232,8 @@ struct Config {
   int eye_signs_long_blink_ms = kDefaultEyeSignsLongBlinkMs;
   float eye_signs_widened_eyes_threshold = kDefaultEyeSignsWidenedEyesThreshold;
   int eye_signs_widened_eyes_hold_ms = kDefaultEyeSignsWidenedEyesHoldMs;
+  float eye_signs_widened_eyes_max_side_look =
+      kDefaultEyeSignsWidenedEyesMaxSideLook;
   int eye_signs_min_window_ms = kDefaultEyeSignsMinWindowMs;
 };
 
@@ -236,8 +263,9 @@ struct Config {
 // eye_signs.long_blink_ms and eye_signs.widened_eyes_hold_ms (a whole
 // number from 0 to 10000, #145), eye_signs.min_window_ms (a whole number
 // from 1 to 10000, #145, #171: 0 would divide EyeSignsOf's own blink rate
-// by a zero-length window), and eye_signs.widened_eyes_threshold (0 to
-// 1). Returns the config, or
+// by a zero-length window), and eye_signs.widened_eyes_threshold and
+// eye_signs.widened_eyes_max_side_look (0 to 1, the latter #145/#165).
+// Returns the config, or
 // nothing with `error` naming the line, for an unknown name, a bad value, a
 // repeated name or a line with no `=`.
 std::optional<Config> ParseConfig(std::string_view text, std::string& error);
