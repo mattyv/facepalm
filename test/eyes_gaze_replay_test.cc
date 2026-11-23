@@ -91,10 +91,45 @@ TEST(EyesGazeReplayTest, RejectsAMalformedHeadPoseLine) {
   EXPECT_FALSE(ok);
 }
 
+TEST(EyesGazeReplayTest, RejectsAHeadPoseLineWithTrailingGarbage) {
+  bool ok = true;
+  Replay("head_pose 10 1 2 3 4\n", &ok);
+  EXPECT_FALSE(ok);
+}
+
+TEST(EyesGazeReplayTest, RejectsAHeadPoseTimestampThatDoesNotIncrease) {
+  std::ostringstream log;
+  WriteFrame(log, 1000, 0, 0, {});
+  // A second head_pose at the same timestamp as the frame already replayed,
+  // with no eyes line needed to catch it: `last` already holds 1000.
+  log << "head_pose 1000 0 0 0\n";
+  bool ok = true;
+  Replay(log.str(), &ok);
+  EXPECT_FALSE(ok);
+}
+
+TEST(EyesGazeReplayTest, RejectsAMalformedEyesLine) {
+  std::ostringstream log;
+  log << "head_pose 1000 0 0 0\n";
+  log << "eyes 1000 0 0\n";  // Too few of FormatEyesLine's own 32 numbers.
+  bool ok = true;
+  Replay(log.str(), &ok);
+  EXPECT_FALSE(ok);
+}
+
 TEST(EyesGazeReplayTest, FailsWhenTheInputCannotBeRead) {
   std::istringstream input("head_pose 10 1 2 3\n");
   input.setstate(std::ios::badbit);
   std::ostringstream output;
+  EXPECT_FALSE(ReplayEyesAndLookAway(input, output));
+}
+
+TEST(EyesGazeReplayTest, FailsWhenTheOutputCannotBeWritten) {
+  std::ostringstream log;
+  WriteFrame(log, 1000, 0, 0, {});
+  std::istringstream input(log.str());
+  std::ostringstream output;
+  output.setstate(std::ios::badbit);
   EXPECT_FALSE(ReplayEyesAndLookAway(input, output));
 }
 
