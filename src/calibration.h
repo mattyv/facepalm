@@ -91,6 +91,17 @@ class CalibrationController {
     int screen = 0;             // 0-based, when neither resting nor gains.
     CalibrationPoint point = CalibrationPoint::kCentre;  // When a screen step.
     int screens = 0;  // Screens just calibrated; set only when done.
+    // Non-empty only right after a Next() this step refused (#177): the
+    // daemon's own hint why, with the step reset for a fresh attempt (or,
+    // for a save that failed, left exactly as captured so the same save
+    // can be retried) -- every field above still describes the step now
+    // being retried. Empty whenever this reply is not reporting a
+    // refusal. CalibrationMenu.tla's NextRefused.
+    // = {} looks redundant (std::string already default-constructs empty)
+    // but is not: without it, clang's -Wmissing-designated-field-
+    // initializers flags every partial `Status{...}` a test or call site
+    // builds that leaves this field out, which is most of them.
+    std::string refusal = {};  // NOLINT(readability-redundant-member-init)
   };
 
   virtual ~CalibrationController() = default;
@@ -101,11 +112,14 @@ class CalibrationController {
   virtual std::optional<Status> Start(int screens, std::string& error) = 0;
   // Finishes the step now prompted and moves to the next, saving the
   // profile and ending the session once the last is finished. nullopt,
-  // with `error`, when no session is running, the step has not yet
-  // captured a sample, or the sample is too weak to use (#137: the gains
-  // step with too little head travel, or a screen's point too close to
-  // its own centre) -- either way the step stays where it is, waiting on
-  // a fresh capture.
+  // with `error`, only when no session is running at all (#177: the
+  // camera went away, the session was cancelled, or none was ever
+  // started) -- there is nothing left to retry. Everything that instead
+  // keeps the step where it is for a fresh attempt -- no pose captured
+  // yet, #137's weak-step checks (too little head travel in the gains
+  // step, or a screen's point too close to its own centre), or the
+  // profile's own save failing -- returns a normal Status, with
+  // `Status::refusal` naming why, rather than ending the session.
   virtual std::optional<Status> Next(std::string& error) = 0;
   // Discards the session in progress; the saved profile is untouched.
   // False, with `error`, when no session is running.
@@ -203,11 +217,12 @@ class CalibrationSession : public CalibrationController {
            (screens_ * static_cast<int>(kCalibrationPoints.size()));
   }
   [[nodiscard]] Status CurrentStatus() const;
-  // Next's own body once a sample is captured: nullopt, with `error`, for
-  // a weak step (resetting it for a retry) or a save failure; the
-  // Status to return otherwise. Lower cognitive complexity than folding
-  // this into Next itself.
-  std::optional<Status> AdvanceOrRefuse(std::string& error);
+  // Next's own body once a sample is captured: a weak step (#137, reset
+  // for a retry) or a save failure reports a Status with `refusal` set,
+  // rather than ending the session (#177); the Status to return
+  // otherwise. Lower cognitive complexity than folding this into Next
+  // itself.
+  Status AdvanceOrRefuse();
   // Whether the step now captured is too weak to use (#137), and the
   // gain or point it would otherwise have stored.
   [[nodiscard]] bool RestingStep() const { return step_ == kRestingStep; }

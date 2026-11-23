@@ -306,14 +306,22 @@ std::string CalibrationStatusJson(const CalibrationController::Status& status) {
                      std::to_string(status.index) + R"(,"total":)" +
                      std::to_string(status.total);
   if (status.resting_step) {
-    json += R"(,"step":"resting"})";
+    json += R"(,"step":"resting")";
   } else if (status.gains_step) {
-    json += R"(,"step":"gains"})";
+    json += R"(,"step":"gains")";
   } else {
     json += R"(,"step":"screen","screen":)" + std::to_string(status.screen) +
-            R"(,"point":)" + Quoted(Name(status.point)) + "}";
+            R"(,"point":)" + Quoted(Name(status.point));
   }
-  return json + "}";
+  // #177: present only for a Next() this step refused, naming why, rather
+  // than overloading the error reply the old design used for that (which
+  // a client could not tell apart from the session itself having ended);
+  // absent otherwise, so an older client reading this line ignores it and
+  // reads the step exactly as it did before.
+  if (!status.refusal.empty()) {
+    json += R"(,"refused":)" + Quoted(status.refusal);
+  }
+  return json + "}}";
 }
 
 }  // namespace facepalm::protocol

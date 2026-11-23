@@ -140,6 +140,20 @@ NSString* ResultText(int screens) {
   return [NSString stringWithFormat:@"Calibrated %d screen%s.", screens, screens == 1 ? "" : "s"];
 }
 
+// The daemon's own hint on a refused step (#177), sentence-cased, with the
+// retry it still invites: "Look further toward that corner, away from the
+// centre. Click Next to try again." Shown in place of StepPrompt while
+// view.hint is set, so the person sees why the step did not advance
+// without the wizard ending over it.
+NSString* RefusalText(const std::string& hint) {
+  NSString* reason = [NSString stringWithUTF8String:hint.c_str()];
+  if (reason.length > 0) {
+    reason = [[[reason substringToIndex:1] uppercaseString]
+        stringByAppendingString:[reason substringFromIndex:1]];
+  }
+  return [NSString stringWithFormat:@"%@. Click Next to try again.", reason];
+}
+
 }  // namespace
 
 @interface CalibrationWindowController ()
@@ -241,7 +255,8 @@ NSString* ResultText(int screens) {
   switch (view.state) {
     case facepalm::CalibrationFlow::State::kPrompting:
       [self moveToScreenForStep:view];
-      self.label.stringValue = StepPrompt(self->_primaryScreen, view);
+      self.label.stringValue =
+          view.hint.empty() ? StepPrompt(self->_primaryScreen, view) : RefusalText(view.hint);
       self.primaryButton.title = @"Next";
       self.primaryButton.hidden = NO;
       self.secondaryButton.title = @"Cancel";

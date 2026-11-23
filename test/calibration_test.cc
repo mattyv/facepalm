@@ -21,6 +21,7 @@ namespace {
 using ::testing::Eq;
 using ::testing::IsEmpty;
 using ::testing::NiceMock;
+using ::testing::Not;
 using ::testing::Return;
 
 HeadRotation Pose(double yaw, double pitch) {
@@ -137,13 +138,18 @@ TEST_F(StartTest, RefusesToStartTwice) {
 
 using NoAdvanceWithoutCaptureTest = CalibrationSessionTest;
 
+// #177: refused, not failed -- the session stays running on this same
+// step, for a retry once a pose is captured.
 TEST_F(NoAdvanceWithoutCaptureTest, RefusesNextBeforeAnyPose) {
   std::string start_error;
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
 
   std::string error;
-  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
-  EXPECT_THAT(error, Eq("no pose captured yet for this step"));
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_THAT(status->refusal, Eq("no pose captured yet for this step"));
+  EXPECT_TRUE(status->resting_step);
 }
 
 TEST_F(NoAdvanceWithoutCaptureTest, EachStepNeedsItsOwnCapture) {
@@ -155,8 +161,11 @@ TEST_F(NoAdvanceWithoutCaptureTest, EachStepNeedsItsOwnCapture) {
 
   // The next step (gains) has not been captured, even though resting was.
   std::string error;
-  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
-  EXPECT_THAT(error, Eq("no pose captured yet for this step"));
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_THAT(status->refusal, Eq("no pose captured yet for this step"));
+  EXPECT_TRUE(status->gains_step);
 }
 
 TEST_F(NoAdvanceWithoutCaptureTest, RefusesNextWithNoSessionRunning) {
@@ -179,9 +188,12 @@ TEST_F(NoSaveWithWeakStepTest, RefusesAGainsStepWithTooLittleHeadTravel) {
   session_.Update(Pose(0.5, 0), Eye(-0.01, 0));
 
   std::string error;
-  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
-  EXPECT_THAT(error,
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_THAT(status->refusal,
               Eq("turn your head further while you keep looking at the dot"));
+  EXPECT_TRUE(status->gains_step);
 }
 
 TEST_F(NoSaveWithWeakStepTest, ARefusedGainsStepCanBeRetried) {
@@ -192,7 +204,10 @@ TEST_F(NoSaveWithWeakStepTest, ARefusedGainsStepCanBeRetried) {
   ASSERT_TRUE(session_.Next(resting_error).has_value());
   session_.Update(Pose(0, 0), Eye(0, 0));
   std::string weak_error;
-  ASSERT_THAT(session_.Next(weak_error), Eq(std::nullopt));
+  const std::optional<CalibrationController::Status> weak_status =
+      session_.Next(weak_error);
+  ASSERT_TRUE(weak_status.has_value()) << weak_error;
+  EXPECT_THAT(weak_status->refusal, Not(IsEmpty()));
 
   std::string error;
   const std::optional<CalibrationController::Status> status =
@@ -213,8 +228,12 @@ TEST_F(NoSaveWithWeakStepTest, RefusesARestingStepWhereEveryFrameBlinked) {
   session_.Update(Pose(0, 0), Eye(0, 0, /*blink=*/true));
 
   std::string error;
-  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
-  EXPECT_THAT(error, Eq("keep your eyes open while you look at the dot"));
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_THAT(status->refusal,
+              Eq("keep your eyes open while you look at the dot"));
+  EXPECT_TRUE(status->resting_step);
 }
 
 TEST_F(NoSaveWithWeakStepTest, ARefusedRestingStepCanBeRetried) {
@@ -222,7 +241,10 @@ TEST_F(NoSaveWithWeakStepTest, ARefusedRestingStepCanBeRetried) {
   ASSERT_TRUE(session_.Start(1, start_error).has_value());
   session_.Update(Pose(0, 0), Eye(0, 0, /*blink=*/true));
   std::string weak_error;
-  ASSERT_THAT(session_.Next(weak_error), Eq(std::nullopt));
+  const std::optional<CalibrationController::Status> weak_status =
+      session_.Next(weak_error);
+  ASSERT_TRUE(weak_status.has_value()) << weak_error;
+  EXPECT_THAT(weak_status->refusal, Not(IsEmpty()));
 
   session_.Update(Pose(0, 0), EyeSignal{});
   std::string error;
@@ -250,9 +272,14 @@ TEST_F(NoSaveWithWeakStepTest, RefusesACornerTooCloseToItsOwnCentre) {
   session_.Update(Pose(0.5, 0), EyeSignal{});
 
   std::string error;
-  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
-  EXPECT_THAT(error,
+  const std::optional<CalibrationController::Status> status =
+      session_.Next(error);
+  ASSERT_TRUE(status.has_value()) << error;
+  EXPECT_THAT(status->refusal,
               Eq("look further toward that corner, away from the centre"));
+  // Still the same corner, not a new one (#177): the step was reset, not
+  // advanced.
+  EXPECT_THAT(status->point, Eq(CalibrationPoint::kTopLeft));
 }
 
 TEST_F(NoSaveWithWeakStepTest, ARefusedCornerCanBeRetried) {
@@ -268,7 +295,11 @@ TEST_F(NoSaveWithWeakStepTest, ARefusedCornerCanBeRetried) {
   ASSERT_TRUE(session_.Next(centre_error).has_value()) << centre_error;
   session_.Update(Pose(0.5, 0), EyeSignal{});
   std::string weak_error;
-  ASSERT_THAT(session_.Next(weak_error), Eq(std::nullopt));
+  const std::optional<CalibrationController::Status> weak_status =
+      session_.Next(weak_error);
+  ASSERT_TRUE(weak_status.has_value()) << weak_error;
+  EXPECT_THAT(weak_status->refusal, Not(IsEmpty()));
+  EXPECT_THAT(weak_status->point, Eq(CalibrationPoint::kTopLeft));
 
   session_.Update(Pose(20, 20), EyeSignal{});
   std::string error;
@@ -547,8 +578,11 @@ TEST_F(CalibrationWalksEveryTargetTest, AFailedSaveLeavesTheStepRunning) {
   }
   session_.Update(Pose(50, 50), EyeSignal{});
 
-  EXPECT_THAT(session_.Next(error), Eq(std::nullopt));
-  EXPECT_THAT(error, Eq("disk full"));
+  const std::optional<CalibrationController::Status> refused_status =
+      session_.Next(error);
+  ASSERT_TRUE(refused_status.has_value()) << error;
+  EXPECT_THAT(refused_status->refusal, Eq("disk full"));
+  EXPECT_FALSE(refused_status->done);
 
   // The capture was not lost: finishing can be retried.
   std::string retry_error;
@@ -675,7 +709,11 @@ TEST_F(CalibrationSessionTest,
     std::string error;
     const std::optional<CalibrationController::Status> status =
         session.Next(error);
-    if (!status.has_value()) {
+    // #177: a refusal (not yet captured by the frames thread) is a normal
+    // Status now, never nullopt, since the session stays running; only a
+    // real failure (none this test ever causes) would be nullopt.
+    ASSERT_TRUE(status.has_value()) << error;
+    if (!status->refusal.empty()) {
       continue;  // Not yet captured by the frames thread; retry.
     }
     done = status->done;

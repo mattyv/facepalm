@@ -358,6 +358,41 @@ TEST(JsonTest, WritesAScreenStep) {
          R"("total":6,"step":"screen","screen":0,"point":"top_right"}})"));
 }
 
+// #177: a refused Next() carries the daemon's own hint alongside the
+// step being retried, rather than an {"error":...} reply the client could
+// not tell apart from the session itself having ended.
+TEST(JsonTest, WritesARefusalHint) {
+  const CalibrationController::Status status{
+      .running = true,
+      .index = 2,
+      .total = 7,
+      .resting_step = true,
+      .refusal = "keep your eyes open while you look at the dot"};
+
+  EXPECT_THAT(
+      CalibrationStatusJson(status),
+      Eq(R"({"ok":true,"calibration":{"state":"running","index":2,)"
+         R"("total":7,"step":"resting",)"
+         R"("refused":"keep your eyes open while you look at the dot"}})"));
+}
+
+// A step's own fields -- not just resting's -- carry "refused" the same
+// way, and it is quoted (Quoted()) like every other string field.
+TEST(JsonTest, WritesARefusalHintOnAScreenStep) {
+  const CalibrationController::Status status{
+      .running = true,
+      .index = 3,
+      .total = 6,
+      .screen = 0,
+      .point = CalibrationPoint::kTopRight,
+      .refusal = "disk \"full\""};
+
+  EXPECT_THAT(CalibrationStatusJson(status),
+              Eq(R"({"ok":true,"calibration":{"state":"running","index":3,)"
+                 R"("total":6,"step":"screen","screen":0,"point":"top_right",)"
+                 R"("refused":"disk \"full\""}})"));
+}
+
 TEST(JsonTest, WritesDoneAndIdle) {
   EXPECT_THAT(
       CalibrationStatusJson({.running = false, .done = true, .screens = 2}),
