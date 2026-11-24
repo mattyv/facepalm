@@ -31,6 +31,9 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CalibrationMenu.cfg` | one menu flow against one daemon session, a cold start's camera bounded to 2 retries, every guard on | holds, with `ClosingCompletes` and `CameraWaitResolves` | 78 |
 | `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,864 |
 | `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
+| `CameraStatus.cfg` | one daemon, the camera wanted and released, the menu polling | holds, with `CameraOnLeadsToDisplayOn` and `CameraOffLeadsToDisplayOff` | 4 |
+| `CameraStatus_Crash.cfg` | one crash or clean shutdown, one restart (#184) | holds, with `NeverStaleWhileRunning` and `CameraOffLeadsToDisplayOff` | 21 |
+| `CameraStatus_OpenFailure.cfg` | one failed camera open and its recovery (#185) | holds, with `OpenFailLeadsToDisplayOff` and `OpenRecoversLeadsToDisplayOn` | 10 |
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none, #142's gaze inert (`MaxLooks = 0`, one kind) | holds | 3,815,485 |
