@@ -228,7 +228,11 @@ useless (#136). Choosing **Calibrate…** from the 🤦 menu or the tray
 then steps through the resting pose, the gains step, and each screen's
 centre and four corners with Next and Cancel, moving itself onto the
 screen a step names and naming that screen (its position and display
-name) in the prompt, for every screen the computer has (#135); closing
+name) in the prompt, for every screen the computer has (#135). On Linux,
+the name uses the model and manufacturer reported by Qt; when the model is
+unavailable it says built-in, external, or display where the connector type
+permits (#199). The position helps distinguish identical models. On macOS it
+uses the name reported by AppKit. Closing
 the window at any point, whether by Cancel or its own close control, asks
 the daemon to cancel cleanly, so the old profile is always what is left
 in place unless every step finished, and the wizard ends with a plain

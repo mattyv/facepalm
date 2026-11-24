@@ -191,6 +191,7 @@ facepalm_unit(settings_config_path)
 # of tools/menu/main.mm's FormatFloat/saveSettings: and main_linux.cc's
 # Number.
 facepalm_unit(menu_field_format)
+facepalm_unit(screen_label)
 # The settings file's size limit and "did it change while this window
 # was open" check (#64), pulled out of tools/menu/main.mm's
 # ReadSettingsFile/SaveSettingsFile and main_linux.cc's ReadConfig/Save,
@@ -453,7 +454,7 @@ if(FACEPALM_LINUX_TRAY)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
     client_token user_paths daemon_status single_instance calibration_flow calibration socket_ready
-    cameras_listing menu_state settings_config_path menu_field_format settings_save_guard
+    cameras_listing menu_state settings_config_path menu_field_format screen_label settings_save_guard
     calibrate_client_token Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop

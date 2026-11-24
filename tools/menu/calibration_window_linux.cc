@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "src/calibration.h"
+#include "src/screen_label.h"
 
 namespace facepalm_menu {
 namespace {
@@ -91,16 +92,13 @@ QString ScreenPosition(const QScreen* screen) {
                 : QStringLiteral("the screen below");
 }
 
-// "the screen to the left (HDMI-1)", naming both the screen's position
-// and Qt's own name for it (#135, #137) -- the closest a Linux display
-// has to AppKit's localizedName -- or just the position for a screen
-// with none.
+// Model and position are presentation only; screen ordering is unchanged.
 QString ScreenDescription(const QScreen* screen) {
-  QString position = ScreenPosition(screen);
-  if (screen->name().isEmpty()) {
-    return position;
-  }
-  return QStringLiteral("%1 (%2)").arg(position, screen->name());
+  return QString::fromStdString(facepalm::ScreenLabel(
+      {.manufacturer = screen->manufacturer().toStdString(),
+       .model = screen->model().toStdString(),
+       .connector = screen->name().toStdString(),
+       .position = ScreenPosition(screen).toStdString()}));
 }
 
 // "Calibrated 1 screen." or "Calibrated 3 screens." (#135, #137): the
