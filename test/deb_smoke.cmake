@@ -31,12 +31,16 @@ endif()
 execute_process(COMMAND dpkg-deb -f "${package}" Depends OUTPUT_STRIP_TRAILING_WHITESPACE
   OUTPUT_VARIABLE depends RESULT_VARIABLE result)
 check("${result}" "read runtime dependencies")
-foreach(dependency libc6 libqt6widgets qt6-qpa-plugins qt6-wayland)
+set(dependencies libc6 libqt6widgets qt6-qpa-plugins qt6-wayland)
+if(UBUNTU_PACKAGE)
+  list(APPEND dependencies nodejs libegl1 libgles2 curl ca-certificates)
+endif()
+foreach(dependency IN LISTS dependencies)
   if(NOT depends MATCHES "${dependency}")
     fail("missing runtime dependency ${dependency}: ${depends}")
   endif()
 endforeach()
-if(depends MATCHES "nodejs|npm|qt6-base-dev")
+if(depends MATCHES "npm|qt6-base-dev" OR (NOT UBUNTU_PACKAGE AND depends MATCHES "nodejs"))
   fail("unexpected developer dependency: ${depends}")
 endif()
 
@@ -54,7 +58,17 @@ set(files
 file(GLOB_RECURSE packaged_files RELATIVE "${payload}" "${payload}/*")
 list(SORT files)
 list(SORT packaged_files)
-if(NOT packaged_files STREQUAL files)
+if(UBUNTU_PACKAGE)
+  list(APPEND files usr/bin/facepalm-install-model usr/bin/facepalm-daemon usr/lib/facepalm/libmediapipe.so
+    usr/share/facepalm/MEDIAPIPE-LICENSE usr/share/facepalm/mcp/main.js
+    usr/share/facepalm/mcp/feeling-widget.html
+    usr/share/facepalm/mcp/node_modules/@modelcontextprotocol/sdk/package.json)
+  foreach(item IN LISTS files)
+    if(NOT EXISTS "${payload}/${item}")
+      fail("missing complete package file: ${item}")
+    endif()
+  endforeach()
+elseif(NOT packaged_files STREQUAL files)
   fail("unexpected package contents: ${packaged_files}")
 endif()
 foreach(script preinst postinst prerm postrm)
@@ -89,6 +103,18 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -E env QT_QPA_PLATFORM=offscreen
 check("${result}" "launch tray with its installed Qt runtime")
 if(NOT version MATCHES "facepalm-menu [0-9]+\\.[0-9]+\\.[0-9]+")
   fail("unexpected tray version output: ${version}")
+endif()
+
+if(UBUNTU_PACKAGE)
+  execute_process(COMMAND "${payload}/usr/bin/facepalm-daemon"
+    RESULT_VARIABLE result OUTPUT_QUIET ERROR_QUIET)
+  if(NOT result STREQUAL "2")
+    fail("daemon failed to load or reject missing consent: ${result}")
+  endif()
+  execute_process(COMMAND /usr/bin/node --input-type=module -e
+    "import('${payload}/usr/share/facepalm/mcp/server.js')"
+    RESULT_VARIABLE result)
+  check("${result}" "load packaged MCP adapter")
 endif()
 
 set(log "")
