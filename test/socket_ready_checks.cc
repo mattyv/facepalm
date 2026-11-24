@@ -75,6 +75,15 @@ TEST_F(RealSocketTest, MissingAndRefusedAreNotReady) {
   EXPECT_FALSE(SocketReady(path_));
 }
 
+#if defined(__linux__) || defined(__APPLE__)
+void ExpectPeerIsCurrentProcess(const SocketProbeResult& result) {
+  if (!result.peer_pid.has_value()) {
+    FAIL() << "Expected result.peer_pid to be present";
+  }
+  EXPECT_EQ(result.peer_pid.value(), getpid());
+}
+#endif
+
 TEST_F(RealSocketTest, SuccessfulProbeSendsNoBytes) {
   const int listener = Socket();
   ASSERT_GE(listener, 0);
@@ -83,7 +92,11 @@ TEST_F(RealSocketTest, SuccessfulProbeSendsNoBytes) {
       bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)),
       0);
   ASSERT_EQ(listen(listener, 1), 0);
-  ASSERT_TRUE(SocketReady(path_));
+  const auto result = ProbeSocketReady(path_);
+  ASSERT_TRUE(result.ready);
+#if defined(__linux__) || defined(__APPLE__)
+  ExpectPeerIsCurrentProcess(result);
+#endif
   const int probe = accept(listener, nullptr, nullptr);
   ASSERT_GE(probe, 0);
   fds_.push_back(probe);

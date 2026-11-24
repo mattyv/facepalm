@@ -9,9 +9,9 @@ namespace facepalm {
 // One camera the system can use, for the person to choose from (item 10 of
 // #61, #13). `id` is stable across a reboot (macOS: AVCaptureDevice's
 // uniqueID; Linux: v4l2_capability's bus_info), so a choice saved in
-// Config survives one. `built_in` is the device the empty choice (the
-// default) means: never a Continuity Camera or other external device,
-// chosen silently.
+// Config survives one. `built_in` reflects what the platform can establish.
+// macOS defaults to a built-in camera; Linux may choose a usable USB camera
+// because V4L2 bus information does not reliably identify integrated devices.
 struct CameraDevice {
   std::string id;
   std::string name;

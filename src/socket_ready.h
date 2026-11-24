@@ -6,6 +6,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <cstdint>
+#include <optional>
 #include <string>
 
 namespace facepalm {
@@ -24,6 +26,17 @@ struct SocketReadyCalls {
   int (*getsockopt)(int, int, int, void*, socklen_t*) = ::getsockopt;
   int (*close)(int) = ::close;
 };
+
+// A connected socket proves transport readiness. Its peer PID is optional:
+// the platform may not provide it, and a missing PID is never an identity.
+struct SocketProbeResult {
+  bool ready;
+  std::optional<std::int64_t> peer_pid;
+};
+
+SocketProbeResult ProbeSocketReady(
+    const std::string& path,
+    const SocketReadyCalls& calls = SocketReadyCalls{});
 
 // Probes a Unix socket without sending a request or starting a service.
 // A connection in progress is given at most 50 ms; failure or interruption

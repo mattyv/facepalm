@@ -162,6 +162,7 @@ NSString* RefusalText(const std::string& hint) {
 @property(nonatomic, strong) NSButton* primaryButton;
 @property(nonatomic, strong) NSButton* secondaryButton;
 @property(nonatomic) BOOL started;
+@property(nonatomic, strong) NSTimer* failureTimer;
 @end
 
 @implementation CalibrationWindowController {
@@ -175,19 +176,34 @@ NSString* RefusalText(const std::string& hint) {
   // would reorder and rename screens mid-session instead of keeping one
   // fixed reference throughout.
   NSScreen* _primaryScreen;
+  std::function<std::string()> _cameraFailure;
+  std::string _failureReason;
 }
 
-- (instancetype)initWithSocketPath:(std::string)socketPath token:(std::string)token {
+- (instancetype)initWithSocketPath:(std::string)socketPath
+                             token:(std::string)token
+                     cameraFailure:(std::function<std::string()>)cameraFailure {
   self = [super init];
   if (self) {
+    _cameraFailure = std::move(cameraFailure);
     _flow =
         std::make_unique<facepalm::CalibrationFlow>(std::move(socketPath), std::move(token), _io);
+    __weak CalibrationWindowController* weakSelf = self;
+    _flow->SetBeforeFailureClose([weakSelf] {
+      CalibrationWindowController* strongSelf = weakSelf;
+      if (strongSelf) strongSelf->_failureReason = strongSelf->_cameraFailure();
+    });
   }
   return self;
 }
 
 - (void)show {
   [self createWindow];
+  self.failureTimer = [NSTimer scheduledTimerWithTimeInterval:1.0
+                                                       target:self
+                                                     selector:@selector(refreshFailure:)
+                                                     userInfo:nil
+                                                      repeats:YES];
   [self render];
   [NSApp activateIgnoringOtherApps:YES];
   [self.window center];
@@ -262,22 +278,44 @@ NSString* RefusalText(const std::string& hint) {
       self.secondaryButton.title = @"Cancel";
       break;
     case facepalm::CalibrationFlow::State::kDone:
+      [self.failureTimer invalidate];
+      self.failureTimer = nil;
       self.label.stringValue =
           [NSString stringWithFormat:@"%@ The new profile is saved.", ResultText(view.screens)];
       self.primaryButton.hidden = YES;
       self.secondaryButton.title = @"Close";
       break;
     case facepalm::CalibrationFlow::State::kFailed:
-      self.label.stringValue =
-          [NSString stringWithFormat:@"Calibration could not finish: %s", view.error.c_str()];
+      [self.failureTimer invalidate];
+      self.failureTimer = nil;
+      if (view.connection_failed || view.camera_unavailable) {
+        const std::string& reason = _failureReason;
+        self.label.stringValue =
+            [NSString stringWithFormat:@"Calibration could not finish: %s. Try again.",
+                                       reason.empty() ? view.error.c_str() : reason.c_str()];
+      } else {
+        self.label.stringValue =
+            [NSString stringWithFormat:@"Calibration could not finish: %s", view.error.c_str()];
+      }
       self.primaryButton.hidden = YES;
       self.secondaryButton.title = @"Close";
       break;
     case facepalm::CalibrationFlow::State::kClosed:
+      [self.failureTimer invalidate];
+      self.failureTimer = nil;
       // A cancel the daemon confirmed: nothing left to show.
       [self.window close];
       break;
   }
+}
+
+- (void)refreshFailure:(NSTimer*)timer {
+  (void)timer;
+  if (!self.started) return;
+  const auto& view = self->_flow->CurrentView();
+  if (view.state == facepalm::CalibrationFlow::State::kFailed &&
+      (view.connection_failed || view.camera_unavailable))
+    [self render];
 }
 
 - (void)primaryClicked:(id)sender {
@@ -315,6 +353,8 @@ NSString* RefusalText(const std::string& hint) {
 // calling it unconditionally here is always safe.
 - (void)windowWillClose:(NSNotification*)notification {
   (void)notification;
+  [self.failureTimer invalidate];
+  self.failureTimer = nil;
   self->_flow->WindowClosed();
   if (self.onClosed) {
     self.onClosed();

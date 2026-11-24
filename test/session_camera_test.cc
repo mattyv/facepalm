@@ -27,6 +27,8 @@ class MockCaptureSession : public CaptureSession {
   MOCK_METHOD(Permission, CurrentPermission, (), (override));
   MOCK_METHOD(void, RequestPermission, (std::function<void(bool)>), (override));
   MOCK_METHOD(std::optional<std::string>, Configure, (), (override));
+  MOCK_METHOD(std::optional<ConfigureError>, LastConfigureError, (),
+              (const, override));
   MOCK_METHOD(FrameRates, SupportedFrameRates, (), (override));
   MOCK_METHOD(bool, Start, (int, std::uint64_t), (override));
   MOCK_METHOD(void, Stop, (), (override));
@@ -36,7 +38,8 @@ class MockCaptureSession : public CaptureSession {
 class MockCameraReports : public CameraReports {
  public:
   MOCK_METHOD(void, OnOpened, (), (override));
-  MOCK_METHOD(void, OnOpenFailed, (OpenFailure), (override));
+  MOCK_METHOD(void, OnOpenFailed, (OpenFailure, std::optional<ConfigureError>),
+              (override));
   MOCK_METHOD(void, OnClosed, (), (override));
   MOCK_METHOD(void, OnDeviceLost, (), (override));
   MOCK_METHOD(void, OnDeviceBack, (), (override));
@@ -100,6 +103,7 @@ class SessionCameraTest : public testing::Test {
   FakeQueue session_{"session", ran_on_};
   FakeQueue control_{"control", ran_on_};
   void SetUp() override {
+    EXPECT_CALL(capture_, LastConfigureError()).Times(testing::AnyNumber());
     ON_CALL(capture_, SupportedFrameRates())
         .WillByDefault(Return(CameraRates()));
     EXPECT_CALL(capture_, SupportedFrameRates()).Times(testing::AnyNumber());
@@ -110,6 +114,20 @@ class SessionCameraTest : public testing::Test {
   SessionCamera camera_{capture_, reports_, session_.AsPost(),
                         control_.AsPost(), kFramesPerSecond};
 };
+
+TEST_F(SessionCameraTest, ConfigureFailureCopiesTypedDetailToControlQueue) {
+  EXPECT_CALL(capture_, CurrentPermission())
+      .WillOnce(Return(Permission::kGranted));
+  EXPECT_CALL(capture_, Configure()).WillOnce(Return(std::nullopt));
+  EXPECT_CALL(capture_, LastConfigureError())
+      .WillOnce(Return(CaptureSession::ConfigureError::kPermissionDenied));
+  camera_.Open(kAttempt);
+  session_.Drain();
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kNoDevice,
+                                     std::optional<ConfigureError>{
+                                         ConfigureError::kPermissionDenied}));
+  control_.Drain();
+}
 
 TEST_F(SessionCameraTest, OpensWithPermissionAtTheChosenFrameRate) {
   {
@@ -135,7 +153,8 @@ TEST_F(SessionCameraTest, DoesNothingUntilItsQueueRuns) {
 TEST_F(SessionCameraTest, ReportsOpenFailedWhenPermissionIsDenied) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kDenied));
-  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kPermissionDenied));
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kPermissionDenied,
+                                     std::optional<ConfigureError>{}));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -170,7 +189,8 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWhenTheUserRefuses) {
       .WillOnce([](const std::function<void(bool)>& done) {
         done(/*granted=*/false);
       });
-  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kPermissionDenied));
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kPermissionDenied,
+                                     std::optional<ConfigureError>{}));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -179,7 +199,8 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWithoutACamera) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kGranted));
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(std::nullopt));
-  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kNoDevice));
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kNoDevice,
+                                     std::optional<ConfigureError>{}));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -190,7 +211,8 @@ TEST_F(SessionCameraTest, ReportsOpenFailedWhenTheSessionDoesNotRun) {
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(CameraId()));
   EXPECT_CALL(capture_, Start(kFramesPerSecond, kAttempt))
       .WillOnce(Return(false));
-  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kStartFailed));
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kStartFailed,
+                                     std::optional<ConfigureError>{}));
   camera_.Open(kAttempt);
   Settle();
 }
@@ -262,7 +284,8 @@ TEST_F(SessionCameraTest, ReportsAnyCameraConnectingBeforeOneIsPicked) {
   EXPECT_CALL(capture_, CurrentPermission())
       .WillOnce(Return(Permission::kGranted));
   EXPECT_CALL(capture_, Configure()).WillOnce(Return(std::nullopt));
-  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kNoDevice));
+  EXPECT_CALL(reports_, OnOpenFailed(OpenFailure::kNoDevice,
+                                     std::optional<ConfigureError>{}));
   camera_.Open(kAttempt);
   Settle();
   EXPECT_CALL(reports_, OnDeviceBack());

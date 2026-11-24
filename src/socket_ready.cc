@@ -8,23 +8,48 @@
 
 #include <cerrno>
 #include <cstring>
+#include <optional>
 #include <string>
 
 namespace facepalm {
 namespace {
 constexpr int kProbeTimeoutMs = 50;
+
+std::optional<std::int64_t> PeerPid(int fd, const SocketReadyCalls& calls) {
+#ifdef __linux__
+  ucred credentials{};
+  socklen_t length = sizeof(credentials);
+  if (calls.getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) ==
+          0 &&
+      length == sizeof(credentials) && credentials.pid > 0) {
+    return static_cast<std::int64_t>(credentials.pid);
+  }
+#elif defined(__APPLE__)
+  pid_t pid = 0;
+  socklen_t length = sizeof(pid);
+  if (calls.getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0 &&
+      length == sizeof(pid) && pid > 0) {
+    return static_cast<std::int64_t>(pid);
+  }
+#else
+  (void)fd;
+  (void)calls;
+#endif
+  return std::nullopt;
+}
 }  // namespace
 
-bool SocketReady(const std::string& path, const SocketReadyCalls& calls) {
+SocketProbeResult ProbeSocketReady(const std::string& path,
+                                   const SocketReadyCalls& calls) {
   sockaddr_un address{};
   address.sun_family = AF_UNIX;
   if (path.size() >= sizeof(address.sun_path)) {
-    return false;
+    return {.ready = false, .peer_pid = std::nullopt};
   }
   std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
   const int fd = calls.socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
-    return false;
+    return {.ready = false, .peer_pid = std::nullopt};
   }
   bool ready = false;
   const int flags = calls.get_flags(fd);
@@ -48,8 +73,13 @@ bool SocketReady(const std::string& path, const SocketReadyCalls& calls) {
           error == 0;
     }
   }
+  const auto peer_pid = ready ? PeerPid(fd, calls) : std::nullopt;
   calls.close(fd);
-  return ready;
+  return {.ready = ready, .peer_pid = peer_pid};
+}
+
+bool SocketReady(const std::string& path, const SocketReadyCalls& calls) {
+  return ProbeSocketReady(path, calls).ready;
 }
 
 }  // namespace facepalm

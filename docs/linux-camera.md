@@ -1,17 +1,71 @@
 # Linux camera daemon development build
 
-Facepalm uses the existing consent, camera, analysis, and MCP service code
-with a single-plane Video4Linux device on Linux. The chosen camera is
-`Config`'s `camera.device_id` (item 10 of #61, #13), in
-`~/.config/facepalm/facepalm.conf`: blank for the default, the first
-built-in camera found by probing `/dev/video0` through `/dev/video3`
-(`V4l2Session::List`, and the protocol's `cameras` line); a chosen id is
-matched by the device's own `v4l2_capability.bus_info`, which stays the
-same across a reboot, unlike the node it happens to land on.
+Facepalm uses the existing consent, camera, analysis and MCP service code
+with a single-plane Video4Linux device on Linux. Configure
+`camera.device_id` in `~/.config/facepalm/facepalm.conf`: blank selects the
+first usable color camera discovered under `/dev/video*`, including USB
+cameras. An explicit choice continues to match `v4l2_capability.bus_info`.
 `FACEPALM_CAMERA_DEVICE`, which named a device path directly, is retired.
-The Debian desktop package contains the tray app and gesture replay. Build
-the camera service separately using the native MediaPipe dependencies
-below.
+
+The Ubuntu camera package includes the service; see
+[Ubuntu installation](ubuntu-release.md). The Debian desktop package contains
+the tray and gesture replay; build its camera service separately below.
+
+## Selection and diagnostics
+
+Selection checks the opened node's capture and I/O capabilities, rather than
+assuming every node belonging to one physical device provides image data.
+Metadata nodes, infrared-name hints and unrecognized native image formats are
+rejected. Emulated RGB alone does not establish that a sensor captures color.
+The accepted native formats are RGB24, BGR24, MJPEG, JPEG, YUYV, UYVY, YVYU,
+NV12, YUV420 and YVU420. This conservative list may reject other valid color
+formats; the diagnostic reports that limitation. Names and formats cannot
+prove a sensor's optical spectrum, so hardware verification is still needed.
+
+When supported, `VIDIOC_TRY_FMT` checks RGB24 conversion before selection.
+Drivers that do not implement that optional ioctl proceed to the existing
+capture format negotiation. Each probe logs its node, capabilities, advertised
+formats, rejection reason and relevant errno; the selected node is logged too.
+The [kernel metadata interface][metadata] explains why one physical camera
+can expose separate metadata nodes.
+
+## Recovery and target-machine checks
+
+Unavailable cameras retry while consent and client or preview demand remain.
+The delay grows from 1 to 2, 4, 8, 16 and at most 30 seconds. The camera and
+previous model finish retiring before another open is admitted. Turning off
+or ending demand cancels recovery; the service does not capture while idle.
+A bounded calibration attempt can finish with a reason and retry guidance;
+it does not become an indefinite camera subscription.
+
+Before upgrading, turn Facepalm off and quit the old tray. After installing,
+launch the new tray and turn it on. Turn On regenerates the per-user service
+unit with the new restart budget; restarting an old unit alone does not
+rewrite its settings.
+
+For the systemd test, run the following, then choose **Show Camera Preview**
+so the camera actually has demand:
+
+```sh
+systemctl --user restart facepalm
+systemctl --user show facepalm -p MainPID -p ActiveState -p SubState -p NRestarts
+facepalm-daemon cameras
+journalctl --user -u facepalm.service --since '5 minutes ago' --no-pager
+```
+
+Repeat using tray **Turn Off Facepalm**, **Turn On Facepalm…**, then
+**Show Camera Preview** and **Calibrate…**. Check that the visible-light
+image is selected, unavailable devices recover without process restart
+bursts, and closing a window or turning off releases camera demand. Record
+these checks on #195. Automated mock and lifecycle tests do not establish
+that a particular camera driver or physical machine works.
+
+The legacy status file's first `on`/`off` line still describes camera use,
+not daemon liveness. A running service with no camera demand is correctly
+idle and may have no video file descriptor. The tray reports service health
+and camera activity separately using the versioned health record.
+
+[metadata]: https://www.kernel.org/doc/html/latest/userspace-api/media/v4l/dev-meta.html
 
 ## Build
 

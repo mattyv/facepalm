@@ -4,7 +4,9 @@
 #include <QDialog>
 #include <QLabel>
 #include <QPushButton>
+#include <QTimer>
 #include <QWidget>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -24,7 +26,8 @@ class CalibrationWindow {
   // `socket_path` is resolved by the caller (src/user_paths.h); fixed
   // for the tray's own lifetime, the way CameraPreview's request and
   // frame paths are.
-  CalibrationWindow(QWidget* parent, std::string socket_path);
+  CalibrationWindow(QWidget* parent, std::string socket_path,
+                    std::function<std::string()> camera_failure);
 
   // Opens the wizard: a plain explanation that calibration is optional,
   // with a button to begin it. Raises the window instead of starting a
@@ -48,7 +51,10 @@ class CalibrationWindow {
   QLabel* label_;
   QPushButton* primary_;
   QPushButton* secondary_;
+  QTimer failure_timer_;
   const std::string socket_path_;
+  std::function<std::string()> camera_failure_;
+  std::string failure_reason_;
   std::unique_ptr<facepalm::CalibrateClientIo> io_;
   std::unique_ptr<facepalm::CalibrationFlow> flow_;
   bool started_ = false;

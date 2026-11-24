@@ -14,6 +14,8 @@ namespace facepalm {
 class CalibrateClientIo {
  public:
   virtual ~CalibrateClientIo() = default;
+  // Releases the connection and clears any buffered response.
+  virtual void Close() = 0;
   // Connects to the socket at `path`; false when it cannot.
   virtual bool Connect(const std::string& path) = 0;
   virtual void WriteLine(std::string_view line) = 0;

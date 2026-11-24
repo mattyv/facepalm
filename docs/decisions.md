@@ -1,5 +1,81 @@
 # Decisions
 
+## 2026-11-24: Read status records through a bounded stream boundary (#195)
+
+Keep the pathname reader and expose the same bounded parser through an input
+stream overload. This permits a deterministic read-error test: directory
+reads set different stream state on libc++ and libstdc++. Reject bad streams
+even when they returned otherwise valid record bytes. The overload consumes
+from the current position and requires the default nonthrowing exception
+mask; it does not change the caller's stream policy. Record validation,
+limits and pathname behavior remain unchanged. The missing-guard mutation
+and portable coverage evidence are tracked in #195.
+
+## 2026-11-24: Keep calibration's terminal failure reason stable (#195)
+
+Capture the attempt's error before releasing its camera connection. A failed,
+completed or canceled attempt releases that connection immediately and stops
+its status timer; closing the window remains idempotent. Keep the captured
+failure visible with guidance to retry calibration. This replaces the earlier
+working proposal to refresh a failed wizard after recovery: an ended attempt
+must not keep camera demand or silently replace its original failure with a
+later service state. The preview remains a live request and continues to show
+verified recovery while open. The terminal dialog is evidence about its own
+attempt, not a claim about the camera's current readiness.
+
+## 2026-11-24: Attribute camera health only to an identified service (#195)
+
+A connected local socket's peer PID must match the health publisher before
+its idle, opening, active or retrying state is treated as current. When the
+socket is unavailable, Linux may attribute a failure only when systemd reports
+failed and its recorded main PID matches the failed health snapshot. Other
+recorded failures remain historical. PID matching does not eliminate PID
+reuse; unavailable identity stays unknown. An idle service does not prove a
+camera can capture. Calibration remains a bounded attempt with a useful
+reason and retry guidance, rather than an indefinitely waiting wizard. Closing
+that wizard must release its connection and camera demand in terminal states
+as well as during an active attempt. Evidence and remaining desktop validation
+are tracked in #195.
+
+## 2026-11-24: Select usable Linux color nodes independently of bus transport (#195)
+
+An empty device choice selects a usable color capture node discovered under
+`/dev/video*`, including an integrated USB camera. Restricting the default to
+`platform:` bus identifiers rejected such cameras despite listing them.
+Use per-node capabilities and recognized native color formats; metadata,
+monochrome, unknown formats and infrared-name hints are excluded before
+considering libv4l2 RGB conversion. Emulated RGB is not evidence of a native
+color sensor. Keep existing bus identifiers for configured choices and log
+each rejection. The conservative format list and optical-classification
+limits are documented in docs/linux-camera.md. Optional TRY_FMT absence
+falls back to real capture negotiation rather than rejecting a valid device.
+This does not claim hardware or converter behavior was verified by mocks.
+
+## 2026-11-24: Retry unavailable cameras without restarting the daemon (#195)
+
+Treat an unavailable camera like other retryable open failures: keep the
+service alive while consent and client or preview demand remain, and retry
+through the controller's existing timer port at 1, 2, 4, 8, 16, then at
+most 30 seconds. A successful open or canceled demand resets the delay;
+generation checks prevent canceled timer callbacks from reviving later work.
+A device-loss report starts model retirement only when the camera was open.
+The controller remains closing until that retirement is acknowledged; a
+return is deferred and renewed demand cannot reopen it early. If demand and
+consent remain, a retry is armed after retirement even without a device-return
+notification. A failed, never-opened camera does not own a model. Retry assumes
+the scheduler eventually dispatches its callback; hardware availability and
+operating-system scheduling remain outside that guarantee.
+
+For fatal daemon exits, the generated systemd unit uses a five-second restart
+delay and an explicit ten-start budget over 30 seconds. Automatic crash
+restarts cannot exhaust that budget by themselves, while sufficiently many
+manual starts can still reach it. Do not disable the manager's rate limit.
+No device, permission or start failure is reported as a successful camera
+open. The in-process health snapshot records the failure separately from the
+legacy camera-use indicator; its PID is evidence of liveness, not identity.
+The CameraLifecycle, DaemonAdmission, CameraRetry and CameraRetryRetirement
+models, mutation checks and composed test are recorded in specs/README.md.
+
 ## 2026-11-24: Show the running menu version (#194)
 
 Show the menu executable's CMake project version as a disabled first menu

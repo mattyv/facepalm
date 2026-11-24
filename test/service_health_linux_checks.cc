@@ -68,3 +68,9 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+TEST(ServiceHealthCheck, ReturnsWholeManagerOutputOnlyOnSuccess) {
+  facepalm_menu::ServiceHealthQuery query;
+  EXPECT_EQ(query.ReadOutput(executable, {"failed"}, 1000), "failed\n");
+  EXPECT_FALSE(query.ReadOutput(executable, {"error"}, 1000));
+}

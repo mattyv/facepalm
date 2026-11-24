@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 
+#include <functional>
 #include <string>
 
 // A small AppKit window around src/calibration_flow.h's CalibrationFlow
@@ -14,7 +15,9 @@
 // `socketPath` and `token` are resolved by the caller (src/user_paths.h,
 // the "calibrate" client's own token, approved the same way SwitchService
 // approves its own client in main.mm).
-- (instancetype)initWithSocketPath:(std::string)socketPath token:(std::string)token;
+- (instancetype)initWithSocketPath:(std::string)socketPath
+                             token:(std::string)token
+                     cameraFailure:(std::function<std::string()>)cameraFailure;
 
 // Called once the window this controller owns has closed, however it
 // closed (Cancel, Close once done or failed, or the window's own close

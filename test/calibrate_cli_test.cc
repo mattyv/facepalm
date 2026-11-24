@@ -20,6 +20,7 @@ constexpr auto kSocketPath = "/tmp/service.sock";
 
 class MockCalibrateClientIo : public CalibrateClientIo {
  public:
+  MOCK_METHOD(void, Close, (), (override));
   MOCK_METHOD(bool, Connect, (const std::string&), (override));
   MOCK_METHOD(void, WriteLine, (std::string_view), (override));
   MOCK_METHOD(std::optional<std::string>, ReadLine, (), (override));
