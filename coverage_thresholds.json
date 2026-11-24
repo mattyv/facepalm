@@ -433,6 +433,11 @@
       "functions": 100
     }
   },
+  "scripts/install_ubuntu_model.sh": {
+    "shell": {
+      "lines": 100
+    }
+  },
   "scripts/fetch_mediapipe_c.sh": {
     "shell": {
       "lines": 100

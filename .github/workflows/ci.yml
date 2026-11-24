@@ -358,3 +358,71 @@ jobs:
             936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
       - name: Check every spec
         run: bash specs/check.sh
+
+  ubuntu-camera-package:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bats cmake dbus-daemon desktop-file-utils dpkg-dev libegl1 libgles2 \
+            libgmock-dev libjpeg-dev libv4l-dev libx11-dev libxrandr-dev \
+            ninja-build qt6-base-dev qt6-wayland unzip x11-utils xauth xdotool xvfb
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Check package configuration guard
+        run: cmake -DSOURCE_DIR="$PWD" -DTEST_ROOT="${RUNNER_TEMP}/config-guard" -P test/ubuntu_package_config.cmake
+      - name: Test model setup
+        run: bats scripts/test/install_ubuntu_model.bats
+      - name: Fetch and stage dependencies
+        run: |
+          bash scripts/fetch_mediapipe_c.sh build-mediapipe-c
+          unzip -p build-mediapipe-c/mediapipe.whl '*/licenses/LICENSE' > "${RUNNER_TEMP}/MEDIAPIPE-LICENSE"
+          npm ci --omit=dev --prefix mcp
+      - name: Build Ubuntu camera package
+        run: |
+          cmake -S . -B build-ubuntu -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_LIBDIR=lib -DFACEPALM_LINUX_TRAY=ON \
+            -DFACEPALM_UBUNTU_PACKAGE=ON \
+            -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/build-mediapipe-c/include" \
+            -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/build-mediapipe-c/lib/libmediapipe.so" \
+            -DFACEPALM_MEDIAPIPE_LICENSE="${RUNNER_TEMP}/MEDIAPIPE-LICENSE"
+          cmake --build build-ubuntu --target facepalm_menu facepalm_daemon gesture_replay_cli calibrate_cli_tool linux_tray_integration
+          ctest --test-dir build-ubuntu -R '^linux_tray_integration$' --output-on-failure --no-tests=error
+          cpack --config build-ubuntu/CPackConfig.cmake -B build-ubuntu/package
+      - name: Record checksum
+        run: cd build-ubuntu/package && sha256sum *.deb > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: facepalm-ubuntu-26.04-amd64
+          path: |
+            build-ubuntu/package/*.deb
+            build-ubuntu/package/SHA256SUMS
+          if-no-files-found: error
+
+  ubuntu-camera-install:
+    needs: ubuntu-camera-package
+    runs-on: ubuntu-26.04
+    container: ubuntu:26.04
+    steps:
+      - name: Install smoke test tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates cmake desktop-file-utils git
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: facepalm-ubuntu-26.04-amd64
+          path: ubuntu-package
+      - name: Verify checksum, installation and removal
+        run: |
+          cd ubuntu-package
+          sha256sum -c SHA256SUMS
+          set -- "$PWD"/*.deb
+          test "$#" -eq 1
+          cd ..
+          cmake -DPACKAGE_FILE="$1" -DSMOKE_ROOT="${RUNNER_TEMP}/facepalm-ubuntu-smoke" \
+            -DUBUNTU_PACKAGE=ON -DINSTALL_PACKAGE=ON -P test/deb_smoke.cmake

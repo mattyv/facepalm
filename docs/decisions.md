@@ -1,5 +1,16 @@
 # Decisions
 
+## 2026-11-24: Ubuntu camera release package (#190)
+
+Add an opt-in Ubuntu 26.04 amd64 package containing the tray, camera daemon,
+MediaPipe C library and locked MCP production dependencies. The default Debian
+tray-only package stays unchanged. CI builds and installs the package on the
+matching Ubuntu release, exercises it without camera access, and publishes its
+checksum. Ubuntu supplies Node 22. Do not redistribute the model without
+established provenance: document a separate hash-verified upstream download.
+This adds a manual setup step and the separately installed model is not removed
+by package purge. Evidence and verification are in #190.
+
 Each decision made about facepalm and why, newest first. An entry is short: the
 evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
