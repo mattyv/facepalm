@@ -6,10 +6,14 @@
 #include "src/camera_controller.h"
 
 namespace facepalm {
-DaemonControl::DaemonControl(DaemonController& controller,
-                             DaemonPipeline& pipeline,
-                             std::function<void()> stop_service,
-                             std::function<void(bool failed)> exit)
+std::string ModelFailureReason(const std::string& detail) {
+  return detail.empty() ? "model failure" : "model failure: " + detail;
+}
+
+DaemonControl::DaemonControl(
+    DaemonController& controller, DaemonPipeline& pipeline,
+    std::function<void()> stop_service,
+    std::function<void(std::optional<std::string>)> exit)
     : controller_(controller),
       pipeline_(pipeline),
       stop_service_(std::move(stop_service)),
@@ -43,8 +47,10 @@ void DaemonControl::Stop() {
   }
 }
 
-void DaemonControl::Fail() {
-  failed_ = true;
+void DaemonControl::Fail(std::string reason) {
+  if (!failure_reason_) {
+    failure_reason_ = std::move(reason);
+  }
   Stop();
 }
 
@@ -68,7 +74,7 @@ void DaemonControl::OnOpenFailed(OpenFailure reason) {
   const bool opening = controller_.State() == CameraController::State::kOpening;
   controller_.OpenFailed(reason);
   if (opening && reason == OpenFailure::kNoDevice) {
-    Fail();
+    Fail("no camera device available");
   }
 }
 
@@ -107,7 +113,7 @@ void DaemonControl::Retire(bool acknowledge_close) {
       controller_.Closed();
     }
     if (stopping_) {
-      exit_(failed_);
+      exit_(failure_reason_);
       return;
     }
     if (device_back_) {

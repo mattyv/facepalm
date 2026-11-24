@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include "gmock/gmock.h"
@@ -47,12 +48,19 @@ class DaemonControlTest : public ::testing::Test {
   MockDaemonController controller_;
   MockDaemonPipeline pipeline_;
   bool service_stopped_ = false;
-  std::optional<bool> exited_;  // Whether the daemon exited as a failure.
+  std::optional<std::optional<std::string>> exited_;
   DaemonControl daemon_{controller_, pipeline_,
                         [this] { service_stopped_ = true; },
-                        [this](bool failed) { exited_ = failed; }};
+                        [this](std::optional<std::string> reason) {
+                          exited_ = std::move(reason);
+                        }};
   std::function<void()> retired_;
 };
+
+TEST(ModelFailureReasonTest, KeepsDetailOrProvidesAUsefulFallback) {
+  EXPECT_EQ(ModelFailureReason("bad model"), "model failure: bad model");
+  EXPECT_EQ(ModelFailureReason(""), "model failure");
+}
 
 using ReopenAfterRetireTest = DaemonControlTest;
 
@@ -128,7 +136,8 @@ TEST_F(ExitCleanTest, OneRetirementAtATime) {
 
   retired_();
 
-  EXPECT_THAT(exited_, Eq(false));
+  EXPECT_THAT(exited_, Eq(std::optional<std::optional<std::string>>(
+                           std::in_place, std::nullopt)));
 }
 
 TEST_F(ExitCleanTest, StoppingWaitsForTheCameraAndTheModel) {
@@ -143,7 +152,8 @@ TEST_F(ExitCleanTest, StoppingWaitsForTheCameraAndTheModel) {
   EXPECT_CALL(controller_, Closed);
   retired_();
 
-  EXPECT_THAT(exited_, Eq(false));
+  EXPECT_THAT(exited_, Eq(std::optional<std::optional<std::string>>(
+                           std::in_place, std::nullopt)));
 }
 
 using StopEndsTest = DaemonControlTest;
@@ -159,18 +169,31 @@ TEST_F(StopEndsTest, StoppingWithTheCameraClosedRetiresAtOnce) {
 
   retired_();
 
-  EXPECT_THAT(exited_, Eq(false));
+  EXPECT_THAT(exited_, Eq(std::optional<std::optional<std::string>>(
+                           std::in_place, std::nullopt)));
 }
 
 TEST_F(StopEndsTest, AFailedModelStopsTheDaemonAsAFailure) {
   EXPECT_CALL(controller_, Revoke);
   EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosed));
   ExpectRetirement();
-  daemon_.Fail();
+  daemon_.Fail("model unavailable");
+  daemon_.Fail("later failure");
 
   retired_();
 
-  EXPECT_THAT(exited_, Eq(true));
+  EXPECT_THAT(exited_, Eq(std::optional<std::string>("model unavailable")));
+}
+
+TEST_F(StopEndsTest, AFailureDuringCleanStopIsReported) {
+  EXPECT_CALL(controller_, Revoke);
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosed));
+  ExpectRetirement();
+  daemon_.Stop();
+  daemon_.Fail("model failure");
+  retired_();
+
+  EXPECT_THAT(exited_, Eq(std::optional<std::string>("model failure")));
 }
 
 TEST_F(StopEndsTest, ACameraThatFailsToOpenStopsTheDaemonAsAFailure) {
@@ -185,7 +208,8 @@ TEST_F(StopEndsTest, ACameraThatFailsToOpenStopsTheDaemonAsAFailure) {
 
   retired_();
 
-  EXPECT_THAT(exited_, Eq(true));
+  EXPECT_THAT(exited_,
+              Eq(std::optional<std::string>("no camera device available")));
 }
 
 TEST_F(StopEndsTest, AFailedOpenReportedAfterClosingBeganIsIgnored) {
@@ -204,7 +228,8 @@ TEST_F(StopEndsTest, AFailedOpenReportedAfterClosingBeganIsIgnored) {
   EXPECT_CALL(controller_, Closed);
   retired_();
 
-  EXPECT_THAT(exited_, Eq(false));
+  EXPECT_THAT(exited_, Eq(std::optional<std::optional<std::string>>(
+                           std::in_place, std::nullopt)));
 }
 
 // #52, item 10 of #61: a denied permission or a failed start does not stop

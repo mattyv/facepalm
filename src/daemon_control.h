@@ -2,6 +2,8 @@
 #define FACEPALM_SRC_DAEMON_CONTROL_H_
 
 #include <functional>
+#include <optional>
+#include <string>
 
 #include "src/camera_controller.h"
 
@@ -34,6 +36,9 @@ class DaemonPipeline {
   virtual void Close(std::function<void()> done) = 0;
 };
 
+// Preserves model error detail, with a category when no detail is provided.
+std::string ModelFailureReason(const std::string& detail);
+
 // The daemon's control logic (#37, #63), following specs/DaemonAdmission.tla:
 // it joins the camera controller and the frame pipeline, so a camera reopens
 // and the daemon exits only once the previous face model is destroyed. Each
@@ -42,15 +47,16 @@ class DaemonPipeline {
 class DaemonControl : public CameraReports {
  public:
   // `stop_service` stops the socket service, which disconnects every client;
-  // `exit` ends the process, told whether it stopped as a failure.
+  // `exit` ends the process, told the first failure reason, or no reason for a
+  // clean stop.
   DaemonControl(DaemonController& controller, DaemonPipeline& pipeline,
                 std::function<void()> stop_service,
-                std::function<void(bool failed)> exit);
+                std::function<void(std::optional<std::string>)> exit);
   void Subscription(bool joined);
   // Stops the daemon: the person turned Facepalm off, or a signal came.
   void Stop();
   // Stops the daemon as a failure, as when the face model failed.
-  void Fail();
+  void Fail(std::string reason);
   void OnOpened() override;
   void OnOpenFailed(OpenFailure reason) override;
   void OnClosed() override;
@@ -62,8 +68,8 @@ class DaemonControl : public CameraReports {
   DaemonController& controller_;
   DaemonPipeline& pipeline_;
   std::function<void()> stop_service_;
-  std::function<void(bool)> exit_;
-  bool failed_ = false;
+  std::function<void(std::optional<std::string>)> exit_;
+  std::optional<std::string> failure_reason_;
   bool stopping_ = false;
   bool retiring_ = false;
   bool device_back_ = false;

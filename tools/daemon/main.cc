@@ -173,7 +173,7 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 // error (#114): IsFreshPreviewRequest's own `modified_ms`, the one real
 // collaborator that function is tested with a fake for.
 std::optional<std::int64_t> FileModifiedMs(const std::string& path) {
-  struct stat info{};
+  struct stat info {};
   if (stat(path.c_str(), &info) != 0) {
     return std::nullopt;
   }
@@ -474,13 +474,15 @@ class Engine : public DaemonController, public DaemonPipeline {
             // ends, so an open preview does not freeze on a status file
             // left saying on. ReadCameraStatus's own pid check is the
             // other half of the fix, for when this chance never comes.
-            [this](bool failed) {
-              if (failed) {
-                std::fputs("facepalm-daemon: stopped after a failure\n",
-                           stderr);
+            [this](std::optional<std::string> failure) {
+              if (failure) {
+                std::fprintf(stderr,
+                             "facepalm-daemon: stopped after a failure: %s\n",
+                             failure->c_str());
+                std::fflush(stderr);
               }
               PublishStatus(false);
-              std::_Exit(failed ? 1 : 0);
+              std::_Exit(failure ? 1 : 0);
             }),
 #ifdef __linux__
         capture_(
@@ -515,11 +517,9 @@ class Engine : public DaemonController, public DaemonPipeline {
                 .make_analyzers =
                     [this](std::string& error) { return MakeAnalyzers(error); },
                 .on_error =
-                    [this](const std::string&) {
-                      control_queue_([this] {
-                        std::fprintf(stderr,
-                                     "facepalm-daemon: model failure\n");
-                        control_.Fail();
+                    [this](const std::string& error) {
+                      control_queue_([this, error] {
+                        control_.Fail(ModelFailureReason(error));
                       });
                     }}) {
   }

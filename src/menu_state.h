@@ -2,6 +2,7 @@
 #define FACEPALM_SRC_MENU_STATE_H_
 
 #include <string>
+#include <string_view>
 
 namespace facepalm {
 
@@ -21,15 +22,13 @@ struct MenuState {
   bool calibrate_enabled = false;
 };
 
-// What DecideMenuState reads to decide MenuState, each independent of the
-// other two, so they are an options object rather than three positional
-// bools a call site could swap by accident.
+// The observations used to decide what the menu can offer.
 struct DaemonState {
-  // Facepalm's own user service (UserService::IsOn). Once it is on,
-  // nothing it asks of the daemon -- opening the preview, now a camera
-  // demand of its own (#176, src/camera_demand.h), or starting a
-  // calibration session -- can fail for lack of one to reach.
+  // Installed intent is separate from a reachable socket and manager state.
   bool service_on = false;
+  bool service_ready = false;
+  bool service_failed = false;
+  bool service_starting = false;
   // The camera-in-use indicator (ReadCameraStatus): only meaningful
   // while the service is on, since nothing publishes it otherwise, which
   // is why a missing status file already reads as off
@@ -41,6 +40,9 @@ struct DaemonState {
   // "Hide" rather than "Show" while it does.
   bool preview_open = false;
 };
+
+enum class ServiceHealth { kFailed, kStarting, kUnavailable };
+ServiceHealth ParseServiceHealth(std::string_view active_state);
 
 MenuState DecideMenuState(const DaemonState& state);
 

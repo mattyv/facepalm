@@ -168,21 +168,30 @@ simply pointing at the one that already works (`docs/decisions.md`).
 | Facepalm | Camera | Preview window | Camera-status line | Show Camera Preview | Calibrate… |
 |---|---|---|---|---|---|
 | Off | (not running) | (not running) | "Facepalm off" | Disabled, "Turn on Facepalm first" | Disabled, "Turn on Facepalm first" |
+| On, starting | Unknown | Closed | "Facepalm starting" | Disabled | Disabled |
+| On, failed (Linux) | Unknown | Closed | "Service failed to start" | Disabled | Disabled |
+| On, unavailable | Unknown | Closed | "Facepalm unavailable" | Disabled | Disabled |
 | On | Idle | Closed | "Camera off" | Enabled, "Show Camera Preview" | Enabled, "Calibrate…" |
 | On | Idle | Open | "Camera off" | Enabled, "Hide Camera Preview" | Enabled, "Calibrate…" |
 | On | Running | Closed | "Camera on" | Enabled, "Show Camera Preview" | Enabled, "Calibrate…" |
 | On | Running | Open | "Camera on" | Enabled, "Hide Camera Preview" | Enabled, "Calibrate…" |
 
+The installed service file records intent. A connection to the existing daemon
+socket establishes transport readiness without asking for the camera; Linux
+also checks the current systemd state when that connection fails. If the
+manager cannot be queried, or on macOS, the menu reports unavailable rather
+than assuming a failure. An open preview can still be hidden in any state.
+The daemon can disappear after a refresh, so each opening action checks again;
+a connection is not a guarantee that the camera can open.
+
 "Camera" and "Preview window" are independent: opening the preview is
-itself what can move "Idle" to "Running" (#176), so the second and third
-rows, and the fourth and fifth, are both reachable, not a contradiction --
+itself what can move "Idle" to "Running" (#176), so the idle and running
+rows with the preview open or closed are reachable, not a contradiction --
 a camera already running for an approved client's sake shows exactly the
 same "Running" either way. Calibrate… is never disabled by the preview
 being open: it speaks to the daemon over its own, separate connection.
-`test/menu_state_test.cc` covers every combination (service on, camera in
-use, preview open) a solitary test can reach; the table above is `service
-on` crossed with the two that matter to what is shown (camera in use
-decides the status line and nothing else; disabled items ignore both).
+`test/menu_state_test.cc` covers the menu decisions in isolation, including
+stale camera readings, manager states, and an open preview while unavailable.
 
 ## Calibration (optional)
 
