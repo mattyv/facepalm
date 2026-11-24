@@ -40,7 +40,7 @@ TEST(ServiceHealthCheck, TimesOutAndRetiresBeforeAnotherQuery) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  QCoreApplication app(argc, argv);
+  const QCoreApplication app(argc, argv);
   executable = QCoreApplication::applicationFilePath();
   if (argc > 1) {
     const QString mode = QString::fromLocal8Bit(argv[1]);

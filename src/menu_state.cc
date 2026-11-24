@@ -3,8 +3,12 @@
 namespace facepalm {
 
 ServiceHealth ParseServiceHealth(std::string_view active_state) {
-  if (active_state == "failed\n") return ServiceHealth::kFailed;
-  if (active_state == "activating\n") return ServiceHealth::kStarting;
+  if (active_state == "failed\n") {
+    return ServiceHealth::kFailed;
+  }
+  if (active_state == "activating\n") {
+    return ServiceHealth::kStarting;
+  }
   return ServiceHealth::kUnavailable;
 }
 
@@ -19,9 +23,12 @@ MenuState DecideMenuState(const DaemonState& state) {
                      .calibrate_enabled = false};
   }
   if (!state.service_ready) {
-    const std::string title = state.service_failed ? "Service failed to start"
-                              : state.service_starting ? "Facepalm starting"
-                                                       : "Facepalm unavailable";
+    std::string title = "Facepalm unavailable";
+    if (state.service_failed) {
+      title = "Service failed to start";
+    } else if (state.service_starting) {
+      title = "Facepalm starting";
+    }
     return MenuState{
         .camera_status_title = title,
         .preview_title = state.preview_open ? "Hide Camera Preview" : title,

@@ -3,6 +3,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -19,26 +20,45 @@ namespace {
 class RealSocketTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    char pattern[] = "/tmp/facepalm-probe-XXXXXX";
-    char* dir = mkdtemp(pattern);
+    std::array<char, 27> pattern{"/tmp/facepalm-probe-XXXXXX"};
+    const char* dir = mkdtemp(pattern.data());
     ASSERT_NE(dir, nullptr);
     directory_ = dir;
     path_ = directory_ + "/socket";
   }
   void TearDown() override {
-    for (int fd : fds_) close(fd);
-    if (!directory_.empty()) std::filesystem::remove_all(directory_);
+    for (const int fd : fds_) {
+      close(fd);
+    }
+    if (!directory_.empty()) {
+      std::filesystem::remove_all(directory_);
+    }
   }
   int Socket() {
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd >= 0) fds_.push_back(fd);
+    const int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd >= 0) {
+      fds_.push_back(fd);
+    }
     return fd;
   }
-  sockaddr_un Address() const {
+  [[nodiscard]] sockaddr_un Address() const {
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    std::strcpy(address.sun_path, path_.c_str());
+    std::memcpy(address.sun_path, path_.c_str(), path_.size() + 1);
     return address;
+  }
+  bool FillBacklog(const sockaddr_un& address) {
+    for (int i = 0; i < 32; ++i) {
+      const int fd = Socket();
+      if (fd < 0 || fcntl(fd, F_SETFL, O_NONBLOCK) != 0) {
+        return false;
+      }
+      if (connect(fd, reinterpret_cast<const sockaddr*>(&address),
+                  sizeof(address)) != 0) {
+        return true;
+      }
+    }
+    return false;
   }
   std::string directory_;
   std::string path_;
@@ -55,7 +75,7 @@ TEST_F(RealSocketTest, MissingAndRefusedAreNotReady) {
   EXPECT_FALSE(SocketReady(path_));
 }
 
-TEST_F(RealSocketTest, FullBacklogIsBoundedAndProbeSendsNoBytes) {
+TEST_F(RealSocketTest, SuccessfulProbeSendsNoBytes) {
   const int listener = Socket();
   ASSERT_GE(listener, 0);
   auto address = Address();
@@ -69,18 +89,17 @@ TEST_F(RealSocketTest, FullBacklogIsBoundedAndProbeSendsNoBytes) {
   fds_.push_back(probe);
   char byte = 0;
   EXPECT_EQ(read(probe, &byte, 1), 0);
-  bool full = false;
-  for (int i = 0; i < 32; ++i) {
-    int fd = Socket();
-    ASSERT_GE(fd, 0);
-    ASSERT_EQ(fcntl(fd, F_SETFL, O_NONBLOCK), 0);
-    if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)) !=
-        0) {
-      full = true;
-      break;
-    }
-  }
-  ASSERT_TRUE(full);
+}
+
+TEST_F(RealSocketTest, FullBacklogIsBounded) {
+  const int listener = Socket();
+  ASSERT_GE(listener, 0);
+  auto address = Address();
+  ASSERT_EQ(
+      bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)),
+      0);
+  ASSERT_EQ(listen(listener, 1), 0);
+  ASSERT_TRUE(FillBacklog(address));
   const auto start = std::chrono::steady_clock::now();
   EXPECT_FALSE(SocketReady(path_));
   EXPECT_LT(std::chrono::steady_clock::now() - start, std::chrono::seconds(1));

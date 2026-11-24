@@ -5,7 +5,6 @@
 #include <sys/un.h>
 
 #include <cerrno>
-#include <cstdarg>
 #include <string>
 
 #include "gmock/gmock.h"
@@ -21,7 +20,7 @@ using ::testing::Return;
 class MockCalls {
  public:
   MOCK_METHOD(int, Socket, (int, int, int));
-  MOCK_METHOD(int, Fcntl, (int, int, int));
+  MOCK_METHOD(int, Fcntl, (int, int));
   MOCK_METHOD(int, Connect, (int, const sockaddr*, socklen_t));
   MOCK_METHOD(int, Poll, (pollfd*, nfds_t, int));
   MOCK_METHOD(int, Option, (int, int, int, void*, socklen_t*));
@@ -34,16 +33,7 @@ MockCalls* active = nullptr;
 int Socket(int domain, int type, int protocol) {
   return active->Socket(domain, type, protocol);
 }
-int Fcntl(int fd, int command, ...) {
-  int flags = 0;
-  if (command == F_SETFL) {
-    va_list args;
-    va_start(args, command);
-    flags = va_arg(args, int);
-    va_end(args);
-  }
-  return active->Fcntl(fd, command, flags);
-}
+int Fcntl(int fd, int command, ...) { return active->Fcntl(fd, command); }
 int Connect(int fd, const sockaddr* address, socklen_t length) {
   return active->Connect(fd, address, length);
 }
@@ -96,38 +86,51 @@ TEST_F(SocketReadyTest, OversizedPathAndSocketFailureDoNotClose) {
   EXPECT_FALSE(SocketReady("socket", calls_));
 }
 
-TEST_F(SocketReadyTest, EveryFailureAfterSocketClosesDescriptor) {
-  EXPECT_CALL(mock_, Close(7)).Times(7);
-  EXPECT_CALL(mock_, Fcntl).Times(::testing::AnyNumber());
-  EXPECT_CALL(mock_, Connect).Times(::testing::AnyNumber());
-  EXPECT_CALL(mock_, Poll).Times(::testing::AnyNumber());
-  EXPECT_CALL(mock_, Option).Times(::testing::AnyNumber());
-  EXPECT_CALL(mock_, Fcntl(7, F_GETFL, 0))
-      .WillOnce(Return(-1))
-      .RetiresOnSaturation();
+TEST_F(SocketReadyTest, FlagReadFailureClosesDescriptor) {
+  EXPECT_CALL(mock_, Close(7));
+  EXPECT_CALL(mock_, Fcntl(7, F_GETFL)).WillOnce(Return(-1));
   EXPECT_FALSE(SocketReady("socket", calls_));
-  EXPECT_CALL(mock_, Fcntl(7, F_SETFL, O_NONBLOCK))
-      .WillOnce(Return(-1))
-      .RetiresOnSaturation();
+}
+
+TEST_F(SocketReadyTest, FlagWriteFailureClosesDescriptor) {
+  EXPECT_CALL(mock_, Close(7));
+  EXPECT_CALL(mock_, Fcntl(7, F_GETFL)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, Fcntl(7, F_SETFL)).WillOnce(Return(-1));
   EXPECT_FALSE(SocketReady("socket", calls_));
-  EXPECT_CALL(mock_, Connect)
-      .WillOnce([](int, const sockaddr*, socklen_t) {
-        errno = ECONNREFUSED;
-        return -1;
-      })
-      .RetiresOnSaturation();
+}
+
+TEST_F(SocketReadyTest, ConnectionFailureClosesDescriptor) {
+  EXPECT_CALL(mock_, Close(7));
+  EXPECT_CALL(mock_, Connect).WillOnce([](int, const sockaddr*, socklen_t) {
+    errno = ECONNREFUSED;
+    return -1;
+  });
   EXPECT_FALSE(SocketReady("socket", calls_));
-  EXPECT_CALL(mock_, Poll(_, 1, 50)).WillOnce(Return(0)).RetiresOnSaturation();
+}
+
+TEST_F(SocketReadyTest, TimeoutClosesDescriptor) {
+  EXPECT_CALL(mock_, Close(7));
+  EXPECT_CALL(mock_, Poll(_, 1, 50)).WillOnce(Return(0));
   EXPECT_FALSE(SocketReady("socket", calls_));
-  EXPECT_CALL(mock_, Poll(_, 1, 50))
-      .WillOnce([](pollfd* fd, nfds_t, int) {
-        fd->revents = POLLHUP;
-        return 1;
-      })
-      .RetiresOnSaturation();
+}
+
+TEST_F(SocketReadyTest, HangupClosesDescriptor) {
+  EXPECT_CALL(mock_, Close(7));
+  EXPECT_CALL(mock_, Poll(_, 1, 50)).WillOnce([](pollfd* fd, nfds_t, int) {
+    fd->revents = POLLHUP;
+    return 1;
+  });
   EXPECT_FALSE(SocketReady("socket", calls_));
-  EXPECT_CALL(mock_, Option).WillOnce(Return(-1)).RetiresOnSaturation();
+}
+
+TEST_F(SocketReadyTest, OptionReadFailureClosesDescriptor) {
+  EXPECT_CALL(mock_, Close(7));
+  EXPECT_CALL(mock_, Option).WillOnce(Return(-1));
   EXPECT_FALSE(SocketReady("socket", calls_));
+}
+
+TEST_F(SocketReadyTest, SocketErrorClosesDescriptor) {
+  EXPECT_CALL(mock_, Close(7));
   EXPECT_CALL(mock_, Option)
       .WillOnce([](int, int, int, void* value, socklen_t*) {
         *static_cast<int*>(value) = ECONNREFUSED;

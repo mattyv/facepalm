@@ -11,14 +11,21 @@
 #include <string>
 
 namespace facepalm {
+namespace {
+constexpr int kProbeTimeoutMs = 50;
+}  // namespace
 
 bool SocketReady(const std::string& path, const SocketReadyCalls& calls) {
   sockaddr_un address{};
   address.sun_family = AF_UNIX;
-  if (path.size() >= sizeof(address.sun_path)) return false;
+  if (path.size() >= sizeof(address.sun_path)) {
+    return false;
+  }
   std::memcpy(address.sun_path, path.c_str(), path.size() + 1);
   const int fd = calls.socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd < 0) return false;
+  if (fd < 0) {
+    return false;
+  }
   bool ready = false;
   const int flags = calls.fcntl(fd, F_GETFL);
   if (flags >= 0 && calls.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0) {
@@ -31,7 +38,8 @@ bool SocketReady(const std::string& path, const SocketReadyCalls& calls) {
       int error = 0;
       socklen_t length = sizeof(error);
       ready =
-          calls.poll(&item, 1, 50) > 0 && (item.revents & POLLOUT) != 0 &&
+          calls.poll(&item, 1, kProbeTimeoutMs) > 0 &&
+          (item.revents & POLLOUT) != 0 &&
           calls.getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 &&
           error == 0;
     }

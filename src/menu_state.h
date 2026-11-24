@@ -1,6 +1,7 @@
 #ifndef FACEPALM_SRC_MENU_STATE_H_
 #define FACEPALM_SRC_MENU_STATE_H_
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -41,7 +42,7 @@ struct DaemonState {
   bool preview_open = false;
 };
 
-enum class ServiceHealth { kFailed, kStarting, kUnavailable };
+enum class ServiceHealth : std::uint8_t { kFailed, kStarting, kUnavailable };
 ServiceHealth ParseServiceHealth(std::string_view active_state);
 
 MenuState DecideMenuState(const DaemonState& state);
