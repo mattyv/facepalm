@@ -5,6 +5,40 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-24: A stale camera status reads as off by checking the daemon's pid, not a timestamp
+
+Issue #184: a daemon that stops with the camera on left the status file
+saying "on" forever, since shutdown is `std::_Exit` and the file was only
+ever republished at start or on a demand edge. Chose a pid over a refreshed
+timestamp (`src/daemon_status.cc`'s own two choices, per the issue):
+`PublishCameraStatus` now writes the calling process's pid on its own
+second line, and `ReadCameraStatus` reads a stale "on" as off once
+`kill(pid, 0)` says that pid is no longer alive (ESRCH), the way it
+already did for a missing or malformed file. A timestamp would have
+needed the daemon to keep touching the file on some interval merely to
+prove it is still there, work a pid check gets for free from the OS's
+own process table. Rejected for the same reason: a periodic refresh
+thread of its own, for a daemon that otherwise has nothing to say until
+something changes. The clean shutdown paths found (`tools/daemon/main.cc`'s
+`DaemonControl` exit callback) still publish off explicitly, since a pid
+can in principle be reused by an unrelated process before a reader ever
+checks it -- the model in `specs/CameraStatus.tla` found this explicit
+write does not, on its own, make any of its properties bite (`Guard
+ReadChecksAlive` alone already saves every trace the model can construct),
+and says so in `specs/README.md` rather than simulating pid reuse to force
+it to.
+Issue #185: the demand callback publishes "on" before the camera device is
+asked to open at all, kept exactly as is (`PreviewLease.tla`'s own grace
+period depends on it); `Engine::OpenFailed` now publishes off at once
+instead, and `Engine::Opened` publishes on again, the same call whether
+this is the first open or a retry recovering from a denial, so neither a
+denied permission nor a later recovery is left showing the wrong thing.
+Modeled as `CameraStatus.tla`'s own `wanted`/`camera` split (#184's crash
+config keeps the old, unsplit shape, `ModelsOpenFailure = FALSE`, since
+the two concerns do not mix: TLC found the early publish's own honest,
+momentary disagreement between the two breaks a property meant to catch
+staleness, for a reason that has nothing to do with staleness).
+
 ## 2026-11-23: A refused calibration step stays on that step, not the whole wizard
 
 A `calibrate next` the daemon refuses (no pose captured yet, #137's

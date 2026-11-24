@@ -31,6 +31,9 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CalibrationMenu.cfg` | one menu flow against one daemon session, a cold start's camera bounded to 2 retries, every guard on | holds, with `ClosingCompletes` and `CameraWaitResolves` | 78 |
 | `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,864 |
 | `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
+| `CameraStatus.cfg` | one daemon, the camera wanted and released, the menu polling | holds, with `CameraOnLeadsToDisplayOn` and `CameraOffLeadsToDisplayOff` | 4 |
+| `CameraStatus_Crash.cfg` | one crash or clean shutdown, one restart (#184) | holds, with `NeverStaleWhileRunning` and `CameraOffLeadsToDisplayOff` | 21 |
+| `CameraStatus_OpenFailure.cfg` | one failed camera open and its recovery (#185) | holds, with `OpenFailLeadsToDisplayOff` and `OpenRecoversLeadsToDisplayOn` | 10 |
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none, #142's gaze inert (`MaxLooks = 0`, one kind) | holds | 3,815,485 |
@@ -330,20 +333,42 @@ at startup, so a file a previous crash left stale does not linger. The
 menu or tray rereads the file on its own one-second timer, independent of
 the daemon.
 
-The model splits in two, each its own config, because TLC found that one
-property cannot honestly cover both normal running and a crash: a crash
-timed to land between a change and the next poll can make the display
-miss that one change for good, correctly, since the camera the display
-never caught really did go off in the crash. `CameraStatus.cfg` (no
-crash) checks that the display always catches up during normal running.
-`CameraStatus_Crash.cfg` adds one crash and checks that the file is never
-stale while the daemon is running, which is what the startup republish
-is for.
+`wanted` is that demand edge; `camera` is whether the camera is
+genuinely open (`CameraLifecycle.tla`'s own state, also taken as given).
+Before #184/#185, the two were the very same variable, which only held
+because no crash and no open failure were modeled; the model now splits
+them, and splits into three configs rather than two, because TLC found
+no one property can honestly cover normal running, a daemon death, and
+an open failure all at once:
+
+-   `CameraStatus.cfg` (`ModelsCrash = FALSE`, `ModelsOpenFailure =
+    FALSE`): the display always catches up with the camera during
+    ordinary running, `wanted` and `camera` flipping atomically, this
+    spec's shape before either issue.
+-   `CameraStatus_Crash.cfg` (`ModelsCrash = TRUE`, `ModelsOpenFailure =
+    FALSE`) adds one daemon death -- a bare `Crash` (killed, or dying
+    with no chance to run any more code) or a clean `Shutdown` (a signal
+    it has time to react to) -- and checks that the file is never stale
+    while the daemon is running (which is what the startup republish is
+    for), and now also that a dead daemon's display eventually catches
+    up too, with no next run needed (#184). `ModelsOpenFailure` stays
+    FALSE here: TLC found that mixing it in broke `CameraOffLeadsTo
+    DisplayOff` for a reason that has nothing to do with a crash -- the
+    early publish's own honest, momentary disagreement between
+    `published` and a not-yet-open `camera`, which `NeverStaleWhileRunning`
+    would also misread as staleness.
+-   `CameraStatus_OpenFailure.cfg` (`ModelsCrash = FALSE`,
+    `ModelsOpenFailure = TRUE`) is where that disagreement is instead
+    the point (#185): `OpenFails` and `OpenSucceeds` model a denied or
+    failed open and a later retry recovering from one, keyed to
+    `open_failed` rather than to raw `camera`, for the reason just
+    given.
 
 | Config | Properties | Distinct states |
 |---|---|---|
 | `CameraStatus.cfg` | `CameraOnLeadsToDisplayOn`, `CameraOffLeadsToDisplayOff` | 4 |
-| `CameraStatus_Crash.cfg` | `NeverStaleWhileRunning` | 13 |
+| `CameraStatus_Crash.cfg` | `NeverStaleWhileRunning`, `CameraOffLeadsToDisplayOff` | 21 |
+| `CameraStatus_OpenFailure.cfg` | `OpenFailLeadsToDisplayOff`, `OpenRecoversLeadsToDisplayOn` | 10 |
 
 Each mutation, and what TLC found:
 
@@ -353,6 +378,10 @@ Each mutation, and what TLC found:
 | `GuardPollRefreshes = FALSE`: the menu never rereads the file | `CameraStatus.cfg` | Deadlock: once a change is pending, nothing is left enabled to observe it |
 | `GuardPublishOnRestart = FALSE`: the daemon does not republish at startup | `CameraStatus_Crash.cfg` | `NeverStaleWhileRunning` |
 | `GuardPublishOnChange = FALSE` | `CameraStatus_Crash.cfg` | `NeverStaleWhileRunning` too: a later change while running never corrects the file either |
+| `GuardReadChecksAlive = FALSE` (#184): the reader trusts a published "on" with no pid check | `CameraStatus_Crash.cfg` | `CameraOffLeadsToDisplayOff`: with no fairness on `Restart` (a daemon that stops cleanly may never run again), a bare `Crash` or a `Shutdown` whose own publish is itself turned off leaves the display stuck on forever |
+| `GuardPublishOnShutdown = FALSE` (#184): a clean stop never publishes off | `CameraStatus_Crash.cfg` | Nothing: `GuardReadChecksAlive` alone already saves every trace this model can construct, since it also catches a bare `Crash`, which this guard never could. Noted here rather than extending the model to simulate the real reason this write still matters anyway -- a pid can be reused by an unrelated process before a reader ever checks it, which this model does not go as far as simulating |
+| `GuardPublishOnOpenFailed = FALSE` (#185): `Engine::OpenFailed` never corrects the early publish | `CameraStatus_OpenFailure.cfg` | `OpenFailLeadsToDisplayOff` |
+| `GuardPublishOnOpenSucceeds = FALSE` (#185): `Engine::Opened` never republishes on | `CameraStatus_OpenFailure.cfg` | `OpenRecoversLeadsToDisplayOn` |
 
 `src/daemon_status.cc` implements `Publish` and `Poll` as the free
 functions `PublishCameraStatus` and `ReadCameraStatus`; the same mutations,
@@ -363,7 +392,14 @@ made to the code, fail the tests named for them:
 | `PublishCameraStatus` never replaces the file | `PublishTest.WritesOn`, `PublishTest.WritesOff`, `PublishTest.ReplacesWhatWasThereAtomically` |
 | The temporary file is left in place rather than renamed | `PublishTest.ReplacesWhatWasThereAtomically` |
 | `ReadCameraStatus` reads a missing file as on rather than off | `ReadTest.AMissingFileIsOff` |
+| `ReadCameraStatus` reads "on" as on with no pid check at all (#184) | `ReadTest.APublishedPidThatIsDeadIsOff` |
+| A pid line missing, not a number, or with trailing characters is read as alive rather than off | `ReadTest.AMissingPidLineIsOff`, `ReadTest.APidLineThatIsNotANumberIsOff`, `ReadTest.APidLineWithTrailingCharactersIsOff` |
+| `ProcessAlive` treats a zero or negative pid as alive | `ReadTest.AZeroOrNegativePidIsOff` |
+| `ProcessAlive` never treats `EPERM` (a pid that exists but is owned by someone else) as alive | `ReadTest.APidOwnedBySomeoneElseIsStillOn` |
 | The daemon never republishes at `Engine::Start` | Checked by reading `tools/daemon/main.cc`, which has no unit test of its own (`main.cc` is wiring only, as its other callers are); `Start` calls `PublishStatus(false)` before `service_.Start()`, naming the action it stands for |
+| The daemon's own clean-shutdown callback never publishes off (#184) | Checked by reading `tools/daemon/main.cc`: the `exit_` callback `DaemonControl` is given calls `PublishStatus(false)` before `std::_Exit`, naming `CameraStatus!Shutdown` |
+| `Engine::OpenFailed` never publishes off (#185) | Checked by reading `tools/daemon/main.cc`, naming `CameraStatus!OpenFails` |
+| `Engine::Opened` never publishes on (#185) | Checked by reading `tools/daemon/main.cc`, naming `CameraStatus!OpenSucceeds` |
 
 `ReadTest.APublishFromAnotherThreadIsSeenWithinTwoSeconds` is the
 acceptance check outside the model: a real thread publishes after a short

@@ -1,8 +1,11 @@
 #include "src/daemon_status.h"
 
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -21,6 +24,22 @@ namespace {
 using ::testing::IsEmpty;
 using ::testing::Not;
 
+// A pid nothing uses any more (#184, ReadCameraStatus's own ESRCH case):
+// forks a child that exits at once and reaps it, so the pid is free the
+// moment this returns. The tiny window before the OS could reuse it is
+// the same one any such check lives with (specs/CameraStatus.tla's
+// header: pid reuse is the real reason the clean-shutdown write still
+// matters too, not something this model goes as far as simulating).
+std::int64_t DeadPid() {
+  const pid_t child = ::fork();
+  if (child == 0) {
+    ::_exit(0);
+  }
+  int status = 0;
+  ::waitpid(child, &status, 0);
+  return child;
+}
+
 class DaemonStatusTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -38,6 +57,9 @@ class DaemonStatusTest : public ::testing::Test {
 
 using PublishTest = DaemonStatusTest;
 
+// Also GuardReadChecksAlive's own TRUE case, by the branch that is
+// almost always the one taken: the pid this test's own process just
+// wrote is this very process, which is certainly still running.
 TEST_F(PublishTest, WritesOn) {
   std::string error;
   EXPECT_TRUE(PublishCameraStatus(path_, true, error));
@@ -118,6 +140,62 @@ TEST_F(ReadTest, UnreadableContentIsOff) {
 
 TEST_F(ReadTest, AFileThatIsADirectoryIsOff) {
   ASSERT_EQ(::mkdir(path_.c_str(), 0700), 0);
+  EXPECT_FALSE(ReadCameraStatus(path_));
+}
+
+// #184, GuardReadChecksAlive's own FALSE case: a daemon that died with
+// the camera on, with nothing after to correct the file (CameraStatus!
+// Crash), must not leave this reading on forever.
+TEST_F(ReadTest, APublishedPidThatIsDeadIsOff) {
+  const std::int64_t pid = DeadPid();
+  std::ofstream file(path_);
+  file << "on\n" << pid << "\n";
+  file.close();
+
+  EXPECT_FALSE(ReadCameraStatus(path_));
+}
+
+// GuardReadChecksAlive's own TRUE case by the other branch that reaches
+// it: pid 1 (launchd or init) always exists but, run as anyone but
+// root (as CI does), belongs to someone else (EPERM), which still
+// counts as alive.
+TEST_F(ReadTest, APidOwnedBySomeoneElseIsStillOn) {
+  std::ofstream file(path_);
+  file << "on\n1\n";
+  file.close();
+
+  EXPECT_TRUE(ReadCameraStatus(path_));
+}
+
+TEST_F(ReadTest, AMissingPidLineIsOff) {
+  std::ofstream file(path_);
+  file << "on\n";
+  file.close();
+
+  EXPECT_FALSE(ReadCameraStatus(path_));
+}
+
+TEST_F(ReadTest, APidLineThatIsNotANumberIsOff) {
+  std::ofstream file(path_);
+  file << "on\nsideways\n";
+  file.close();
+
+  EXPECT_FALSE(ReadCameraStatus(path_));
+}
+
+TEST_F(ReadTest, APidLineWithTrailingCharactersIsOff) {
+  std::ofstream file(path_);
+  file << "on\n1abc\n";
+  file.close();
+
+  EXPECT_FALSE(ReadCameraStatus(path_));
+}
+
+TEST_F(ReadTest, AZeroOrNegativePidIsOff) {
+  std::ofstream file(path_);
+  file << "on\n0\n";
+  file.close();
+
   EXPECT_FALSE(ReadCameraStatus(path_));
 }
 
