@@ -1,6 +1,11 @@
 #!/usr/bin/env bats
 
 setup() {
+  local system
+  system="$(uname -s)"
+  if [[ "${system}" != Linux ]]; then
+    skip "Ubuntu model setup requires Linux"
+  fi
   root="${BATS_TEST_TMPDIR}/root"
   fake="${BATS_TEST_TMPDIR}/bin"
   mkdir -p "${fake}" "${root}/share/facepalm/model"
@@ -39,60 +44,75 @@ FAKE
 
 @test "installs verified model and uses the pinned URL" {
   run bash "${script}" --prefix "${root}"
-  [ "$status" -eq 0 ]
-  [ "$(cat "${root}/share/facepalm/model/face_landmarker.task")" = model ]
+  [[ "${status}" -eq 0 ]] || false
+  [[ "$(<"${root}/share/facepalm/model/face_landmarker.task")" == model ]] \
+    || false
   grep -F 'generation=1782184688504388' "${TEST_ROOT}/curl-args"
   grep -F 'b261925d4aad812b47a0e8d58c1baa1223270a5d1f663d78338bc881c003879d' \
     "${TEST_ROOT}/hash-args"
-  [ "$(find "${root}" -name '.facepalm-model.*' | wc -l)" -eq 0 ]
+  if compgen -G "${root}/share/facepalm/model/.facepalm-model.*" >/dev/null; then
+    return 1
+  fi
 }
 
 @test "download failure preserves the existing model" {
   export FAIL_CURL=1
   run bash "${script}" --prefix "${root}"
-  [ "$status" -ne 0 ]
-  [ "$(cat "${root}/share/facepalm/model/face_landmarker.task")" = old ]
-  [ "$(find "${root}" -name '.facepalm-model.*' | wc -l)" -eq 0 ]
+  [[ "${status}" -ne 0 ]] || false
+  [[ "$(<"${root}/share/facepalm/model/face_landmarker.task")" == old ]] \
+    || false
+  if compgen -G "${root}/share/facepalm/model/.facepalm-model.*" >/dev/null; then
+    return 1
+  fi
 }
 
 @test "bad hash preserves the existing model" {
   export FAIL_HASH=1
   run bash "${script}" --prefix "${root}"
-  [ "$status" -ne 0 ]
-  [ "$(cat "${root}/share/facepalm/model/face_landmarker.task")" = old ]
+  [[ "${status}" -ne 0 ]] || false
+  [[ "$(<"${root}/share/facepalm/model/face_landmarker.task")" == old ]] \
+    || false
 }
 
 @test "install failure preserves the existing model" {
   export FAIL_INSTALL=1
   run bash "${script}" --prefix "${root}"
-  [ "$status" -ne 0 ]
-  [ "$(cat "${root}/share/facepalm/model/face_landmarker.task")" = old ]
-  [ "$(find "${root}" -name '.facepalm-model.*' | wc -l)" -eq 0 ]
+  [[ "${status}" -ne 0 ]] || false
+  [[ "$(<"${root}/share/facepalm/model/face_landmarker.task")" == old ]] \
+    || false
+  if compgen -G "${root}/share/facepalm/model/.facepalm-model.*" >/dev/null; then
+    return 1
+  fi
 }
 
 @test "invalid arguments fail without downloading" {
   run bash "${script}" --prefix
-  [ "$status" -ne 0 ]
-  [ ! -e "${TEST_ROOT}/curl-args" ]
+  [[ "${status}" -ne 0 ]] || false
+  [[ ! -e "${TEST_ROOT}/curl-args" ]] || false
   run bash "${script}" --unknown
-  [ "$status" -ne 0 ]
-  [ ! -e "${TEST_ROOT}/curl-args" ]
+  [[ "${status}" -ne 0 ]] || false
+  [[ ! -e "${TEST_ROOT}/curl-args" ]] || false
 }
 
 @test "rename failure preserves the old model and cleans up" {
   export FAIL_MOVE=1
   run bash "${script}" --prefix "${root}"
-  [ "$status" -ne 0 ]
-  [ "$(cat "${root}/share/facepalm/model/face_landmarker.task")" = old ]
-  [ "$(find "${root}" -name '.facepalm-model.*' | wc -l)" -eq 0 ]
+  [[ "${status}" -ne 0 ]] || false
+  [[ "$(<"${root}/share/facepalm/model/face_landmarker.task")" == old ]] \
+    || false
+  if compgen -G "${root}/share/facepalm/model/.facepalm-model.*" >/dev/null; then
+    return 1
+  fi
 }
 
 @test "model directory remains accessible with a restrictive umask" {
   rm -rf "${root}/share/facepalm/model"
   umask 077
   run bash "${script}" --prefix "${root}"
-  [ "$status" -eq 0 ]
-  [ "$(stat -c %a "${root}/share/facepalm/model")" = 755 ]
+  [[ "${status}" -eq 0 ]] || false
+  local mode
+  mode="$(stat -c %a "${root}/share/facepalm/model")"
+  [[ "${mode}" == 755 ]] || false
 }
 
 @test "a directory at the model path is rejected" {
@@ -100,7 +120,9 @@ FAKE
   rm "${destination}"
   mkdir "${destination}"
   run bash "${script}" --prefix "${root}"
-  [ "$status" -ne 0 ]
-  [ -d "${destination}" ]
-  [ -z "$(ls -A "${destination}")" ]
+  [[ "${status}" -ne 0 ]] || false
+  [[ -d "${destination}" ]] || false
+  local entries
+  entries="$(ls -A "${destination}")"
+  [[ -z "${entries}" ]] || false
 }
