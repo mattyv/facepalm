@@ -1,6 +1,5 @@
 #import <AppKit/AppKit.h>
 
-#include <charconv>
 #include <cstdlib>
 #include <memory>
 #include <optional>
@@ -9,13 +8,17 @@
 #include <utility>
 #include <vector>
 
+#include "src/calibrate_client_token.h"
 #include "src/cameras_listing.h"
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/config.h"
 #include "src/daemon_status.h"
+#include "src/menu_field_format.h"
 #include "src/menu_state.h"
+#include "src/settings_config_path.h"
 #include "src/settings_document.h"
+#include "src/settings_save_guard.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
 #include "src/window_activation.h"
@@ -38,27 +41,30 @@ constexpr NSTimeInterval kPreviewRefreshInterval = 0.5;
 // for an unrelated reason still closes the window promptly.
 constexpr NSInteger kPreviewCameraGraceMisses = 4;
 
-NSURL* SettingsURL() {
-  const char* xdg = std::getenv("XDG_CONFIG_HOME");
-  NSString* base = (xdg != nullptr && *xdg != '\0')
-                       ? [NSString stringWithUTF8String:xdg]
-                       : [NSHomeDirectory() stringByAppendingPathComponent:@".config"];
-  return [NSURL fileURLWithPath:[[base stringByAppendingPathComponent:@"facepalm"]
-                                    stringByAppendingPathComponent:@"facepalm.conf"]];
-}
-
-NSString* FormatFloat(float value) {
-  char buffer[64];
-  const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value);
-  return [[NSString alloc] initWithBytes:buffer
-                                  length:result.ptr - buffer
-                                encoding:NSUTF8StringEncoding];
-}
-
 std::string Utf8Bytes(NSString* text) {
   NSData* data = [text dataUsingEncoding:NSUTF8StringEncoding];
   if (data.length == 0) return {};
   return {static_cast<const char*>(data.bytes), data.length};
+}
+
+// `data`'s own bytes, for SettingsFileUnchanged (src/settings_save_guard.h,
+// #64) to compare without copying them into an owned std::string.
+std::string_view BytesOf(NSData* data) {
+  return {static_cast<const char*>(data.bytes), data.length};
+}
+
+// facepalm::FormatFloat (src/menu_field_format.h, #64), wrapped for a
+// Settings field.
+NSString* NSFormatFloat(float value) {
+  return [NSString stringWithUTF8String:facepalm::FormatFloat(value).c_str()];
+}
+
+// facepalm.conf's own path (src/settings_config_path.h, #64).
+NSURL* SettingsURL() {
+  const char* xdg = std::getenv("XDG_CONFIG_HOME");
+  const std::string path =
+      facepalm::SettingsConfigPath(xdg != nullptr ? xdg : "", Utf8Bytes(NSHomeDirectory()));
+  return [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
 }
 
 // Whether the camera is in use, from the daemon's status file
@@ -108,7 +114,7 @@ BOOL ReadSettingsFile(NSURL* url, NSData** data, BOOL* missing, NSString** messa
                                                  : @"The settings file cannot be read.";
     return NO;
   }
-  if (content.length > 1024 * 1024) {
+  if (facepalm::SettingsFileTooLarge(content.length)) {
     *message = @"The settings file is too large.";
     return NO;
   }
@@ -122,7 +128,8 @@ BOOL SaveSettingsFile(NSURL* url, NSData* expected, BOOL expectedMissing,
   NSData* current = nil;
   BOOL missing = NO;
   if (!ReadSettingsFile(url, &current, &missing, message)) return NO;
-  if (missing != expectedMissing || ![current isEqualToData:expected]) {
+  if (!facepalm::SettingsFileUnchanged(BytesOf(expected), expectedMissing, BytesOf(current),
+                                       missing)) {
     *message =
         @"The settings file changed while this window was open. Reopen Settings and try again.";
     return NO;
@@ -494,15 +501,14 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   facepalm::ClientApprovals approvals(
       paths->clients, [](const std::string& path) { return facepalm::LoadClientToken(path); },
       *approvals_io);
-  std::string error;
-  const std::optional<std::string> tokenPath = approvals.Approve("calibrate", error);
-  if (!tokenPath) {
-    [self showError:ErrorMessage(error) title:@"Calibration could not start"];
+  const facepalm::CalibrateClientToken result = facepalm::ResolveCalibrateToken(
+      approvals, [](const std::string& path) { return facepalm::LoadClientToken(path); });
+  if (!result.token) {
+    [self showError:ErrorMessage(result.error) title:@"Calibration could not start"];
     return;
   }
-  const std::string token = facepalm::LoadClientToken(*tokenPath).value_or(std::string());
-  self.calibrationController = [[CalibrationWindowController alloc] initWithSocketPath:paths->socket
-                                                                                 token:token];
+  self.calibrationController =
+      [[CalibrationWindowController alloc] initWithSocketPath:paths->socket token:*result.token];
   __weak FacepalmApp* weakSelf = self;
   self.calibrationController.onClosed = ^{
     weakSelf.calibrationController = nil;
@@ -722,18 +728,18 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   self.expressions.state =
       config->expressions_enabled ? NSControlStateValueOn : NSControlStateValueOff;
   NSArray<NSString*>* tuning = @[
-    FormatFloat(config->gesture_confidence_threshold),
-    FormatFloat(config->expressions_smallest_rise), FormatFloat(config->expressions_spreads),
+    NSFormatFloat(config->gesture_confidence_threshold),
+    NSFormatFloat(config->expressions_smallest_rise), NSFormatFloat(config->expressions_spreads),
     [NSString stringWithFormat:@"%d", config->expressions_hold_ms],
-    FormatFloat(config->expressions_pose_degrees), FormatFloat(config->expressions_pose_range),
+    NSFormatFloat(config->expressions_pose_degrees), NSFormatFloat(config->expressions_pose_range),
     [NSString stringWithFormat:@"%d", config->expressions_settle_ms],
-    FormatFloat(config->expressions_eye_look_down_threshold),
-    FormatFloat(config->expressions_eye_blink_threshold)
+    NSFormatFloat(config->expressions_eye_look_down_threshold),
+    NSFormatFloat(config->expressions_eye_blink_threshold)
   ];
   for (NSUInteger i = 0; i < tuning.count; ++i) self.advanced[i].stringValue = tuning[i];
   self.lookingAway.state =
       config->looking_away_enabled ? NSControlStateValueOn : NSControlStateValueOff;
-  self.lookingAwayDegrees.stringValue = FormatFloat(config->looking_away_degrees);
+  self.lookingAwayDegrees.stringValue = NSFormatFloat(config->looking_away_degrees);
   self.lookingAwayHoldMs.stringValue =
       [NSString stringWithFormat:@"%d", config->looking_away_hold_ms];
   self.screenContext.state =
@@ -741,7 +747,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   self.screenContextWindowTitles.state =
       config->screen_context_window_titles_enabled ? NSControlStateValueOn : NSControlStateValueOff;
   self.screenContextOtherScreenDegrees.stringValue =
-      FormatFloat(config->screen_context_other_screen_degrees);
+      NSFormatFloat(config->screen_context_other_screen_degrees);
   [NSApp activateIgnoringOtherApps:YES];
   [self.settingsWindow center];
   [self.settingsWindow makeKeyAndOrderFront:nil];
@@ -872,10 +878,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 
 - (void)saveSettings:(id)sender {
   (void)sender;
-  NSString* number = self.frameRate.stringValue;
-  NSScanner* scanner = [NSScanner scannerWithString:number];
-  NSInteger fps = 0;
-  if (![scanner scanInteger:&fps] || !scanner.isAtEnd || fps < 1 || fps > 60) {
+  const std::optional<int> fps =
+      facepalm::ParseWholeNumberInRange(Utf8Bytes(self.frameRate.stringValue), 1, 60);
+  if (!fps) {
     [self showError:@"Enter a whole number from 1 to 60 for frames per second."];
     return;
   }
@@ -893,7 +898,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   }
   std::string error;
   facepalm::MenuSettings settings{
-      .frames_per_second = static_cast<int>(fps),
+      .frames_per_second = *fps,
       .camera_device_id = Utf8Bytes((NSString*)self.camera.selectedItem.representedObject),
       .gestures_enabled = self.gestures.state == NSControlStateValueOn,
       .expressions_enabled = self.expressions.state == NSControlStateValueOn,
