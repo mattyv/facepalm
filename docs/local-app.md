@@ -152,6 +152,16 @@ otherwise a menu-bar-only accessory app, invisible to all three, but switches
 to a regular app the moment the first of these windows opens and back the
 moment the last one closes.
 
+Camera health can report idle, opening, active, retrying, or failed (#195).
+The menu attributes a current reason only when the connected socket's peer
+matches the health publisher, or Linux's service manager identifies the
+publisher while the service is down. Other recorded failures are labeled as
+last failures. During a verified retry an open preview keeps its request alive,
+clears its old image, and displays the reason; closing it releases the request.
+Calibration waits a bounded time for the camera and then shows the reason
+and asks the person to try again. A failed attempt does not keep requesting
+camera access once its wizard is closed.
+
 ### Menu items by state (#176)
 
 `src/menu_state.h`'s `DecideMenuState` is the one table both the macOS

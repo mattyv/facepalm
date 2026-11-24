@@ -1,11 +1,16 @@
 #include "src/camera_controller.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
 #include <utility>
 
 namespace facepalm {
+namespace {
+constexpr std::chrono::seconds kMaxRetryDelay{30};
+}  // namespace
 
 CameraController::CameraController(Camera& camera, Clients& clients,
                                    bool consent, RetrySchedule schedule_retry)
@@ -28,6 +33,7 @@ void CameraController::RevokeConsent() {
   }
   consent_ = false;
   ++consent_epoch_;
+  CancelRetry();
   StartClosing();
 }
 
@@ -44,6 +50,7 @@ void CameraController::Leave(const ClientId& client) {
   }
   if (subscribers_.empty()) {
     ++consent_epoch_;
+    CancelRetry();
     StartClosing();
   }
 }
@@ -53,32 +60,45 @@ void CameraController::Leave(const ClientId& client) {
 void CameraController::OnOpened() {
   if (state_ == State::kOpening) {
     state_ = State::kOpen;
+    retry_delay_ = std::chrono::seconds{1};
   }
 }
 
-// specs/CameraLifecycle.tla, Start's failure branches. With no device, it
-// stays unusable until DeviceBack, as before. A denied permission or a
-// failed start (#52) blocks it instead, cleared only by Retry: unlike the
-// device cause, nothing the OS reports on its own clears this one.
-void CameraController::OnOpenFailed(OpenFailure reason) {
+// All open failures schedule bounded retries while demand and consent hold.
+// A retry is scoped to this generation and cannot revive canceled work.
+void CameraController::OnOpenFailed(OpenFailure reason,
+                                    std::optional<ConfigureError> detail) {
   if (state_ != State::kOpening) {
     return;
   }
   state_ = State::kClosed;
-  if (reason == OpenFailure::kNoDevice) {
-    device_ = false;
-    return;
-  }
-  blocked_ = true;
-  schedule_retry_([this] { Retry(); });
+  (void)reason;
+  (void)detail;
+  ScheduleRetry();
 }
 
-// specs/CameraLifecycle.tla, Retry, with GuardRetries (#52). Nothing but
-// Retry clears `blocked_`, and OpenIfWanted will not open while it holds,
-// so the camera is still closed and blocked when a scheduled retry runs.
-void CameraController::Retry() {
+void CameraController::ScheduleRetry() {
+  blocked_ = true;
+  const auto generation = ++retry_generation_;
+  const auto delay = retry_delay_;
+  retry_delay_ = std::min(retry_delay_ * 2, kMaxRetryDelay);
+  schedule_retry_(delay, [this, generation] { Retry(generation); });
+}
+
+void CameraController::Retry(std::uint64_t generation) {
+  if (generation != retry_generation_) {
+    return;
+  }
+  ++retry_generation_;
   blocked_ = false;
+  device_ = true;
   OpenIfWanted();
+}
+
+void CameraController::CancelRetry() {
+  ++retry_generation_;
+  blocked_ = false;
+  retry_delay_ = std::chrono::seconds{1};
 }
 
 // specs/CameraLifecycle.tla, Closed.
@@ -95,13 +115,16 @@ void CameraController::OnClosed() {
 void CameraController::OnDeviceLost() {
   device_ = false;
   if (state_ == State::kOpen) {
-    state_ = State::kClosed;
+    // Capture has already stopped, but the model's physical lease remains
+    // held until DaemonControl acknowledges retirement via OnClosed.
+    state_ = State::kClosing;
     ++attempt_;
   }
 }
 
 // specs/CameraLifecycle.tla, DeviceBack.
 void CameraController::OnDeviceBack() {
+  CancelRetry();
   device_ = true;
   OpenIfWanted();
 }
@@ -133,7 +156,11 @@ void CameraController::OnReaction(std::uint64_t ticket,
 // it back the same way `device_` does, until Retry clears it.
 void CameraController::OpenIfWanted() {
   if (state_ != State::kClosed || !consent_ || subscribers_.empty() ||
-      !device_ || blocked_) {
+      blocked_) {
+    return;
+  }
+  if (!device_) {
+    ScheduleRetry();
     return;
   }
   state_ = State::kOpening;

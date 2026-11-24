@@ -133,7 +133,8 @@ TEST_F(CalibrationFlowTest, StartReachesFailedOnAConnectFailure) {
 
   const CalibrationFlow::View& view = flow.CurrentView();
   EXPECT_THAT(view.state, Eq(CalibrationFlow::State::kFailed));
-  EXPECT_THAT(view.error, HasSubstr(kSocketPath));
+  EXPECT_EQ(view.error, "Camera service is unavailable");
+  EXPECT_TRUE(view.connection_failed);
 }
 
 TEST_F(CalibrationFlowTest, StartReachesFailedOnAHelloRefused) {
@@ -324,6 +325,8 @@ TEST_F(CalibrationFlowTest,
   CalibrationFlow flow = Make();
 
   flow.Start(1);
+
+  EXPECT_TRUE(flow.CurrentView().camera_unavailable);
 
   // One hello, then one "calibrate start" per attempt (kMaxCameraWaits
   // retries plus the first try).

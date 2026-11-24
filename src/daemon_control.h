@@ -18,7 +18,8 @@ class DaemonController {
   virtual void Leave() = 0;
   virtual void Revoke() = 0;
   virtual void Opened() = 0;
-  virtual void OpenFailed(OpenFailure reason) = 0;
+  virtual void OpenFailed(OpenFailure reason,
+                          std::optional<ConfigureError> detail) = 0;
   virtual void Closed() = 0;
   virtual void DeviceLost() = 0;
   virtual void DeviceBack() = 0;
@@ -58,7 +59,8 @@ class DaemonControl : public CameraReports {
   // Stops the daemon as a failure, as when the face model failed.
   void Fail(std::string reason);
   void OnOpened() override;
-  void OnOpenFailed(OpenFailure reason) override;
+  void OnOpenFailed(OpenFailure reason,
+                    std::optional<ConfigureError> detail) override;
   void OnClosed() override;
   void OnDeviceLost() override;
   void OnDeviceBack() override;

@@ -17,6 +17,7 @@ namespace facepalm {
 // around it is tested with the API mocked. Calls may block.
 class CaptureSession : public CameraDirectory {
  public:
+  using ConfigureError = facepalm::ConfigureError;
   enum class Permission : std::uint8_t { kGranted, kUndetermined, kDenied };
 
   // One of the camera's supported frame-rate ranges, in frames a second.
@@ -41,6 +42,10 @@ class CaptureSession : public CameraDirectory {
   // returns its unique ID, or nothing when it cannot be used: there is no
   // such camera, or (with none configured) no default.
   virtual std::optional<std::string> Configure() = 0;
+  [[nodiscard]] virtual std::optional<ConfigureError> LastConfigureError()
+      const {
+    return std::nullopt;
+  }
   // The configured camera's frame rates.
   virtual FrameRates SupportedFrameRates() = 0;
   // Starts capturing at `frames_per_second`, which is within one of
@@ -80,7 +85,8 @@ class SessionCamera : public Camera {
  private:
   void Start(std::uint64_t attempt);
   void Report(void (CameraReports::*report)());
-  void ReportOpenFailed(OpenFailure reason);
+  void ReportOpenFailed(OpenFailure reason,
+                        std::optional<ConfigureError> detail = std::nullopt);
 
   CaptureSession& capture_;
   CameraReports& reports_;

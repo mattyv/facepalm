@@ -53,6 +53,8 @@ class CalibrationFlow {
     int screens = 0;
     // Set only while state == kFailed.
     std::string error;
+    bool connection_failed = false;
+    bool camera_unavailable = false;
   };
 
   // Sleeps between "calibrate start" retries while CalibrationMenu.tla's

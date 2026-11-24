@@ -2,8 +2,11 @@
 #define FACEPALM_SRC_MENU_STATE_H_
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
+
+#include "src/daemon_status.h"
 
 namespace facepalm {
 
@@ -37,10 +40,31 @@ struct DaemonState {
   // the camera-status line, rather than leaving "Camera off" standing
   // for both "idle" and "there is no camera to be idle".
   bool camera_in_use = false;
+  // The default avoids missing-field warnings at existing aggregate callers.
+  // NOLINTNEXTLINE(readability-redundant-member-init)
+  std::string camera_status_override = {};
   // Whether this menu's own preview window is showing, so its item reads
   // "Hide" rather than "Show" while it does.
   bool preview_open = false;
 };
+
+struct ManagerSnapshot {
+  std::int64_t pid = 0;
+  std::string state;
+};
+std::optional<ManagerSnapshot> ParseManagerSnapshot(std::string_view output);
+
+struct CameraHealthView {
+  std::string title;
+  bool keep_preview = false;
+  bool active = false;
+  bool verified = false;
+};
+
+CameraHealthView DescribeCameraHealth(const DaemonHealth& health,
+                                      bool identity_verified);
+bool HealthMatchesManager(std::int64_t health_pid, std::int64_t manager_pid,
+                          std::string_view active_state);
 
 enum class ServiceHealth : std::uint8_t { kFailed, kStarting, kUnavailable };
 ServiceHealth ParseServiceHealth(std::string_view active_state);

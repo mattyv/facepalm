@@ -452,7 +452,7 @@ if(FACEPALM_LINUX_TRAY)
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
-    client_token user_paths daemon_status single_instance calibration_flow calibration
+    client_token user_paths daemon_status single_instance calibration_flow calibration socket_ready
     cameras_listing menu_state settings_config_path menu_field_format settings_save_guard
     calibrate_client_token Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
@@ -740,6 +740,13 @@ else()
   add_custom_target(format-check
     COMMAND ${CMAKE_COMMAND} -E echo "clang-format not found at configure time"
     COMMAND ${CMAKE_COMMAND} -E false)
+endif()
+
+# Composed lifecycle trace; solitary owner coverage remains in their unit tests.
+if(BUILD_TESTING)
+  add_executable(camera_recovery_integration test/camera_recovery_integration.cc)
+  target_link_libraries(camera_recovery_integration PRIVATE camera_controller daemon_control GTest::gtest_main)
+  add_test(NAME camera_recovery_integration COMMAND camera_recovery_integration)
 endif()
 
 # Test-only service for the cross-process MCP integration test.

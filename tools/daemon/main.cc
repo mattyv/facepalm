@@ -80,14 +80,6 @@
 namespace facepalm {
 namespace {
 constexpr int kFeedCapacity = 100;
-// How long to wait before retrying a denied permission or a failed start
-// (#52, item 10 of #61): a fixed interval, decided over a backoff that
-// grows, since the usual cause (the person has not yet answered a System
-// Settings prompt, or opened it) does not get more likely to clear
-// sooner the fewer times it is checked, and a fixed interval is simpler
-// to explain and to test.
-constexpr std::chrono::seconds kRetryInterval{5};
-
 // How often to recheck the camera preview's own request file for camera
 // admission (#176, src/camera_demand.h), independent of whether the
 // camera is already open: a frame can only arrive, and so OnFrame's own
@@ -97,15 +89,20 @@ constexpr std::chrono::seconds kRetryInterval{5};
 // timer (tools/menu/main.mm, tools/menu/main_linux.cc) already uses.
 constexpr std::chrono::milliseconds kPreviewDemandPollInterval{500};
 
-// Schedules a retry on `control`, `kRetryInterval` later, on a thread of
+// Schedules a retry on `control` after its requested delay, on a thread of
 // its own: the portable way to delay a task when the queue underneath
 // (dispatch on macOS, the SerialQueue above on Linux) has no delay of its
 // own to ask for.
-CameraController::RetrySchedule RetryAfter(const Post& control) {
-  return [control](std::function<void()> retry) {
-    std::thread([control, retry = std::move(retry)] {
-      std::this_thread::sleep_for(kRetryInterval);
-      control(retry);
+CameraController::RetrySchedule RetryAfter(const Post& control,
+                                           const std::function<void()>& after) {
+  return [control, after](std::chrono::seconds delay,
+                          std::function<void()> retry) {
+    std::thread([control, after, delay, retry = std::move(retry)] {
+      std::this_thread::sleep_for(delay);
+      control([retry, after] {
+        retry();
+        after();
+      });
     }).detach();
   };
 }
@@ -254,18 +251,7 @@ class Engine : public DaemonController, public DaemonPipeline {
         // item 8) is this same edge too, generalized the same way, so the
         // indicator reads "Camera on" for a preview with no approved
         // client either.
-        camera_demand_([this](bool wanted) {
-          PublishStatus(wanted);
-          control_.Subscription(wanted);
-          // PreviewLease!CameraOpens / CameraCloses (#37 item 8, #176):
-          // the same combined signal the camera's own subscription
-          // already uses.
-          if (wanted) {
-            preview_lease_.CameraOpened();
-          } else {
-            preview_lease_.CameraClosed();
-          }
-        }),
+        camera_demand_([this](bool wanted) { OnCameraDemand(wanted); }),
         // PreviewLease!streaming_changed (#114, #134): once streaming
         // stops, the last frame published, and the readings text beside
         // it, are cleared, so neither ever answers the menu's next poll
@@ -510,7 +496,8 @@ class Engine : public DaemonController, public DaemonPipeline {
 #endif
         camera_(capture_, control_, std::move(camera), control_queue_,
                 config.frames_per_second),
-        controller_(camera_, clients_, true, RetryAfter(control_queue_)),
+        controller_(camera_, clients_, true,
+                    RetryAfter(control_queue_, [this] { OnRetry(); })),
         pipeline_(
             controller_, control_queue_, std::move(inference),
             FramePipeline::Callbacks{
@@ -519,6 +506,9 @@ class Engine : public DaemonController, public DaemonPipeline {
                 .on_error =
                     [this](const std::string& error) {
                       control_queue_([this, error] {
+                        RecordModelFailure(health_phase_, health_reason_,
+                                           health_detail_, error);
+                        PublishStatus(false);
                         control_.Fail(ModelFailureReason(error));
                       });
                     }}) {
@@ -572,6 +562,9 @@ class Engine : public DaemonController, public DaemonPipeline {
     controller_.OnOpened();
     if (DecideCameraStatusOnOpened(was_opening, controller_.CurrentState()) ==
         CameraStatusAction::kPublishOn) {
+      health_phase_ = ServicePhase::kActive;
+      health_reason_ = ServiceReason::kNone;
+      health_detail_.clear();
       PublishStatus(true);
     }
   }
@@ -584,18 +577,38 @@ class Engine : public DaemonController, public DaemonPipeline {
   // Published only for a report that really was opening, the same guard
   // Opened() above takes, so a stray or late report can never publish
   // off for a camera a genuinely later attempt already opened.
-  void OpenFailed(OpenFailure reason) override {
+  void OpenFailed(OpenFailure reason,
+                  std::optional<ConfigureError> detail) override {
     const bool was_opening =
         controller_.CurrentState() == CameraController::State::kOpening;
-    controller_.OnOpenFailed(reason);
+    controller_.OnOpenFailed(reason, detail);
     if (DecideCameraStatusOnOpenFailed(was_opening) ==
         CameraStatusAction::kPublishOff) {
+      health_phase_ = ServicePhase::kRetrying;
+      health_reason_ = CameraFailureReason(reason, detail);
+      health_detail_.clear();
       PublishStatus(false);
     }
   }
   void Closed() override { controller_.OnClosed(); }
-  void DeviceLost() override { controller_.OnDeviceLost(); }
-  void DeviceBack() override { controller_.OnDeviceBack(); }
+  void DeviceLost() override {
+    const bool was_open =
+        controller_.CurrentState() == CameraController::State::kOpen;
+    controller_.OnDeviceLost();
+    if (was_open) {
+      health_phase_ = ServicePhase::kRetrying;
+      health_reason_ = ServiceReason::kNoCandidate;
+      health_detail_.clear();
+      PublishStatus(false);
+    }
+  }
+  void DeviceBack() override {
+    controller_.OnDeviceBack();
+    if (controller_.CurrentState() == CameraController::State::kOpening) {
+      health_phase_ = ServicePhase::kOpening;
+      PublishStatus(false);
+    }
+  }
   [[nodiscard]] CameraController::State State() const override {
     return controller_.CurrentState();
   }
@@ -715,6 +728,28 @@ class Engine : public DaemonController, public DaemonPipeline {
     });
   }
 
+  void OnCameraDemand(bool wanted) {
+    if (health_phase_ != ServicePhase::kFailed) {
+      health_phase_ = wanted ? ServicePhase::kOpening : ServicePhase::kIdle;
+      health_reason_ = ServiceReason::kNone;
+      health_detail_.clear();
+    }
+    PublishStatus(wanted);
+    control_.Subscription(wanted);
+    if (wanted) {
+      preview_lease_.CameraOpened();
+    } else {
+      preview_lease_.CameraClosed();
+    }
+  }
+
+  void OnRetry() {
+    if (controller_.CurrentState() == CameraController::State::kOpening) {
+      health_phase_ = ServicePhase::kOpening;
+      PublishStatus(false);
+    }
+  }
+
   // CameraStatus!Publish. A daemon started with no --status path (such as
   // a test fixture's) simply runs without one.
   void PublishStatus(bool on) {
@@ -722,7 +757,8 @@ class Engine : public DaemonController, public DaemonPipeline {
       return;
     }
     std::string error;
-    if (!PublishCameraStatus(status_path_, on, error)) {
+    if (!PublishDaemonHealth(status_path_, on, health_phase_, health_reason_,
+                             health_detail_, error)) {
       std::fprintf(stderr, "facepalm-daemon: %s\n", error.c_str());
     }
   }
@@ -778,6 +814,9 @@ class Engine : public DaemonController, public DaemonPipeline {
   std::optional<ScreenContextReporter> reporter_;
   std::unique_ptr<FeelingStore> feelings_;  // The person's own reads (#35).
   std::string status_path_;
+  ServicePhase health_phase_ = ServicePhase::kIdle;
+  ServiceReason health_reason_ = ServiceReason::kNone;
+  std::string health_detail_;
   ReactionFeed feed_;
   FeedClients clients_;
   ApprovedFeed approved_;

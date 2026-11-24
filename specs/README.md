@@ -29,12 +29,12 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 |---|---|---|---|
 | `Calibration.cfg` | six steps, one camera outage | holds | 30 |
 | `CalibrationMenu.cfg` | one menu flow against one daemon session, a cold start's camera bounded to 2 retries, every guard on | holds, with `ClosingCompletes` and `CameraWaitResolves` | 78 |
-| `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,864 |
-| `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,864 |
+| `CameraLifecycle.cfg` | two clients, one helper restart, a second device, and the OS permission and Start's own readiness, with the default device chosen | holds | 20,512 |
+| `CameraLifecycle_ChosenOther.cfg` | the same bounds, with the other device chosen (#13) | holds | 20,512 |
 | `CameraStatus.cfg` | one daemon, the camera wanted and released, the menu polling | holds, with `CameraOnLeadsToDisplayOn` and `CameraOffLeadsToDisplayOff` | 4 |
 | `CameraStatus_Crash.cfg` | one crash or clean shutdown, one restart (#184) | holds, with `NeverStaleWhileRunning` and `CameraOffLeadsToDisplayOff` | 21 |
 | `CameraStatus_OpenFailure.cfg` | one failed camera open and its recovery (#185) | holds, with `OpenFailLeadsToDisplayOff` and `OpenRecoversLeadsToDisplayOn` | 10 |
-| `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 28,932 |
+| `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 25,404 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none, #142's gaze inert (`MaxLooks = 0`, one kind) | holds | 3,815,485 |
 | `FeelingBeat_Gaze.cfg` | one client, two readings, up to two Look steps, both kinds and every zone reachable (#142, #144) | holds | 20,352 |
@@ -164,14 +164,10 @@ one that was blocked some other way and retried, a lost device, and a
 a pending retry; the person, the clients and the OS are not. `MaxQueue = 2`
 bounds what the clients and the OS may queue, so the state space is finite.
 
-Item 10 of #61 (#52) splits "the open failed" into two reports: no device
-to use (`openFailed`, unchanged: `GuardOpenFailStops` still decides whether
-that stops the daemon) and everything else Start can fail at, such as a
-denied permission or a configuration race (`openBlocked`), which never
-stops the daemon and is retried instead, fairly, through the new `Retry`
-(`GuardRetries`). `canStart` stands for whatever Start needs that is not
-the device (`specs/CameraLifecycle.tla`'s `permitted /\ startWorks`); while
-it is false, an open attempt can only come back blocked.
+An open failure, including no device, leaves the daemon running and uses
+`Retry` (`GuardRetries`). `canStart` includes the device and all other
+requirements: while it is false, an attempt returns a failure; when it
+remains true, a wanted camera eventually opens.
 
 For #192, `Fail` records the first failure reason even if a clean stop has
 already begun. Retirement retains it and exit reports it. The model uses
@@ -206,7 +202,7 @@ Each mutation, and what TLC found (counts are the counterexample's states):
 | `GuardAckAfterRetire = FALSE`: a closed camera counts as closed before its model is destroyed | `ReopenAfterRetire` |
 | `GuardDeferDeviceBack = FALSE`: a device coming back is let in during a retirement | `ReopenAfterRetire` |
 | `GuardOpenOnce = FALSE`: an `Opened` after closing began creates a model | Nothing: the model is destroyed behind it on the same FIFO inference queue, so the guard only saves loading a model no frame will reach |
-| `GuardOpenFailStops = FALSE`: a camera with no device to use leaves the daemon running | Nothing: stopping for that cause is a choice, not a protection; without it the camera waits for the device to come back, which `JoinOpens` allows |
+| `GuardNoDeviceRecovers = FALSE`: a camera with no device stops the daemon | `NoDeviceDoesNotStop` |
 | `GuardFailureReason = FALSE`: a later failure overwrites the first | `FirstFailure` |
 | `GuardFailureReported = FALSE`: exit drops the reason | `FailureReported` |
 | `GuardRetries = FALSE`: a denied permission or a failed start never clears | `JoinOpens` (#52): `ctl.blocked` latches forever, so a session that stays joined, with the device and everything else Start needs, never reopens |
@@ -636,7 +632,7 @@ away the condition variable and operating-system scheduling.
 `CameraLifecycle` also invalidates in-flight tickets when the last subscriber
 leaves. With `GuardLastLeaveDiscards` false, TLC violates `NoStaleEvent`; the
 controller test `LastLeaveInvalidatesTicketsBeforeAReconnect` exercises it.
-The model checks 20,864 distinct states under the existing bounds (item 10
+The model checks 20,512 distinct states under the existing bounds (item 10
 of #61 added more variables since this was last counted).
 
 ## `TurnExcursion`: one turn per excursion, and a bound on the suppression
@@ -1790,3 +1786,50 @@ single pending query, timeout, kill and retirement before another query.
 | `GuardOffTruth = FALSE` | `OffOnly` violated |
 | `GuardShowReady = FALSE` | `ReadyEnabled` violated |
 | `GuardShowFailure = FALSE` | `FailureShown` violated |
+
+## Camera recovery (#195)
+
+`CameraLifecycle` models no-device failures as blocked until the existing
+retry action. With two clients and one restart, TLC checked 20,512 states;
+turning `GuardRetries` off violates `WantedOpens`. `DaemonAdmission` models
+no-device recovery and only retires after an open camera is lost. With three
+clients and queue bound two, TLC checked 25,404 states; turning
+`GuardNoDeviceRecovers` off violates `NoDeviceDoesNotStop`. The `canStart`
+environment stands for availability of both a device and its other start
+requirements; it must eventually remain true for `JoinOpens` to apply.
+
+`CameraRetry` bounds generation changes at two and the delay at four units.
+TLC checked 1,237 states; disabling identity violates `NoStaleOpen`, and
+disabling the cap violates `BackoffBounded`. `CameraRetryRetirement` checks
+consent, demand, repeated-loss and delayed-retirement interleavings in 25
+states. Disabling `GuardHoldUntilRetired` violates
+`NoReopenDuringRetirement`; disabling `GuardRetry` violates `Recovery`.
+These finite
+models abstract the actual timer and do not prove the OS or process lifetime.
+The timer is fair only when the scheduler eventually dispatches it. The
+controller tests cover cancellation, backoff and stale callbacks; daemon
+control tests cover the retirement boundary. `camera_recovery_integration`
+connects both real owners to controlled camera, timer and model ports and
+checks the blocked-loss and delayed-retirement trace end to end.
+
+### PreviewRecovery (#195)
+
+`PreviewRecovery.tla` models an open preview retaining its demand while a
+verified live service retries, clearing a stale frame, and displaying a
+current cause only with identity evidence. The complete Boolean model has
+11 distinct states and 23 generated states. Each guard mutation was checked
+independently with TLC:
+
+| Mutation | Violated invariant | Implementation evidence |
+|---|---|---|
+| `GuardRetain = FALSE` | `RetryRetains` | `CameraHealthTest.VerifiedRetryKeepsPreviewAndNamesReason` |
+| `GuardClear = FALSE` | `NoStaleDuringRetry` | Preview refresh clears the displayed image before checking recovery |
+| `GuardAttribution = FALSE` | `ReasonNeedsIdentity` | `CameraHealthTest.UnverifiedFailureIsHistoricalAndNeverCurrent` |
+
+The model abstracts the socket and service manager to an identity boolean;
+peer credentials and manager output are tested separately. Calibration has a
+bounded attempt: its connection stays open during the retries, then the
+wizard reports a camera failure and offers a fresh attempt. An open preview
+continues to refresh its request while the verified daemon is retrying.
+The preview widget's displayed pixels and its behavior with real hardware are
+not exercised by these model and solitary tests; they require a manual check.

@@ -1,5 +1,44 @@
 # Decisions
 
+## 2026-11-24: Select usable Linux color nodes independently of bus transport (#195)
+
+An empty device choice selects a usable color capture node discovered under
+`/dev/video*`, including an integrated USB camera. Restricting the default to
+`platform:` bus identifiers rejected such cameras despite listing them.
+Use per-node capabilities and recognized native color formats; metadata,
+monochrome, unknown formats and infrared-name hints are excluded before
+considering libv4l2 RGB conversion. Emulated RGB is not evidence of a native
+color sensor. Keep existing bus identifiers for configured choices and log
+each rejection. The conservative format list and optical-classification
+limits are documented in docs/linux-camera.md. Optional TRY_FMT absence
+falls back to real capture negotiation rather than rejecting a valid device.
+This does not claim hardware or converter behavior was verified by mocks.
+
+## 2026-11-24: Retry unavailable cameras without restarting the daemon (#195)
+
+Treat an unavailable camera like other retryable open failures: keep the
+service alive while consent and client or preview demand remain, and retry
+through the controller's existing timer port at 1, 2, 4, 8, 16, then at
+most 30 seconds. A successful open or canceled demand resets the delay;
+generation checks prevent canceled timer callbacks from reviving later work.
+A device-loss report starts model retirement only when the camera was open.
+The controller remains closing until that retirement is acknowledged; a
+return is deferred and renewed demand cannot reopen it early. If demand and
+consent remain, a retry is armed after retirement even without a device-return
+notification. A failed, never-opened camera does not own a model. Retry assumes
+the scheduler eventually dispatches its callback; hardware availability and
+operating-system scheduling remain outside that guarantee.
+
+For fatal daemon exits, the generated systemd unit uses a five-second restart
+delay and an explicit ten-start budget over 30 seconds. Automatic crash
+restarts cannot exhaust that budget by themselves, while sufficiently many
+manual starts can still reach it. Do not disable the manager's rate limit.
+No device, permission or start failure is reported as a successful camera
+open. The in-process health snapshot records the failure separately from the
+legacy camera-use indicator; its PID is evidence of liveness, not identity.
+The CameraLifecycle, DaemonAdmission, CameraRetry and CameraRetryRetirement
+models, mutation checks and composed test are recorded in specs/README.md.
+
 ## 2026-11-24: Ubuntu camera release package (#190)
 
 Add an opt-in Ubuntu 26.04 amd64 package containing the tray, camera daemon,

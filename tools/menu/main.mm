@@ -68,19 +68,41 @@ NSURL* SettingsURL() {
   return [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
 }
 
-// Whether the camera is in use, from the daemon's status file
-// (src/daemon_status.h): a missing file, as when Facepalm is off, reads
-// as off.
-BOOL CameraInUse() {
-  const std::optional<facepalm::UserPaths> paths =
-      facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
-  return paths && facepalm::ReadCameraStatus(paths->status) ? YES : NO;
+struct CameraObservation {
+  facepalm::SocketProbeResult probe{.ready = false, .peer_pid = std::nullopt};
+  std::optional<facepalm::DaemonHealth> health;
+  facepalm::CameraHealthView camera;
+};
+
+CameraObservation ObserveCamera() {
+  CameraObservation result;
+  const auto paths = facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
+  if (!paths) return result;
+  result.probe = facepalm::ProbeSocketReady(paths->socket);
+  result.health = facepalm::ReadDaemonHealth(paths->status);
+  if (result.health) {
+    const bool verified = result.probe.peer_pid && *result.probe.peer_pid > 0 &&
+                          *result.probe.peer_pid == result.health->pid;
+    result.camera = facepalm::DescribeCameraHealth(*result.health, verified);
+  }
+  return result;
 }
 
-bool ServiceReady() {
-  const auto paths = facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
-  if (!paths) return false;
-  return facepalm::SocketReady(paths->socket);
+bool ServiceReady() { return ObserveCamera().probe.ready; }
+
+std::string CameraFailure() {
+  const auto observation = ObserveCamera();
+  if (!observation.health) return {};
+  if (observation.camera.verified && (observation.health->phase == facepalm::ServicePhase::kIdle ||
+                                      observation.health->phase == facepalm::ServicePhase::kActive))
+    return "Camera is available";
+  return observation.camera.title;
+}
+
+NSString* CameraFailureMessage() {
+  const auto reason = CameraFailure();
+  return reason.empty() ? @"Camera service is unavailable."
+                        : [NSString stringWithUTF8String:reason.c_str()];
 }
 
 // The camera preview's own paths (#37 item 8, #108): creating
@@ -350,11 +372,15 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
 // cause of a preview or a calibration wizard that can never reach it.
 - (void)refreshMenuState {
   const BOOL serviceOn = ServiceIsOn();
-  const facepalm::MenuState state =
-      facepalm::DecideMenuState({.service_on = serviceOn ? true : false,
-                                 .service_ready = serviceOn && ServiceReady(),
-                                 .camera_in_use = CameraInUse() ? true : false,
-                                 .preview_open = self.previewWindow.visible ? true : false});
+  const auto observation = ObserveCamera();
+  const facepalm::MenuState state = facepalm::DecideMenuState(
+      {.service_on = serviceOn ? true : false,
+       .service_ready = serviceOn && observation.probe.ready,
+       .camera_in_use = observation.camera.active,
+       .camera_status_override = observation.camera.title.empty() && observation.probe.ready
+                                     ? "Camera status unavailable"
+                                     : observation.camera.title,
+       .preview_open = self.previewWindow.visible ? true : false});
   self.power.title = serviceOn ? @"Turn Off Facepalm" : @"Turn On Facepalm…";
   self.cameraStatus.title = [NSString stringWithUTF8String:state.camera_status_title.c_str()];
   self.statusItem.button.toolTip =
@@ -404,7 +430,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
     return;
   }
   if (!ServiceIsOn() || !ServiceReady()) {
-    [self showError:@"Facepalm is unavailable." title:@"Preview could not start"];
+    [self showError:CameraFailureMessage() title:@"Preview could not start"];
     [self refreshMenuState];
     return;
   }
@@ -505,7 +531,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
     return;
   }
   if (!ServiceIsOn() || !ServiceReady()) {
-    [self showError:@"Facepalm is unavailable." title:@"Calibration could not start"];
+    [self showError:CameraFailureMessage() title:@"Calibration could not start"];
     [self refreshMenuState];
     return;
   }
@@ -526,7 +552,9 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
     return;
   }
   self.calibrationController =
-      [[CalibrationWindowController alloc] initWithSocketPath:paths->socket token:*result.token];
+      [[CalibrationWindowController alloc] initWithSocketPath:paths->socket
+                                                        token:*result.token
+                                                cameraFailure:CameraFailure];
   __weak FacepalmApp* weakSelf = self;
   self.calibrationController.onClosed = ^{
     weakSelf.calibrationController = nil;
@@ -602,7 +630,15 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
     [self touchPreviewRequest:[NSString stringWithUTF8String:paths->preview_request.c_str()]
                         error:&error];
   }
-  if (!CameraInUse()) {
+  const auto observation = ObserveCamera();
+  if (!observation.camera.active) {
+    self.previewImageView.image = nil;
+    self.previewStatus.stringValue =
+        [NSString stringWithUTF8String:observation.camera.title.c_str()];
+    if (observation.camera.keep_preview && observation.probe.ready) {
+      self.previewCameraMisses = 0;
+      return;
+    }
     if (++self.previewCameraMisses >= kPreviewCameraGraceMisses) {
       [self stopPreview];
     }

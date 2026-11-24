@@ -205,12 +205,15 @@ QString StepPrompt(const facepalm::CalibrationFlow::View& view) {
 
 }  // namespace
 
-CalibrationWindow::CalibrationWindow(QWidget* parent, std::string socket_path)
+CalibrationWindow::CalibrationWindow(
+    QWidget* parent, std::string socket_path,
+    std::function<std::string()> camera_failure)
     : window_(parent),
       label_(new QLabel(&window_)),
       primary_(new QPushButton(&window_)),
       secondary_(new QPushButton(&window_)),
-      socket_path_(std::move(socket_path)) {
+      socket_path_(std::move(socket_path)),
+      camera_failure_(std::move(camera_failure)) {
   window_.setWindowTitle(QStringLiteral("Calibrate Facepalm"));
   window_.resize(kWindowSide, kWindowSide / 2);
   label_->setWordWrap(true);
@@ -231,6 +234,15 @@ CalibrationWindow::CalibrationWindow(QWidget* parent, std::string socket_path)
   // and Close buttons funnel into once they close the window themselves.
   QObject::connect(&window_, &QDialog::rejected, &window_,
                    [this] { WindowClosed(); });
+  QObject::connect(&failure_timer_, &QTimer::timeout, &window_, [this] {
+    if (window_.isVisible() && started_ &&
+        flow_->CurrentView().state ==
+            facepalm::CalibrationFlow::State::kFailed &&
+        (flow_->CurrentView().connection_failed ||
+         flow_->CurrentView().camera_unavailable)) {
+      Render();
+    }
+  });
 }
 
 void CalibrationWindow::Open(std::string token) {
@@ -243,6 +255,8 @@ void CalibrationWindow::Open(std::string token) {
   flow_ = std::make_unique<facepalm::CalibrationFlow>(socket_path_,
                                                       std::move(token), *io_);
   started_ = false;
+  constexpr int kHealthRefreshMs = 1000;
+  failure_timer_.start(kHealthRefreshMs);
   Render();
   window_.show();
   window_.raise();
@@ -289,8 +303,16 @@ void CalibrationWindow::Render() {
       secondary_->setText(QStringLiteral("Close"));
       break;
     case facepalm::CalibrationFlow::State::kFailed:
-      label_->setText(QStringLiteral("Calibration could not finish: %1")
-                          .arg(QString::fromStdString(view.error)));
+      if (view.connection_failed || view.camera_unavailable) {
+        const std::string reason = camera_failure_();
+        label_->setText(
+            QStringLiteral("Calibration could not finish: %1. Try again.")
+                .arg(QString::fromStdString(reason.empty() ? view.error
+                                                           : reason)));
+      } else {
+        label_->setText(QStringLiteral("Calibration could not finish: %1")
+                            .arg(QString::fromStdString(view.error)));
+      }
       primary_->setVisible(false);
       secondary_->setText(QStringLiteral("Close"));
       break;
@@ -320,6 +342,7 @@ void CalibrationWindow::SecondaryClicked() {
     Render();
     return;
   }
+  failure_timer_.stop();
   window_.hide();
 }
 
@@ -329,6 +352,7 @@ void CalibrationWindow::SecondaryClicked() {
 // CalibrationFlow::WindowClosed is a no-op unless a step was showing, so
 // calling it unconditionally is always safe.
 void CalibrationWindow::WindowClosed() {
+  failure_timer_.stop();
   if (flow_) {
     flow_->WindowClosed();
   }

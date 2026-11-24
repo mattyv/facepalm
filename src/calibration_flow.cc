@@ -212,7 +212,8 @@ void CalibrationFlow::ApplyStatus(const CalibrationController::Status& status) {
 
 void CalibrationFlow::Start(int screens) {
   if (!io_.Connect(socket_path_)) {
-    Fail("cannot connect to " + socket_path_);
+    Fail("Camera service is unavailable");
+    view_.connection_failed = true;
     return;
   }
   std::string hello_line = "hello " + std::string(kClientName);
@@ -247,7 +248,9 @@ void CalibrationFlow::Start(int screens) {
       return;
     }
     if (error != kCameraUnavailableError || attempt == kMaxCameraWaits) {
+      const bool camera_unavailable = error == kCameraUnavailableError;
       Fail(error);
+      view_.camera_unavailable = camera_unavailable;
       return;
     }
     wait_(kCameraWaitInterval);

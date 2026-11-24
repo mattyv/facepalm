@@ -2,6 +2,7 @@
 
 #include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <charconv>
 #include <csignal>
@@ -10,6 +11,7 @@
 #include <cstring>
 #include <fstream>
 #include <ios>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -25,7 +27,7 @@ constexpr std::string_view kOff = "off";
 // EPERM means one exists but is owned by someone else, which still
 // counts as alive.
 bool ProcessAlive(std::int64_t pid) {
-  if (pid <= 0) {
+  if (pid <= 0 || pid > std::numeric_limits<pid_t>::max()) {
     return false;
   }
   if (::kill(static_cast<pid_t>(pid), 0) == 0) {
@@ -33,13 +35,38 @@ bool ProcessAlive(std::int64_t pid) {
   }
   return errno == EPERM;
 }
-}  // namespace
+constexpr std::size_t kMaxDetail = 256;
+constexpr std::size_t kMaxRecord = 512;
+constexpr std::string_view kVersion = "health-v1";
+constexpr std::size_t kFieldCount = 6;
+constexpr std::size_t kDetailField = 5;
 
-bool PublishCameraStatus(const std::string& path, bool on, std::string& error) {
+bool ParseInteger(std::string_view text, std::int64_t& value) {
+  const char* const begin = text.data();
+  const char* const end = begin + text.size();
+  const auto parsed = std::from_chars(begin, end, value);
+  return parsed.ec == std::errc{} && parsed.ptr == end;
+}
+
+std::string SafeDetail(std::string_view input) {
+  std::string result;
+  for (unsigned char const byte : input) {
+    if (result.size() == kMaxDetail) {
+      break;
+    }
+    result.push_back(byte >= ' ' && byte <= '~' ? static_cast<char>(byte)
+                                                : ' ');
+  }
+  return result;
+}
+
+bool WriteRecord(const std::string& path, std::string_view record,
+                 std::string& error) {
   const std::string temporary = path + ".tmp";
   {
     std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-    file << (on ? kOn : kOff) << '\n' << ::getpid() << '\n';
+    file << record;
+    file.flush();
     if (!file.good()) {
       error = "cannot write " + temporary + ": " + std::strerror(errno);
       return false;
@@ -51,6 +78,75 @@ bool PublishCameraStatus(const std::string& path, bool on, std::string& error) {
     return false;
   }
   return true;
+}
+
+}  // namespace
+
+bool PublishCameraStatus(const std::string& path, bool on, std::string& error) {
+  const std::string record =
+      std::string(on ? kOn : kOff) + "\n" + std::to_string(::getpid()) + "\n";
+  return WriteRecord(path, record, error);
+}
+
+bool PublishDaemonHealth(const std::string& path, bool camera_on,
+                         ServicePhase phase, ServiceReason reason,
+                         std::string_view detail, std::string& error) {
+  const auto phase_value = static_cast<unsigned int>(phase);
+  const auto reason_value = static_cast<unsigned int>(reason);
+  if (phase_value > static_cast<unsigned int>(ServicePhase::kFailed) ||
+      reason_value > static_cast<unsigned int>(ServiceReason::kModelFailure)) {
+    error = "invalid health state";
+    return false;
+  }
+  const std::string record =
+      std::string(camera_on ? kOn : kOff) + "\n" + std::to_string(::getpid()) +
+      "\n" + std::string(kVersion) + "\n" + std::to_string(phase_value) + "\n" +
+      std::to_string(reason_value) + "\n" + SafeDetail(detail) + "\n";
+  return WriteRecord(path, record, error);
+}
+
+std::optional<DaemonHealth> ReadDaemonHealth(const std::string& path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file.is_open()) {
+    return std::nullopt;
+  }
+  std::array<char, kMaxRecord + 1> buffer{};
+  file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+  const auto size = static_cast<std::size_t>(file.gcount());
+  if (size > kMaxRecord || file.bad()) {
+    return std::nullopt;
+  }
+  std::string_view record(buffer.data(), size);
+  std::array<std::string_view, kFieldCount> fields{};
+  for (auto& field : fields) {
+    const auto end = record.find('\n');
+    if (end == std::string_view::npos) {
+      return std::nullopt;
+    }
+    field = record.substr(0, end);
+    record.remove_prefix(end + 1);
+  }
+  if (!record.empty() || (fields[0] != kOn && fields[0] != kOff) ||
+      fields[2] != kVersion || fields[kDetailField].size() > kMaxDetail ||
+      SafeDetail(fields[kDetailField]) != fields[kDetailField]) {
+    return std::nullopt;
+  }
+  std::int64_t pid = 0;
+  std::int64_t phase = 0;
+  std::int64_t reason = 0;
+  if (!ParseInteger(fields[1], pid) || pid <= 0 ||
+      pid > std::numeric_limits<pid_t>::max() ||
+      !ParseInteger(fields[3], phase) || phase < 0 ||
+      phase > static_cast<std::int64_t>(ServicePhase::kFailed) ||
+      !ParseInteger(fields[4], reason) || reason < 0 ||
+      reason > static_cast<std::int64_t>(ServiceReason::kModelFailure)) {
+    return std::nullopt;
+  }
+  return DaemonHealth{.phase = static_cast<ServicePhase>(phase),
+                      .reason = static_cast<ServiceReason>(reason),
+                      .detail = std::string(fields[kDetailField]),
+                      .pid = pid,
+                      .alive = ProcessAlive(pid)};
 }
 
 bool ReadCameraStatus(const std::string& path) {

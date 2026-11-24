@@ -49,6 +49,7 @@
 #include "src/settings_document.h"
 #include "src/settings_save_guard.h"
 #include "src/single_instance.h"
+#include "src/socket_ready.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
 #include "tools/menu/calibration_window_linux.h"
@@ -308,26 +309,81 @@ bool ServiceIsOn() {
   return service.IsOn();
 }
 
-facepalm::ServiceHealth ServiceHealth() {
+std::optional<facepalm::ManagerSnapshot> ManagerState() {
   static facepalm_menu::ServiceHealthQuery query;
   constexpr int kQueryTimeoutMs = 200;
-  return query.Read(
-      QStringLiteral("systemctl"),
-      {QStringLiteral("--user"), QStringLiteral("show"),
-       QStringLiteral("--property=ActiveState"), QStringLiteral("--value"),
-       QStringLiteral("facepalm.service")},
-      kQueryTimeoutMs);
+  const auto output =
+      query.ReadOutput(QStringLiteral("systemctl"),
+                       {QStringLiteral("--user"), QStringLiteral("show"),
+                        QStringLiteral("--property=ActiveState"),
+                        QStringLiteral("--property=ExecMainPID"),
+                        QStringLiteral("facepalm.service")},
+                       kQueryTimeoutMs);
+  return output ? facepalm::ParseManagerSnapshot(*output) : std::nullopt;
 }
 
-facepalm::ServiceHealth HealthWhenUnavailable(bool on, bool ready) {
-  return on && !ready ? ServiceHealth() : facepalm::ServiceHealth::kUnavailable;
+facepalm::CameraHealthView CameraView(
+    const std::optional<facepalm::DaemonHealth>& health,
+    const std::optional<facepalm::ManagerSnapshot>& manager,
+    const std::optional<std::int64_t>& peer_pid = std::nullopt) {
+  if (!health) {
+    return {};
+  }
+  const bool verified =
+      (peer_pid && *peer_pid > 0 && *peer_pid == health->pid) ||
+      (!peer_pid && manager &&
+       facepalm::HealthMatchesManager(health->pid, manager->pid,
+                                      manager->state));
+  return facepalm::DescribeCameraHealth(*health, verified);
+}
+
+std::string CameraFailure() {
+  const auto health = facepalm::ReadDaemonHealth(StatusPath().toStdString());
+  if (!health) {
+    return {};
+  }
+  const auto probe = facepalm::ProbeSocketReady(SocketPath().toStdString());
+  const auto manager = probe.ready ? std::nullopt : ManagerState();
+  const auto camera = CameraView(health, manager, probe.peer_pid);
+  if (camera.verified && (health->phase == facepalm::ServicePhase::kIdle ||
+                          health->phase == facepalm::ServicePhase::kActive)) {
+    return "Camera is available";
+  }
+  return camera.title;
+}
+
+facepalm::DaemonState CurrentMenuState(bool service_on, bool preview_open,
+                                       const std::string& status_path) {
+  const auto probe =
+      service_on ? facepalm::ProbeSocketReady(SocketPath().toStdString())
+                 : facepalm::SocketProbeResult{.ready = false,
+                                               .peer_pid = std::nullopt};
+  const auto manager =
+      service_on && !probe.ready ? ManagerState() : std::nullopt;
+  const auto snapshot = facepalm::ReadDaemonHealth(status_path);
+  const auto camera = CameraView(snapshot, manager, probe.peer_pid);
+  const std::string status =
+      !probe.ready && camera.active ? std::string() : camera.title;
+  return {.service_on = service_on,
+          .service_ready = probe.ready,
+          .service_failed = manager && manager->state == "failed",
+          .service_starting = manager && manager->state == "activating",
+          .camera_in_use = camera.active,
+          .camera_status_override = status.empty() && probe.ready
+                                        ? "Camera status unavailable"
+                                        : status,
+          .preview_open = preview_open};
 }
 
 void OpenCalibrationIfReady(facepalm_menu::CalibrationWindow& calibration,
                             QWidget* parent) {
   if (!ServiceIsOn() || !ServiceReady(SocketPath())) {
+    const auto health = facepalm::ReadDaemonHealth(StatusPath().toStdString());
+    const auto camera = CameraView(health, ManagerState());
     QMessageBox::warning(parent, QStringLiteral("Calibration could not start"),
-                         QStringLiteral("Facepalm is unavailable."));
+                         camera.title.empty()
+                             ? QStringLiteral("Camera service is unavailable.")
+                             : QString::fromStdString(camera.title));
     return;
   }
   OpenCalibration(calibration, parent);
@@ -588,7 +644,8 @@ class SettingsDialog : public QDialog {
     }
     fps_->setValue(config.frames_per_second);
     camera_->clear();
-    camera_->addItem(QStringLiteral("Default (built-in camera)"), QString());
+    camera_->addItem(QStringLiteral("Default (visible-light camera)"),
+                     QString());
     const QString wanted = QString::fromStdString(config.camera_device_id);
     bool found_wanted = wanted.isEmpty();
     for (const facepalm::CamerasListingEntry& device : ListCameras()) {
@@ -737,8 +794,14 @@ class CameraPreview {
     if (window_.isVisible()) {
       Stop();
     } else if (!ServiceIsOn() || !ServiceReady(SocketPath())) {
-      QMessageBox::warning(parent, QStringLiteral("Preview could not start"),
-                           QStringLiteral("Facepalm is unavailable."));
+      const auto health =
+          facepalm::ReadDaemonHealth(StatusPath().toStdString());
+      const auto camera = CameraView(health, ManagerState());
+      QMessageBox::warning(
+          parent, QStringLiteral("Preview could not start"),
+          camera.title.empty()
+              ? QStringLiteral("Camera service is unavailable.")
+              : QString::fromStdString(camera.title));
     } else {
       Start();
     }
@@ -816,7 +879,19 @@ class CameraPreview {
   // to stop.
   void Refresh() {
     Touch();
-    if (!facepalm::ReadCameraStatus(StatusPath().toStdString())) {
+    const auto health = facepalm::ReadDaemonHealth(StatusPath().toStdString());
+    const auto probe = facepalm::ProbeSocketReady(SocketPath().toStdString());
+    const auto manager = probe.ready ? std::nullopt : ManagerState();
+    const auto camera = CameraView(health, manager, probe.peer_pid);
+    if (!camera.active || !probe.ready) {
+      label_->clear();
+      status_->setText(QString::fromStdString(camera.title));
+      if (camera.keep_preview && probe.ready) {
+        misses_ = 0;
+        return;
+      }
+    }
+    if (!camera.active || !probe.ready) {
       // How many refreshes in a row, at kRefreshMs apart, may find the
       // camera not yet in use before giving up: long enough for the
       // daemon's own camera-demand poll (tools/daemon/main.cc's
@@ -921,8 +996,8 @@ int main(int argc, char* argv[]) {
   // The calibration wizard (#118, item 12 of #61): optional, so it is a
   // menu entry a person chooses, never run on their behalf.
   QAction* calibrate_action = menu.addAction(QStringLiteral("Calibrate…"));
-  facepalm_menu::CalibrationWindow calibration(&window,
-                                               SocketPath().toStdString());
+  facepalm_menu::CalibrationWindow calibration(
+      &window, SocketPath().toStdString(), CameraFailure);
 
   // Decides camera_status's, power's, preview_action's and
   // calibrate_action's title and enabled state from src/menu_state.h's
@@ -933,15 +1008,9 @@ int main(int argc, char* argv[]) {
   const QString status_path = StatusPath();
   const auto refresh_menu_state = [=, &preview] {
     const bool service_on = ServiceIsOn();
-    const bool service_ready = service_on && ServiceReady(SocketPath());
-    const auto health = HealthWhenUnavailable(service_on, service_ready);
-    const facepalm::MenuState state = facepalm::DecideMenuState(
-        {.service_on = service_on,
-         .service_ready = service_ready,
-         .service_failed = health == facepalm::ServiceHealth::kFailed,
-         .service_starting = health == facepalm::ServiceHealth::kStarting,
-         .camera_in_use = facepalm::ReadCameraStatus(status_path.toStdString()),
-         .preview_open = preview.IsOpen()});
+    const facepalm::MenuState state =
+        facepalm::DecideMenuState(CurrentMenuState(service_on, preview.IsOpen(),
+                                                   status_path.toStdString()));
     power->setText(service_on ? QStringLiteral("Turn Off Facepalm")
                               : QStringLiteral("Turn On Facepalm…"));
     camera_status->setText(QString::fromStdString(state.camera_status_title));

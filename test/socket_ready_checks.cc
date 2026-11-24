@@ -83,7 +83,12 @@ TEST_F(RealSocketTest, SuccessfulProbeSendsNoBytes) {
       bind(listener, reinterpret_cast<sockaddr*>(&address), sizeof(address)),
       0);
   ASSERT_EQ(listen(listener, 1), 0);
-  ASSERT_TRUE(SocketReady(path_));
+  const auto result = ProbeSocketReady(path_);
+  ASSERT_TRUE(result.ready);
+#if defined(__linux__) || defined(__APPLE__)
+  ASSERT_TRUE(result.peer_pid.has_value());
+  EXPECT_EQ(*result.peer_pid, getpid());
+#endif
   const int probe = accept(listener, nullptr, nullptr);
   ASSERT_GE(probe, 0);
   fds_.push_back(probe);

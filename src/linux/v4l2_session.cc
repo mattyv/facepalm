@@ -1,15 +1,21 @@
 #include "src/linux/v4l2_session.h"
 
 #include <fcntl.h>
+#include <glob.h>
 #include <libv4l2.h>
 #include <linux/videodev2.h>
 #include <poll.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <regex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,37 +28,140 @@ constexpr int kHeight = 480;
 constexpr int kMaxDimension = 4096;
 constexpr std::size_t kMaxImage = std::size_t{64} * 1024 * 1024;
 constexpr std::uint8_t kOpaqueAlpha = 255;
-// /dev/video0 through /dev/video3 (item 10 of #61): most systems put each
-// camera on a low-numbered node, and opendir has no seam for a test to
-// replace, as v4l2_open, v4l2_ioctl and v4l2_close do, so this probes a
-// bounded range of names instead of listing the directory.
-constexpr int kProbedNodes = 4;
-
-// A v4l2_capability's own bus_info identifies the physical device: it
-// stays the same across a reboot, unlike the node number a camera happens
-// to land on. "platform:" names one wired directly to the board, as
-// opposed to "usb-..." for one plugged in (#13).
+// The bus remains the public identifier for compatibility with saved choices.
 bool IsBuiltIn(const std::string& bus_info) {
   return bus_info.starts_with("platform:");
 }
 
-// Queries `fd`'s capabilities as a CameraDevice, or nothing when the ioctl
-// fails.
-std::optional<CameraDevice> Queried(int fd) {
-  v4l2_capability cap{};
-  if (v4l2_ioctl(fd, VIDIOC_QUERYCAP, &cap) != 0) {
-    return std::nullopt;
+std::vector<std::string> NodePaths() {
+  glob_t matches{};
+  const int result = glob("/dev/video[0-9]*", 0, nullptr, &matches);
+  std::vector<std::string> paths;
+  if (result == 0) {
+    for (std::size_t i = 0; i < matches.gl_pathc; ++i) {
+      const std::string path(matches.gl_pathv[i]);
+      const auto suffix = path.substr(std::strlen("/dev/video"));
+      if (std::ranges::all_of(
+              suffix, [](unsigned char c) { return std::isdigit(c) != 0; })) {
+        paths.push_back(path);
+      }
+    }
+  } else if (result != GLOB_NOMATCH) {
+    std::fprintf(stderr, "camera enumeration failed: glob=%d\n", result);
   }
-  const std::string bus_info(reinterpret_cast<const char*>(cap.bus_info));
-  return CameraDevice{
-      .id = bus_info,
-      .name = std::string(reinterpret_cast<const char*>(cap.card)),
-      .built_in = IsBuiltIn(bus_info),
-  };
+  globfree(&matches);
+  return paths;
 }
 
-// The path of the node at `index`, from 0 to kProbedNodes - 1.
-std::string NodePath(int index) { return "/dev/video" + std::to_string(index); }
+// These single-plane RGB, JPEG and YUV formats are supported by libv4lconvert.
+// Unknown and luma-only formats are not evidence of color; format labels do
+// not establish which wavelengths a sensor captures. See the kernel's
+// pixfmt-yuv-luma documentation and v4l-utils libv4lconvert.c.
+bool KnownColorFormat(std::uint32_t format) {
+  constexpr std::array<std::uint32_t, 10> kColorFormats = {
+      V4L2_PIX_FMT_RGB24, V4L2_PIX_FMT_BGR24, V4L2_PIX_FMT_MJPEG,
+      V4L2_PIX_FMT_JPEG,  V4L2_PIX_FMT_YUYV,  V4L2_PIX_FMT_UYVY,
+      V4L2_PIX_FMT_YVYU,  V4L2_PIX_FMT_NV12,  V4L2_PIX_FMT_YUV420,
+      V4L2_PIX_FMT_YVU420};
+  return std::ranges::find(kColorFormats, format) != kColorFormats.end();
+}
+
+std::optional<CameraDevice> Queried(
+    int fd, const std::string& path,
+    std::optional<CaptureSession::ConfigureError>* error) {
+  v4l2_capability cap{};
+  if (v4l2_ioctl(fd, VIDIOC_QUERYCAP, &cap) != 0) {
+    if (error != nullptr) {
+      *error = CaptureSession::ConfigureError::kQueryFailed;
+    }
+    std::fprintf(stderr, "camera %s: QUERYCAP failed errno=%d\n", path.c_str(),
+                 errno);
+    return std::nullopt;
+  }
+  const std::string bus(reinterpret_cast<const char*>(cap.bus_info),
+                        strnlen(reinterpret_cast<const char*>(cap.bus_info),
+                                sizeof(cap.bus_info)));
+  const std::string name(
+      reinterpret_cast<const char*>(cap.card),
+      strnlen(reinterpret_cast<const char*>(cap.card), sizeof(cap.card)));
+  const auto caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS) != 0
+                        ? cap.device_caps
+                        : cap.capabilities;
+  std::fprintf(stderr,
+               "camera %s: bus=%s name=%s capabilities=0x%x device_caps=0x%x\n",
+               path.c_str(), bus.c_str(), name.c_str(), cap.capabilities,
+               cap.device_caps);
+  if ((caps & V4L2_CAP_VIDEO_CAPTURE) == 0 ||
+      (caps & (static_cast<std::uint32_t>(V4L2_CAP_READWRITE) |
+               static_cast<std::uint32_t>(V4L2_CAP_STREAMING))) == 0) {
+    if (error != nullptr) {
+      *error = CaptureSession::ConfigureError::kUnsupported;
+    }
+    std::fprintf(stderr,
+                 "camera %s: rejected: not a readable video capture node\n",
+                 path.c_str());
+    return std::nullopt;
+  }
+  std::string lower = name;
+  std::ranges::transform(lower, lower.begin(),
+                         [](unsigned char c) { return std::tolower(c); });
+  static const std::regex k_infrared(
+      R"((^|[^a-z0-9])(ir|infrared)([^a-z0-9]|$))");
+  if (std::regex_search(lower, k_infrared)) {
+    if (error != nullptr) {
+      *error = CaptureSession::ConfigureError::kUnsupported;
+    }
+    std::fprintf(stderr, "camera %s: rejected: infrared name\n", path.c_str());
+    return std::nullopt;
+  }
+  bool color = false;
+  v4l2_fmtdesc format{};
+  format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  while (v4l2_ioctl(fd, VIDIOC_ENUM_FMT, &format) == 0) {
+    const auto f = format.pixelformat;
+    std::fprintf(
+        stderr, "camera %s: format=0x%08x description=%.32s flags=0x%x\n",
+        path.c_str(), f, reinterpret_cast<const char*>(format.description),
+        format.flags);
+    if ((format.flags & V4L2_FMT_FLAG_EMULATED) == 0 && KnownColorFormat(f)) {
+      color = true;
+    }
+    ++format.index;
+  }
+  if (!color) {
+    if (error != nullptr) {
+      *error = CaptureSession::ConfigureError::kUnsupported;
+    }
+    std::fprintf(stderr,
+                 "camera %s: rejected: no recognized native color format "
+                 "(unknown and monochrome formats excluded)\n",
+                 path.c_str());
+    return std::nullopt;
+  }
+  v4l2_format rgb{};
+  rgb.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  rgb.fmt.pix.width = kWidth;
+  rgb.fmt.pix.height = kHeight;
+  rgb.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+  rgb.fmt.pix.field = V4L2_FIELD_ANY;
+  const int tried = v4l2_ioctl(fd, VIDIOC_TRY_FMT, &rgb);
+  const int try_error = errno;
+  if (tried != 0 && (try_error == ENOTTY || try_error == EINVAL)) {
+    std::fprintf(stderr,
+                 "camera %s: TRY_FMT unsupported errno=%d; capture will "
+                 "negotiate RGB24\n",
+                 path.c_str(), try_error);
+  } else if (tried != 0 || rgb.fmt.pix.pixelformat != V4L2_PIX_FMT_RGB24) {
+    if (error != nullptr) {
+      *error = CaptureSession::ConfigureError::kUnsupported;
+    }
+    std::fprintf(stderr,
+                 "camera %s: rejected: RGB24 conversion unavailable errno=%d\n",
+                 path.c_str(), try_error);
+    return std::nullopt;
+  }
+  return CameraDevice{.id = bus, .name = name, .built_in = IsBuiltIn(bus)};
+}
 
 void CopyBgra(const v4l2_pix_format& format, const std::uint8_t* rgb,
               std::uint8_t* bgra) {
@@ -104,30 +213,45 @@ void V4l2Session::RequestPermission(std::function<void(bool)> done) {
   done(true);
 }
 
-// Probes each node in turn (item 10 of #61), keeping the first one open
-// whose capabilities match the configured choice: the first built-in
-// camera found, with none chosen, or the one whose id equals device_id_.
+// Probes discovered nodes, keeping the first usable color capture node
+// matching the configured choice, or the first usable node by default.
 // A node that opens but does not match, or does not query, is closed
 // before the next is tried.
 std::optional<std::string> V4l2Session::Configure() {
   Stop();
-  for (int index = 0; index < kProbedNodes; ++index) {
-    const int fd =
-        v4l2_open(NodePath(index).c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+  configure_error_ = ConfigureError::kNoCandidate;
+  for (const auto& path : NodePaths()) {
+    const int fd = v4l2_open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
+      if (errno == EACCES || errno == EPERM) {
+        configure_error_ = ConfigureError::kPermissionDenied;
+      }
+      std::fprintf(stderr, "camera %s: open failed errno=%d\n", path.c_str(),
+                   errno);
       continue;
     }
-    const std::optional<CameraDevice> device = Queried(fd);
-    const bool matches =
-        device.has_value() &&
-        (device_id_.empty() ? device->built_in : device->id == device_id_);
-    if (matches) {
+    std::optional<ConfigureError> node_error;
+    const auto device = Queried(fd, path, &node_error);
+    if (node_error && configure_error_ != ConfigureError::kPermissionDenied) {
+      configure_error_ = node_error;
+    }
+    if (device && (device_id_.empty() || device->id == device_id_)) {
       fd_ = fd;
+      configure_error_.reset();
       return device->id;
+    }
+    if (device) {
+      std::fprintf(stderr, "camera %s: rejected: device id does not match\n",
+                   path.c_str());
     }
     v4l2_close(fd);
   }
   return std::nullopt;
+}
+
+std::optional<CaptureSession::ConfigureError> V4l2Session::LastConfigureError()
+    const {
+  return configure_error_;
 }
 
 CaptureSession::FrameRates V4l2Session::SupportedFrameRates() { return {}; }
@@ -137,14 +261,19 @@ CaptureSession::FrameRates V4l2Session::SupportedFrameRates() { return {}; }
 // CameraDirectory documents.
 std::vector<CameraDevice> V4l2Session::List() {
   std::vector<CameraDevice> devices;
-  for (int index = 0; index < kProbedNodes; ++index) {
-    const int fd =
-        v4l2_open(NodePath(index).c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+  for (const auto& path : NodePaths()) {
+    const int fd = v4l2_open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
+      std::fprintf(stderr, "camera %s: open failed errno=%d\n", path.c_str(),
+                   errno);
       continue;
     }
-    if (const std::optional<CameraDevice> device = Queried(fd)) {
-      devices.push_back(*device);
+    if (const auto device = Queried(fd, path, nullptr)) {
+      if (std::ranges::none_of(devices, [&](const auto& existing) {
+            return existing.id == device->id;
+          })) {
+        devices.push_back(*device);
+      }
     }
     v4l2_close(fd);
   }

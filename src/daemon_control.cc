@@ -64,18 +64,10 @@ void DaemonControl::OnOpened() {
   }
 }
 
-// specs/DaemonAdmission.tla, OnOpenFailed: a camera that was opening and
-// found no device to use stops the daemon as a failure (GuardOpenFailStops),
-// as before. A denied permission or a failed start (#52, item 10 of #61) is
-// not: CameraController's own retry, scheduled when it reported the
-// failure, runs this process, so the daemon stays up for it. One that
-// already began closing reports Closed next.
-void DaemonControl::OnOpenFailed(OpenFailure reason) {
-  const bool opening = controller_.State() == CameraController::State::kOpening;
-  controller_.OpenFailed(reason);
-  if (opening && reason == OpenFailure::kNoDevice) {
-    Fail("no camera device available");
-  }
+// An open failure remains in this process for the controller's retry.
+void DaemonControl::OnOpenFailed(OpenFailure reason,
+                                 std::optional<ConfigureError> detail) {
+  controller_.OpenFailed(reason, detail);
 }
 
 // specs/DaemonAdmission.tla, OnClosed: the controller counts the camera
@@ -84,9 +76,10 @@ void DaemonControl::OnClosed() { Retire(true); }
 
 // specs/DaemonAdmission.tla, OnDeviceLost.
 void DaemonControl::OnDeviceLost() {
+  const bool was_open = controller_.State() == CameraController::State::kOpen;
   controller_.DeviceLost();
-  if (controller_.State() == CameraController::State::kClosed) {
-    Retire(false);
+  if (was_open) {
+    Retire(true);
   }
 }
 

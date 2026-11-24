@@ -2,14 +2,24 @@
 #define FACEPALM_SRC_CAMERA_STATUS_PUBLISH_H_
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 #include "src/camera_controller.h"
+#include "src/daemon_status.h"
 
 namespace facepalm {
 
 // What tools/daemon/main.cc's Engine::Opened() or Engine::OpenFailed()
 // decided about the camera-in-use file (src/daemon_status.h's
 // PublishCameraStatus).
+ServiceReason CameraFailureReason(OpenFailure reason,
+                                  std::optional<ConfigureError> detail);
+
+// Preserve the first fatal model failure until the daemon exits.
+void RecordModelFailure(ServicePhase& phase, ServiceReason& reason,
+                        std::string& detail, std::string_view error);
+
 enum class CameraStatusAction : std::uint8_t { kNone, kPublishOn, kPublishOff };
 
 // CameraStatus!OpenSucceeds (#185): Engine::Opened() publishes "on" only

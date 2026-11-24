@@ -1,9 +1,37 @@
 #ifndef FACEPALM_SRC_DAEMON_STATUS_H_
 #define FACEPALM_SRC_DAEMON_STATUS_H_
 
+#include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace facepalm {
+
+// health-v1 serializes these enum values numerically; preserve their order.
+enum class ServicePhase : std::uint8_t {
+  kIdle, kOpening, kActive, kRetrying, kFailed
+};
+
+enum class ServiceReason : std::uint8_t {
+  kNone, kNoCandidate, kPermissionDenied, kQueryFailed, kUnsupported,
+  kStartFailed, kModelFailure
+};
+
+struct DaemonHealth {
+  ServicePhase phase;
+  ServiceReason reason;
+  std::string detail;
+  std::int64_t pid;
+  // PID existence alone does not establish service identity: PIDs can be reused.
+  bool alive;
+};
+
+bool PublishDaemonHealth(const std::string& path, bool camera_on,
+                         ServicePhase phase, ServiceReason reason,
+                         std::string_view detail, std::string& error);
+std::optional<DaemonHealth> ReadDaemonHealth(const std::string& path);
+
 
 // The camera-in-use indicator (#37 item 8, #61), following
 // specs/CameraStatus.tla. `path` is UserPaths::status, beside the

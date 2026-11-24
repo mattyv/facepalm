@@ -28,8 +28,8 @@
 (*  - `permitted` and `startWorks` stand for the two other ways Start can   *)
 (*    fail that are not "no device" (#52): the OS permission, and whatever *)
 (*    else Start needs that can fail apart from the device and permission, *)
-(*    such as a configuration race. `blocked` latches once Start fails for *)
-(*    one of those reasons, and only `Retry` clears it, so the design's    *)
+(*    such as a configuration race. `blocked` latches on any Start failure *)
+(*    including no device, and `Retry` clears it, so the design's          *)
 (*    retry is its own action rather than folded into `device` recovery.   *)
 (*                                                                         *)
 (* Each Guard constant is one of the design's protections. A mutation sets *)
@@ -207,8 +207,8 @@ Start(t) ==
                                          everOpened>>
              ELSE /\ camera' = IF camera = "opening" THEN "closed"
                                ELSE camera
-                  /\ usable' = IF camera = "opening" THEN FALSE ELSE usable
-                  /\ UNCHANGED <<capturing, selected, everOpened, blocked>>
+                  /\ blocked' = (blocked \/ camera = "opening")
+                  /\ UNCHANGED <<capturing, selected, everOpened, usable>>
     /\ UNCHANGED <<consent, subscribers, device, otherDevice, helper,
                    restarts, wasOpen, permitted, startWorks, frame,
                    frameEnded, frameOld, strayEvent, unconsented, stale>>
@@ -235,7 +235,7 @@ DeviceLost ==
           ELSE /\ capturing' = FALSE
                /\ usable' = IF selected THEN FALSE ELSE usable
                /\ IF selected /\ camera = "open"
-                     THEN camera' = "closed" /\ EndAttempt
+                     THEN camera' = "closing" /\ EndAttempt
                      ELSE UNCHANGED <<camera, starts, frameEnded>>
     /\ UNCHANGED <<consent, subscribers, selected, helper, restarts,
                    wasOpen, everOpened, permitted, startWorks, blocked,
@@ -250,7 +250,7 @@ OtherDeviceLost ==
           ELSE /\ capturing' = FALSE
                /\ usable' = IF selected THEN FALSE ELSE usable
                /\ IF selected /\ camera = "open"
-                     THEN camera' = "closed" /\ EndAttempt
+                     THEN camera' = "closing" /\ EndAttempt
                      ELSE UNCHANGED <<camera, starts, frameEnded>>
     /\ UNCHANGED <<consent, subscribers, selected, helper, restarts,
                    wasOpen, everOpened, permitted, startWorks, blocked,
@@ -297,14 +297,13 @@ ToggleStartWorks ==
                    everOpened, permitted, blocked, frame, frameEnded,
                    frameOld, strayEvent, unconsented, stale>>
 
-\* The retry (#52): once Start has blocked for a reason other than the
-\* device, and the camera is closed, this clears the block so Open can try
-\* again. GuardRetries off leaves `blocked` to latch forever, as today's
-\* code does.
+\* Retry clears any open failure so Open can try again. GuardRetries off
+\* leaves `blocked` latched forever.
 Retry ==
-    /\ GuardRetries /\ camera = "closed" /\ blocked /\ blocked' = FALSE
+    /\ GuardRetries /\ camera = "closed" /\ consent /\ subscribers # {}
+    /\ (blocked \/ ~usable) /\ blocked' = FALSE /\ usable' = TRUE
     /\ UNCHANGED <<consent, subscribers, camera, capturing, starts, device,
-                   otherDevice, usable, selected, helper, restarts, wasOpen,
+                   otherDevice, selected, helper, restarts, wasOpen,
                    everOpened, permitted, startWorks, frame, frameEnded,
                    frameOld, strayEvent, unconsented, stale>>
 

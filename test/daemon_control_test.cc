@@ -24,7 +24,8 @@ class MockDaemonController : public DaemonController {
   MOCK_METHOD(void, Leave, (), (override));
   MOCK_METHOD(void, Revoke, (), (override));
   MOCK_METHOD(void, Opened, (), (override));
-  MOCK_METHOD(void, OpenFailed, (OpenFailure), (override));
+  MOCK_METHOD(void, OpenFailed, (OpenFailure, std::optional<ConfigureError>),
+              (override));
   MOCK_METHOD(void, Closed, (), (override));
   MOCK_METHOD(void, DeviceLost, (), (override));
   MOCK_METHOD(void, DeviceBack, (), (override));
@@ -73,17 +74,28 @@ TEST_F(ReopenAfterRetireTest, AClosedCameraCountsOnlyOnceTheModelIsGone) {
 
 TEST_F(ReopenAfterRetireTest, ADeviceComingBackWaitsForTheRetirement) {
   EXPECT_CALL(controller_, DeviceLost);
-  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosed));
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kOpen));
   ExpectRetirement();
   daemon_.OnDeviceLost();
   EXPECT_CALL(controller_, DeviceBack).Times(0);
   daemon_.OnDeviceBack();
   testing::Mock::VerifyAndClearExpectations(&controller_);
 
-  EXPECT_CALL(controller_, DeviceBack);
+  {
+    const testing::InSequence order;
+    EXPECT_CALL(controller_, Closed);
+    EXPECT_CALL(controller_, DeviceBack);
+  }
   retired_();
   EXPECT_CALL(controller_, DeviceBack);
   daemon_.OnDeviceBack();
+}
+
+TEST_F(ReopenAfterRetireTest, DeviceLostAfterFailedConfigureDoesNotRetire) {
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosed));
+  EXPECT_CALL(controller_, DeviceLost);
+  EXPECT_CALL(pipeline_, Close).Times(0);
+  daemon_.OnDeviceLost();
 }
 
 TEST_F(ReopenAfterRetireTest, OnlyTheOpeningCameraCreatesAModel) {
@@ -127,7 +139,9 @@ using ExitCleanTest = DaemonControlTest;
 
 TEST_F(ExitCleanTest, OneRetirementAtATime) {
   EXPECT_CALL(controller_, DeviceLost);
-  EXPECT_CALL(controller_, State).WillRepeatedly(Return(State::kClosed));
+  EXPECT_CALL(controller_, State)
+      .WillOnce(Return(State::kOpen))
+      .WillRepeatedly(Return(State::kClosed));
   ExpectRetirement();
   daemon_.OnDeviceLost();
   daemon_.OnClosed();
@@ -196,31 +210,22 @@ TEST_F(StopEndsTest, AFailureDuringCleanStopIsReported) {
   EXPECT_THAT(exited_, Eq(std::optional<std::string>("model failure")));
 }
 
-TEST_F(StopEndsTest, ACameraThatFailsToOpenStopsTheDaemonAsAFailure) {
-  EXPECT_CALL(controller_, State)
-      .WillOnce(Return(State::kOpening))
-      .WillOnce(Return(State::kClosed));
-  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kNoDevice));
-  EXPECT_CALL(controller_, Revoke);
-  ExpectRetirement();
-  daemon_.OnOpenFailed(OpenFailure::kNoDevice);
-  EXPECT_TRUE(service_stopped_);
-
-  retired_();
-
-  EXPECT_THAT(exited_,
-              Eq(std::optional<std::string>("no camera device available")));
+TEST_F(StopEndsTest, ACameraThatFailsToOpenLeavesTheDaemonRunning) {
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kNoDevice,
+                                      std::optional<ConfigureError>{}));
+  daemon_.OnOpenFailed(OpenFailure::kNoDevice, std::nullopt);
+  EXPECT_FALSE(service_stopped_);
+  EXPECT_THAT(exited_, Eq(std::nullopt));
 }
 
 TEST_F(StopEndsTest, AFailedOpenReportedAfterClosingBeganIsIgnored) {
   EXPECT_CALL(controller_, Revoke);
-  EXPECT_CALL(controller_, State)
-      .WillOnce(Return(State::kClosing))
-      .WillOnce(Return(State::kClosing));
+  EXPECT_CALL(controller_, State).WillOnce(Return(State::kClosing));
   daemon_.Stop();
-  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kNoDevice));
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kNoDevice,
+                                      std::optional<ConfigureError>{}));
   EXPECT_CALL(pipeline_, Close).Times(0);
-  daemon_.OnOpenFailed(OpenFailure::kNoDevice);
+  daemon_.OnOpenFailed(OpenFailure::kNoDevice, std::nullopt);
   EXPECT_THAT(exited_, Eq(std::nullopt));
 
   ExpectRetirement();
@@ -236,17 +241,17 @@ TEST_F(StopEndsTest, AFailedOpenReportedAfterClosingBeganIsIgnored) {
 // the daemon, unlike a camera with no device to use. CameraController's own
 // retry (specs/CameraLifecycle.tla's Retry) runs in this same process.
 TEST_F(StopEndsTest, ADeniedPermissionDoesNotStopTheDaemon) {
-  EXPECT_CALL(controller_, State).WillOnce(Return(State::kOpening));
-  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kPermissionDenied));
-  daemon_.OnOpenFailed(OpenFailure::kPermissionDenied);
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kPermissionDenied,
+                                      std::optional<ConfigureError>{}));
+  daemon_.OnOpenFailed(OpenFailure::kPermissionDenied, std::nullopt);
   EXPECT_FALSE(service_stopped_);
   EXPECT_THAT(exited_, Eq(std::nullopt));
 }
 
 TEST_F(StopEndsTest, AFailedStartDoesNotStopTheDaemon) {
-  EXPECT_CALL(controller_, State).WillOnce(Return(State::kOpening));
-  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kStartFailed));
-  daemon_.OnOpenFailed(OpenFailure::kStartFailed);
+  EXPECT_CALL(controller_, OpenFailed(OpenFailure::kStartFailed,
+                                      std::optional<ConfigureError>{}));
+  daemon_.OnOpenFailed(OpenFailure::kStartFailed, std::nullopt);
   EXPECT_FALSE(service_stopped_);
   EXPECT_THAT(exited_, Eq(std::nullopt));
 }
