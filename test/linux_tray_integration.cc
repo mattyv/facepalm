@@ -89,15 +89,22 @@ struct MenuScan {
   bool replay_status = false;
   bool camera_status = false;
   QString expected_camera;
+  QString expected_version;
+  bool version_first = false;
+  int top_items = 0;
 };
 
-void ScanMenu(const QDBusArgument& argument, MenuScan& scan) {
+void ScanMenu(const QDBusArgument& argument, MenuScan& scan, int depth = 0) {
   argument.beginStructure();
   int id = 0;
   QVariantMap properties;
   argument >> id >> properties;
   QString label = properties.value("label").toString();
   label.remove(QLatin1Char('&'));
+  if (depth == 1 && scan.top_items++ == 0) {
+    scan.version_first = label == scan.expected_version &&
+                         !properties.value("enabled", true).toBool();
+  }
   if (label.compare("Quit", Qt::CaseInsensitive) == 0) scan.quit = id;
   if (label.startsWith("Settings") &&
       properties.value("enabled", true).toBool()) {
@@ -119,7 +126,7 @@ void ScanMenu(const QDBusArgument& argument, MenuScan& scan) {
       child = qvariant_cast<QDBusVariant>(child).variant();
     }
     if (child.metaType() == QMetaType::fromType<QDBusArgument>()) {
-      ScanMenu(qvariant_cast<QDBusArgument>(child), scan);
+      ScanMenu(qvariant_cast<QDBusArgument>(child), scan, depth + 1);
     }
   }
   argument.endArray();
@@ -127,6 +134,15 @@ void ScanMenu(const QDBusArgument& argument, MenuScan& scan) {
 }
 
 bool RunWithWatcher(const QString& executable, bool service_available) {
+  QProcess version;
+  version.start(executable, {"--version"});
+  if (!version.waitForFinished(kTimeoutMs) || version.exitCode() != 0)
+    return false;
+  const QString version_output =
+      QString::fromUtf8(version.readAllStandardOutput()).trimmed();
+  if (!version_output.startsWith("facepalm-menu ")) return false;
+  const QString expected_version =
+      "Facepalm " + version_output.mid(QString("facepalm-menu ").size());
   QTemporaryDir runtime;
   if (!runtime.isValid()) return false;
   const QString socket = runtime.filePath("service.sock");
@@ -202,11 +218,14 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
     return false;
   }
   MenuScan scan;
+  scan.expected_version = expected_version;
   scan.expected_camera = service_available ? "Camera service is ready."
                                            : "Camera service is offline.";
   ScanMenu(qvariant_cast<QDBusArgument>(layout.arguments().at(1)), scan);
-  if (scan.quit < 0 || !scan.settings || !scan.replay_status ||
-      !scan.camera_status ||
+  if (!scan.version_first)
+    std::cerr << "Version is not the first disabled item\n";
+  if (!scan.version_first || scan.quit < 0 || !scan.settings ||
+      !scan.replay_status || !scan.camera_status ||
       Call(menu_interface, "Event",
            {scan.quit, "clicked", QVariant::fromValue(QDBusVariant(0)),
             QVariant::fromValue(uint{0})})

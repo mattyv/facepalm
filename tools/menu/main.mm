@@ -288,6 +288,12 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   [self.statusItem.button setAccessibilityLabel:@"Facepalm"];
   self.statusItem.button.toolTip = @"Facepalm";
   NSMenu* menu = [[NSMenu alloc] initWithTitle:@"Facepalm"];
+  NSMenuItem* version =
+      [[NSMenuItem alloc] initWithTitle:[NSString stringWithFormat:@"Facepalm %s", FACEPALM_VERSION]
+                                 action:nil
+                          keyEquivalent:@""];
+  version.enabled = NO;
+  [menu addItem:version];
   self.cameraStatus = [[NSMenuItem alloc] initWithTitle:@"Camera status unavailable"
                                                  action:nil
                                           keyEquivalent:@""];

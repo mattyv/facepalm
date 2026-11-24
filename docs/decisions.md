@@ -1,5 +1,12 @@
 # Decisions
 
+## 2026-11-24: Show the running menu version (#194)
+
+Show the menu executable's CMake project version as a disabled first menu
+item on macOS and Linux. This identifies the running build without querying
+an installed package, which could differ from an already-running executable.
+Release 0.1.2 includes this diagnostic and upgrades the 0.1.1 package.
+
 ## 2026-11-24: Ubuntu camera release package (#190)
 
 Add an opt-in Ubuntu 26.04 amd64 package containing the tray, camera daemon,

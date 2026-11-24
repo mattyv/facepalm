@@ -902,6 +902,9 @@ int main(int argc, char* argv[]) {
   SettingsDialog window;
 
   QMenu menu;
+  QAction* version = menu.addAction(QStringLiteral("Facepalm ") +
+                                    QCoreApplication::applicationVersion());
+  version->setEnabled(false);
   QAction* camera_status = menu.addAction(QString());
   camera_status->setEnabled(false);
   QAction* services = menu.addAction(QString());
