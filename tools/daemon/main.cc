@@ -8,9 +8,7 @@
 #include <dispatch/dispatch.h>
 #endif
 
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <unistd.h>
 
 #include <chrono>
 #include <csignal>
@@ -28,17 +26,23 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "src/approved_feed.h"
+#include "src/atomic_private_file.h"
 #include "src/calibration.h"
 #include "src/calibration_store.h"
 #include "src/camera_controller.h"
 #include "src/camera_demand.h"
+#include "src/camera_status_publish.h"
+#include "src/cameras_listing.h"
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/config.h"
+#include "src/daemon_approval_report.h"
 #include "src/daemon_calibration.h"
 #include "src/daemon_control.h"
+#include "src/daemon_engine_support.h"
 #include "src/daemon_options.h"
 #include "src/daemon_status.h"
 #include "src/eye_gaze.h"
@@ -164,47 +168,6 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 }
 #endif
 
-// Replaces `path` with `bytes` atomically (#37 item 8), as
-// DaemonStatus::Publish does for the camera-in-use indicator: a
-// temporary file in the same directory, renamed over it, so a reader
-// never sees a half-written frame. Opened with an explicit 0600 (#114),
-// not through an ofstream, whose own default mode leaks whatever the
-// process umask allows: the preview frame is a snapshot of the camera,
-// private to the user the same as every other file src/user_paths.h
-// names. open()'s own mode argument only applies the first time O_CREAT
-// actually creates the file (#129): an existing .tmp left by an earlier
-// failed write -- or, before this fix, one created under a looser umask
-// -- keeps whatever mode it already had through O_TRUNC, so fchmod()
-// enforces 0600 unconditionally, every call, rather than only on a fresh
-// create.
-bool WriteFileAtomically(const std::string& path, std::string_view bytes) {
-  constexpr mode_t kPrivateFile = 0600;
-  const std::string temporary = path + ".tmp";
-  const int fd =
-      open(temporary.c_str(),
-           O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, kPrivateFile);
-  if (fd < 0) {
-    return false;
-  }
-  if (fchmod(fd, kPrivateFile) != 0) {
-    close(fd);
-    std::remove(temporary.c_str());
-    return false;
-  }
-  const bool written = write(fd, bytes.data(), bytes.size()) ==
-                       static_cast<ssize_t>(bytes.size());
-  close(fd);
-  if (!written) {
-    std::remove(temporary.c_str());
-    return false;
-  }
-  if (std::rename(temporary.c_str(), path.c_str()) != 0) {
-    std::remove(temporary.c_str());
-    return false;
-  }
-  return true;
-}
-
 // The request file's own last-modified time, in milliseconds since the
 // epoch, or nullopt when it cannot be read -- missing, same as any other
 // error (#114): IsFreshPreviewRequest's own `modified_ms`, the one real
@@ -233,47 +196,22 @@ std::optional<std::int64_t> FileModifiedMs(const std::string& path) {
 // this check out of main()'s own branching.
 std::string PreviewRequestPath(
     const std::optional<facepalm::UserPaths>& daemon_paths) {
-  return daemon_paths ? daemon_paths->preview_request : std::string{};
+  return facepalm::PathOrEmpty(daemon_paths,
+                               &facepalm::UserPaths::preview_request);
 }
 
 std::string PreviewFramePath(
     const std::optional<facepalm::UserPaths>& daemon_paths) {
-  return daemon_paths ? daemon_paths->preview_frame : std::string{};
+  return facepalm::PathOrEmpty(daemon_paths,
+                               &facepalm::UserPaths::preview_frame);
 }
 
 // The preview's own text (#134): same emptiness rule as the frame and
 // the request above, when `--home` names no recognized directory.
 std::string PreviewReadingsPath(
     const std::optional<facepalm::UserPaths>& daemon_paths) {
-  return daemon_paths ? daemon_paths->preview_readings : std::string{};
-}
-
-// CalibrationSession's own tunable thresholds and gains, from Config
-// (#137): pulled out of Engine's constructor so its own cognitive
-// complexity (#64) stays under the project's threshold.
-facepalm::CalibrationSettings CalibrationSettingsFor(
-    const facepalm::Config& config) {
-  return facepalm::CalibrationSettings{
-      .default_gains = {.horizontal = config.eye_gaze_horizontal_gain,
-                        .vertical = config.eye_gaze_vertical_gain},
-      .min_head_travel_degrees = config.calibration_min_head_travel_degrees,
-      .min_axis_degrees = config.calibration_min_axis_degrees,
-      .min_spread_degrees = config.calibration_min_spread_degrees,
-      .head_only_yaw_degrees = config.eye_gaze_head_only_yaw_degrees};
-}
-
-// A fresh copy of `*profile`, shared ownership, or nullptr with no
-// profile given (#61 item 12): Engine's own, so a session finishing
-// later can replace it wholesale (#136, #137, #167) rather than only
-// borrowing main()'s local for the Engine's whole lifetime, or mutating
-// it in place while reporter_/look_away_reader_ read their own
-// snapshot of it on another thread.
-std::shared_ptr<const facepalm::CalibrationProfile> SharedProfile(
-    const facepalm::CalibrationProfile* profile) {
-  if (profile == nullptr) {
-    return nullptr;
-  }
-  return std::make_shared<const facepalm::CalibrationProfile>(*profile);
+  return facepalm::PathOrEmpty(daemon_paths,
+                               &facepalm::UserPaths::preview_readings);
 }
 
 // Where a finished calibration session saves its profile (#116): empty,
@@ -282,7 +220,7 @@ std::shared_ptr<const facepalm::CalibrationProfile> SharedProfile(
 // already treats a nullptr controller.
 std::string CalibrationStorePath(
     const std::optional<facepalm::UserPaths>& daemon_paths) {
-  return daemon_paths ? daemon_paths->calibration : std::string{};
+  return facepalm::PathOrEmpty(daemon_paths, &facepalm::UserPaths::calibration);
 }
 
 // The daemon owns all queues and resources until DaemonControl exits. Its
@@ -393,7 +331,7 @@ class Engine : public DaemonController, public DaemonPipeline {
                    const std::optional<EyeSignSample>& eye_sign) {
               SampleScreenContext(pose, resting, eye, eye_resting, eye_sign);
             }),
-        calibration_profile_(SharedProfile(calibration_profile)),
+        calibration_profile_(SharedCalibrationProfile(calibration_profile)),
         // Outlives any one camera session too (#141, as screen_context_
         // reader_ does, #61 item 11): its own kGone tracking, and the
         // calibration profile OnCalibrationFinished swaps into it below,
@@ -520,7 +458,8 @@ class Engine : public DaemonController, public DaemonPipeline {
         calibration_session_(
             calibration_store_ != nullptr
                 ? std::make_unique<CalibrationSession>(
-                      *calibration_store_, CalibrationSettingsFor(config),
+                      *calibration_store_,
+                      CalibrationSettingsFromConfig(config),
                       [this](const CalibrationProfile& profile) {
                         OnCalibrationFinished(profile);
                       })
@@ -631,8 +570,8 @@ class Engine : public DaemonController, public DaemonPipeline {
     const bool was_opening =
         controller_.CurrentState() == CameraController::State::kOpening;
     controller_.OnOpened();
-    if (was_opening &&
-        controller_.CurrentState() == CameraController::State::kOpen) {
+    if (DecideCameraStatusOnOpened(was_opening, controller_.CurrentState()) ==
+        CameraStatusAction::kPublishOn) {
       PublishStatus(true);
     }
   }
@@ -649,7 +588,8 @@ class Engine : public DaemonController, public DaemonPipeline {
     const bool was_opening =
         controller_.CurrentState() == CameraController::State::kOpening;
     controller_.OnOpenFailed(reason);
-    if (was_opening) {
+    if (DecideCameraStatusOnOpenFailed(was_opening) ==
+        CameraStatusAction::kPublishOff) {
       PublishStatus(false);
     }
   }
@@ -872,30 +812,31 @@ class Engine : public DaemonController, public DaemonPipeline {
   std::jthread preview_demand_poll_;
 };
 
-// Approves or revokes a client, for the approve and revoke commands.
+// Approves or revokes a client, for the approve and revoke commands. The
+// message and exit code are RevokeReport's or ApproveReport's own
+// decision (src/daemon_approval_report.h); this only calls through to
+// ClientApprovals and prints what they decided.
 int ChangeApproval(const DaemonOptions& options) {
   const std::unique_ptr<ApprovalsIo> io = PosixApprovalsIo();
   ClientApprovals approvals(
       options.clients,
       [](const std::string& path) { return LoadClientToken(path); }, *io);
+  ApprovalReport report;
   if (options.command == DaemonOptions::Command::kRevoke) {
-    if (!approvals.Revoke(options.client)) {
-      std::fprintf(stderr, "no approved client called %s\n",
-                   options.client.c_str());
-      return 1;
-    }
-    return 0;
+    report = RevokeReport(approvals.Revoke(options.client), options.client);
+  } else {
+    std::string error;
+    const std::optional<std::string> path =
+        approvals.Approve(options.client, error);
+    report = ApproveReport(path, options.client, error);
   }
-  std::string error;
-  const std::optional<std::string> path =
-      approvals.Approve(options.client, error);
-  if (!path) {
-    std::fprintf(stderr, "cannot approve %s: %s\n", options.client.c_str(),
-                 error.c_str());
-    return 1;
+  if (!report.stdout_line.empty()) {
+    std::printf("%s\n", report.stdout_line.c_str());
   }
-  std::printf("%s\n", path->c_str());
-  return 0;
+  if (!report.stderr_line.empty()) {
+    std::fprintf(stderr, "%s\n", report.stderr_line.c_str());
+  }
+  return report.exit_code;
 }
 
 // Lists the cameras available now, for the cameras command (item 10 of
@@ -918,10 +859,13 @@ int ListCameras() {
       /*device_id=*/{}, [](const Frame&) {}, [] {}, [](const std::string&) {},
       [](const std::string&) {});
 #endif
+  std::vector<CamerasListingEntry> cameras;
   for (const CameraDevice& device : capture.List()) {
-    std::printf("%s\t%s\t%d\n", device.id.c_str(), device.name.c_str(),
-                device.built_in ? 1 : 0);
+    cameras.push_back(
+        {.id = device.id, .name = device.name, .built_in = device.built_in});
   }
+  const std::string text = FormatCamerasListing(cameras);
+  std::fwrite(text.data(), 1, text.size(), stdout);
   return 0;
 }
 

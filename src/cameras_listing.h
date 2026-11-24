@@ -25,6 +25,13 @@ struct CamerasListingEntry {
 // crashes this parser (#120).
 std::vector<CamerasListingEntry> ParseCamerasListing(std::string_view text);
 
+// The inverse of ParseCamerasListing: facepalm-daemon's own `cameras`
+// command (tools/daemon/main.cc's ListCameras) writes its list this way,
+// one line a camera, so ParseCamerasListing reads back exactly what this
+// writes.
+std::string FormatCamerasListing(
+    const std::vector<CamerasListingEntry>& cameras);
+
 }  // namespace facepalm
 
 #endif  // FACEPALM_SRC_CAMERAS_LISTING_H_

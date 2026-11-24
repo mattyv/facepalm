@@ -1,6 +1,7 @@
 #include "src/cameras_listing.h"
 
 #include <string>
+#include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -9,6 +10,7 @@ namespace facepalm {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::Eq;
 using ::testing::IsEmpty;
 
 MATCHER_P3(IsEntry, id, name, built_in, "") {
@@ -47,6 +49,28 @@ TEST(CamerasListingTest, ReadsALastLineWithNoTrailingNewline) {
 TEST(CamerasListingTest, AnEmptyFieldIsKept) {
   EXPECT_THAT(ParseCamerasListing("\t\t1\n"),
               ElementsAre(IsEntry("", "", true)));
+}
+
+TEST(FormatCamerasListingTest, WritesEachCameraAsATabSeparatedLine) {
+  EXPECT_THAT(
+      FormatCamerasListing(
+          {{.id = "abc", .name = "FaceTime HD Camera", .built_in = true},
+           {.id = "def", .name = "Continuity Camera", .built_in = false}}),
+      Eq("abc\tFaceTime HD Camera\t1\n"
+         "def\tContinuity Camera\t0\n"));
+}
+
+TEST(FormatCamerasListingTest, EmptyListFormatsAsEmptyText) {
+  EXPECT_THAT(FormatCamerasListing({}), IsEmpty());
+}
+
+TEST(FormatCamerasListingTest, RoundTripsThroughParseCamerasListing) {
+  const std::vector<CamerasListingEntry> cameras = {
+      {.id = "abc", .name = "FaceTime HD Camera", .built_in = true},
+      {.id = "def", .name = "Continuity Camera", .built_in = false}};
+  EXPECT_THAT(ParseCamerasListing(FormatCamerasListing(cameras)),
+              ElementsAre(IsEntry("abc", "FaceTime HD Camera", true),
+                          IsEntry("def", "Continuity Camera", false)));
 }
 
 }  // namespace
