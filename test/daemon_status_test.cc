@@ -106,7 +106,9 @@ TEST_F(DaemonStatusTest, HealthRoundTripsAndPreservesLegacyCameraStatus) {
                                   "open denied\n/dev/video0", error));
   EXPECT_TRUE(ReadCameraStatus(path_));
   const auto health = ReadDaemonHealth(path_);
-  ASSERT_TRUE(health.has_value());
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
   EXPECT_EQ(health.value().phase, ServicePhase::kRetrying);
   EXPECT_EQ(health.value().reason, ServiceReason::kPermissionDenied);
   EXPECT_EQ(health.value().detail, "open denied /dev/video0");
@@ -119,7 +121,9 @@ TEST_F(DaemonStatusTest, DeadFailedHealthRemainsAvailableAsHistorical) {
   file << "off\n" << DeadPid() << "\nhealth-v1\n4\n5\nfailed\n";
   file.close();
   const auto health = ReadDaemonHealth(path_);
-  ASSERT_TRUE(health.has_value());
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
   EXPECT_EQ(health.value().phase, ServicePhase::kFailed);
   EXPECT_EQ(health.value().reason, ServiceReason::kStartFailed);
   EXPECT_FALSE(health.value().alive);
@@ -143,7 +147,9 @@ TEST_F(DaemonStatusTest, HealthBoundsDetailsAndRejectsOversizedRecords) {
                                   ServiceReason::kQueryFailed,
                                   std::string(300, 'a'), error));
   const auto health = ReadDaemonHealth(path_);
-  ASSERT_TRUE(health.has_value());
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
   EXPECT_EQ(health.value().detail, std::string(256, 'a'));
   std::ofstream file(path_);
   file << "off\n1\nhealth-v1\n4\n3\n" << std::string(2000, 'a');
@@ -187,7 +193,9 @@ TEST_F(DaemonStatusTest, LivePidAloneDoesNotAssertDaemonIdentity) {
   file << "off\n1\nhealth-v1\n4\n5\nold failure\n";
   file.close();
   const auto health = ReadDaemonHealth(path_);
-  ASSERT_TRUE(health.has_value());
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
   EXPECT_EQ(health.value().pid, 1);
   EXPECT_TRUE(health.value().alive);
   EXPECT_EQ(health.value().phase, ServicePhase::kFailed);
@@ -205,7 +213,9 @@ TEST_F(DaemonStatusTest, HealthSanitizesNonPrintableBytes) {
                                   ServiceReason::kNone,
                                   std::string("x\x01\xff", 3), error));
   const auto health = ReadDaemonHealth(path_);
-  ASSERT_TRUE(health.has_value());
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
   EXPECT_EQ(health.value().detail, "x  ");
 }
 

@@ -215,7 +215,9 @@ namespace {
 TEST(CameraHealthTest, ParsesOnlyCompleteManagerIdentitySnapshots) {
   const auto manager =
       ParseManagerSnapshot("ExecMainPID=42\nActiveState=active\n");
-  ASSERT_TRUE(manager.has_value());
+  if (!manager.has_value()) {
+    FAIL() << "Expected manager to be present";
+  }
   EXPECT_EQ(manager.value().pid, 42);
   EXPECT_EQ(manager.value().state, "active");
   EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=42\n"));

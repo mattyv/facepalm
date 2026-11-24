@@ -86,7 +86,9 @@ TEST_F(RealSocketTest, SuccessfulProbeSendsNoBytes) {
   const auto result = ProbeSocketReady(path_);
   ASSERT_TRUE(result.ready);
 #if defined(__linux__) || defined(__APPLE__)
-  ASSERT_TRUE(result.peer_pid.has_value());
+  if (!result.peer_pid.has_value()) {
+    FAIL() << "Expected result.peer_pid to be present";
+  }
   EXPECT_EQ(result.peer_pid.value(), getpid());
 #endif
   const int probe = accept(listener, nullptr, nullptr);
