@@ -13,8 +13,8 @@ struct ScreenLabelInfo {
   std::string_view position;
 };
 
-// A display model and its position for calibration prompts. Connector names
-// classify fallbacks only; they are not presented as display models.
+// Built-in displays use a generic label; other displays use their model when
+// available. Connector names classify displays and are never presented.
 std::string ScreenLabel(const ScreenLabelInfo& info);
 
 }  // namespace facepalm

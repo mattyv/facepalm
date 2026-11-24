@@ -21,14 +21,13 @@ std::string ScreenLabel(const ScreenLabelInfo& info) {
   const std::string_view model = Trim(info.model);
   const std::string_view manufacturer = Trim(info.manufacturer);
   std::string name;
-  if (!model.empty()) {
+  if (info.connector.starts_with("eDP") || info.connector.starts_with("LVDS")) {
+    name = "built-in display";
+  } else if (!model.empty()) {
     if (!manufacturer.empty() && !model.starts_with(manufacturer)) {
       name = std::string(manufacturer) + " ";
     }
     name += model;
-  } else if (info.connector.starts_with("eDP") ||
-             info.connector.starts_with("LVDS")) {
-    name = "built-in display";
   } else if (info.connector.starts_with("DP") ||
              info.connector.starts_with("HDMI") ||
              info.connector.starts_with("VGA") ||

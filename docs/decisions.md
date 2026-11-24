@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-11-25: Label built-in displays without panel models (#201)
+
+For Linux calibration prompts, eDP and LVDS connectors use "built-in
+display" even when a model is reported. Built-in panel models can be hardware
+identifiers rather than recognizable names. External and unknown connectors
+retain reported model and manufacturer when available; an identifier can still
+appear there because the metadata does not establish a friendly name. This
+replaces #199's model-first choice for known built-in connectors only. Relative
+position remains visible, and this presentation change does not alter screen
+ordering, calibration indices, or stored identity. Connector classification
+is limited to the reported prefixes; no marketing name is inferred.
+
 ## 2026-11-24: Name screens by reported model and position (#199)
 
 Use the operating system's model and manufacturer in Linux calibration
