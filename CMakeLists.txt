@@ -176,6 +176,26 @@ facepalm_unit(single_instance)
 # open, and decides when tools/menu/main.mm must flip NSApp's activation
 # policy so Command-Tab can reach them (#146, #64).
 facepalm_unit(window_activation)
+# Where facepalm.conf lives (#34, #64), pulled out of tools/menu/main.mm's
+# SettingsURL and main_linux.cc's ConfigPath, which each resolved it by
+# hand in their own platform's path type.
+facepalm_unit(settings_config_path)
+# Plain-text field formatting for the Settings window (#64), pulled out
+# of tools/menu/main.mm's FormatFloat/saveSettings: and main_linux.cc's
+# Number.
+facepalm_unit(menu_field_format)
+# The settings file's size limit and "did it change while this window
+# was open" check (#64), pulled out of tools/menu/main.mm's
+# ReadSettingsFile/SaveSettingsFile and main_linux.cc's ReadConfig/Save,
+# which each held the same two decisions by hand against their own
+# platform's byte buffer.
+facepalm_unit(settings_save_guard)
+# Approving the "calibrate" client and loading its token (#64), pulled
+# out of tools/menu/main.mm's -calibrate: and main_linux.cc's
+# OpenCalibration, which each repeated the same ClientApprovals/
+# LoadClientToken sequence by hand.
+facepalm_unit(calibrate_client_token)
+target_link_libraries(calibrate_client_token PUBLIC client_approvals)
 facepalm_unit(camera_controller)
 # The tab-separated text facepalm-daemon's `cameras` command prints (item
 # 10 of #61, #13), extracted from tools/menu/main.mm and
@@ -426,7 +446,8 @@ if(FACEPALM_LINUX_TRAY)
   target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
     client_token user_paths daemon_status single_instance calibration_flow calibration
-    cameras_listing menu_state Qt6::Widgets Qt6::Network)
+    cameras_listing menu_state settings_config_path menu_field_format settings_save_guard
+    calibrate_client_token Qt6::Widgets Qt6::Network)
   install(TARGETS facepalm_menu RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
   install(FILES tools/menu/linux/facepalm.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications COMPONENT Runtime)
@@ -500,13 +521,15 @@ if(APPLE)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
     client_token user_paths daemon_status calibration_flow calibration cameras_listing
-    window_activation menu_state "-framework AppKit")
+    window_activation menu_state settings_config_path menu_field_format settings_save_guard
+    calibrate_client_token "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm tools/menu/calibration_window_macos.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
       client_approvals client_token user_paths daemon_status calibration_flow calibration
-      cameras_listing window_activation menu_state GTest::gtest_main "-framework AppKit")
+      cameras_listing window_activation menu_state settings_config_path menu_field_format
+      settings_save_guard calibrate_client_token GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 
