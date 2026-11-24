@@ -452,6 +452,34 @@
       "functions": 100
     }
   },
+  "src/atomic_private_file.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/daemon_engine_support.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/camera_status_publish.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
+  "src/daemon_approval_report.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/feed_clients.cc": {
     "unit": {
       "lines": 100,

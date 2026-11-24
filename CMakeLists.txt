@@ -146,6 +146,20 @@ target_link_libraries(preview_publisher PUBLIC preview_lease frame)
 facepalm_unit(preview_request)
 facepalm_unit(daemon_status)
 facepalm_unit(daemon_options)
+# The atomic-replace-with-0600 write (#37 item 8, #114, #129), extracted
+# from tools/daemon/main.cc's Engine, for the camera preview's own frame
+# and readings files (#64).
+facepalm_unit(atomic_private_file)
+# Pulled out of tools/daemon/main.cc's Engine constructor (#64): the
+# UserPaths member picker, the Config-to-CalibrationSettings mapping, and
+# the shared-ownership profile copy.
+facepalm_unit(daemon_engine_support)
+# CameraStatus!OpenSucceeds/OpenFails's own publish-or-not decision (#64,
+# #185), pulled out of tools/daemon/main.cc's Engine::Opened()/OpenFailed().
+facepalm_unit(camera_status_publish)
+# The message and exit code for facepalm-daemon's `approve`/`revoke`
+# commands (#64), pulled out of tools/daemon/main.cc's ChangeApproval.
+facepalm_unit(daemon_approval_report)
 facepalm_unit(feed_clients)
 facepalm_unit(user_paths)
 facepalm_unit(user_service)
@@ -557,7 +571,8 @@ if(APPLE AND FACEPALM_MEDIAPIPE_DYLIB)
     expression_reader gesture_reader look_away_reader screen_context_reader
     screen_context_reporter screen_context_macos reaction_feed feeling_store service
     unix_socket face_model facepalm_mediapipe camera_demand preview_lease preview_publisher preview_readings preview_request
-    preview_jpeg "-framework CoreFoundation")
+    preview_jpeg atomic_private_file daemon_engine_support camera_status_publish
+    daemon_approval_report cameras_listing "-framework CoreFoundation")
   add_executable(face_model_check tools/face_model_check/face_model_check.cc)
   target_link_libraries(face_model_check PRIVATE face_model frame_times
     head_gesture_model facepalm_mediapipe
@@ -638,7 +653,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     reaction_feed feeling_store service session_camera unix_socket v4l2_hotplug v4l2_session
     face_model mediapipe_c_shim ${FACEPALM_MEDIAPIPE_C_LIBRARY} ${V4L2_LIBRARY}
     ${X11_LIBRARIES} ${XRANDR_LIBRARY} camera_demand preview_lease preview_publisher preview_readings preview_request
-    preview_jpeg)
+    preview_jpeg atomic_private_file daemon_engine_support camera_status_publish
+    daemon_approval_report cameras_listing)
   target_include_directories(facepalm_daemon SYSTEM PRIVATE ${X11_INCLUDE_DIR})
   install(TARGETS facepalm_daemon RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT LinuxCamera)
   install(FILES "${FACEPALM_MEDIAPIPE_C_LIBRARY}"

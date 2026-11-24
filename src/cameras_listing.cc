@@ -1,5 +1,6 @@
 #include "src/cameras_listing.h"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -39,6 +40,20 @@ std::vector<CamerasListingEntry> ParseCamerasListing(std::string_view text) {
     }
   }
   return devices;
+}
+
+std::string FormatCamerasListing(
+    const std::vector<CamerasListingEntry>& cameras) {
+  std::string text;
+  for (const CamerasListingEntry& camera : cameras) {
+    text += camera.id;
+    text += '\t';
+    text += camera.name;
+    text += '\t';
+    text += camera.built_in ? '1' : '0';
+    text += '\n';
+  }
+  return text;
 }
 
 }  // namespace facepalm
