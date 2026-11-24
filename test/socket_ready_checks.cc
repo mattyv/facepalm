@@ -87,7 +87,7 @@ TEST_F(RealSocketTest, SuccessfulProbeSendsNoBytes) {
   ASSERT_TRUE(result.ready);
 #if defined(__linux__) || defined(__APPLE__)
   ASSERT_TRUE(result.peer_pid.has_value());
-  EXPECT_EQ(*result.peer_pid, getpid());
+  EXPECT_EQ(result.peer_pid.value(), getpid());
 #endif
   const int probe = accept(listener, nullptr, nullptr);
   ASSERT_GE(probe, 0);

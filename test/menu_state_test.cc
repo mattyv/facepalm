@@ -216,8 +216,8 @@ TEST(CameraHealthTest, ParsesOnlyCompleteManagerIdentitySnapshots) {
   const auto manager =
       ParseManagerSnapshot("ExecMainPID=42\nActiveState=active\n");
   ASSERT_TRUE(manager.has_value());
-  EXPECT_EQ(manager->pid, 42);
-  EXPECT_EQ(manager->state, "active");
+  EXPECT_EQ(manager.value().pid, 42);
+  EXPECT_EQ(manager.value().state, "active");
   EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=42\n"));
   EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=42x\nActiveState=active\n"));
   EXPECT_FALSE(ParseManagerSnapshot(
