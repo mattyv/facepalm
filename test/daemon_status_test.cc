@@ -4,18 +4,21 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
+#include <streambuf>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-
 // Each test stands for the specs/CameraStatus.tla action or property it is
 // named for.
 
@@ -209,6 +212,32 @@ TEST_F(DaemonStatusTest, HealthMissingOrUnreadableRecordIsAbsent) {
   EXPECT_FALSE(ReadDaemonHealth(path_).has_value());
   ASSERT_EQ(::mkdir(path_.c_str(), 0700), 0);
   EXPECT_FALSE(ReadDaemonHealth(path_).has_value());
+}
+
+// Simulates a stream that delivers a complete record and reports a read error.
+class BadReadBuffer : public std::streambuf {
+ public:
+  explicit BadReadBuffer(std::istream& stream) : stream_(stream) {}
+
+ protected:
+  std::streamsize xsgetn(char* destination, std::streamsize count) override {
+    constexpr std::string_view kRecord = "off\n1\nhealth-v1\n0\n0\n\n";
+    const auto size =
+        std::min(count, static_cast<std::streamsize>(kRecord.size()));
+    std::memcpy(destination, kRecord.data(), static_cast<std::size_t>(size));
+    stream_.setstate(std::ios::badbit);
+    return size;
+  }
+
+ private:
+  std::istream& stream_;
+};
+
+TEST_F(DaemonStatusTest, HealthRejectsAValidRecordWhenReadFails) {
+  std::istream stream(nullptr);
+  BadReadBuffer buffer(stream);
+  stream.rdbuf(&buffer);
+  EXPECT_FALSE(ReadDaemonHealth(stream).has_value());
 }
 
 TEST_F(DaemonStatusTest, HealthSanitizesNonPrintableBytes) {

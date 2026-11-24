@@ -1,5 +1,16 @@
 # Decisions
 
+## 2026-11-24: Read status records through a bounded stream boundary (#195)
+
+Keep the pathname reader and expose the same bounded parser through an input
+stream overload. This permits a deterministic read-error test: directory
+reads set different stream state on libc++ and libstdc++. Reject bad streams
+even when they returned otherwise valid record bytes. The overload consumes
+from the current position and requires the default nonthrowing exception
+mask; it does not change the caller's stream policy. Record validation,
+limits and pathname behavior remain unchanged. The missing-guard mutation
+and portable coverage evidence are tracked in #195.
+
 ## 2026-11-24: Keep calibration's terminal failure reason stable (#195)
 
 Capture the attempt's error before releasing its camera connection. A failed,

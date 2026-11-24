@@ -110,6 +110,10 @@ std::optional<DaemonHealth> ReadDaemonHealth(const std::string& path) {
   if (!file.is_open()) {
     return std::nullopt;
   }
+  return ReadDaemonHealth(file);
+}
+
+std::optional<DaemonHealth> ReadDaemonHealth(std::istream& file) {
   std::array<char, kMaxRecord + 1> buffer{};
   file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
   const auto size = static_cast<std::size_t>(file.gcount());

@@ -2,6 +2,7 @@
 #define FACEPALM_SRC_DAEMON_STATUS_H_
 
 #include <cstdint>
+#include <iosfwd>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -40,6 +41,9 @@ struct DaemonHealth {
 bool PublishDaemonHealth(const std::string& path, bool camera_on,
                          ServicePhase phase, ServiceReason reason,
                          std::string_view detail, std::string& error);
+// Reads from the current position, rejecting errors and malformed records.
+// The stream must use the default nonthrowing exception mask.
+std::optional<DaemonHealth> ReadDaemonHealth(std::istream& file);
 std::optional<DaemonHealth> ReadDaemonHealth(const std::string& path);
 
 // The camera-in-use indicator (#37 item 8, #61), following
