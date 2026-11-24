@@ -107,11 +107,11 @@ TEST_F(DaemonStatusTest, HealthRoundTripsAndPreservesLegacyCameraStatus) {
   EXPECT_TRUE(ReadCameraStatus(path_));
   const auto health = ReadDaemonHealth(path_);
   ASSERT_TRUE(health.has_value());
-  EXPECT_EQ(health->phase, ServicePhase::kRetrying);
-  EXPECT_EQ(health->reason, ServiceReason::kPermissionDenied);
-  EXPECT_EQ(health->detail, "open denied /dev/video0");
-  EXPECT_EQ(health->pid, ::getpid());
-  EXPECT_TRUE(health->alive);
+  EXPECT_EQ(health.value().phase, ServicePhase::kRetrying);
+  EXPECT_EQ(health.value().reason, ServiceReason::kPermissionDenied);
+  EXPECT_EQ(health.value().detail, "open denied /dev/video0");
+  EXPECT_EQ(health.value().pid, ::getpid());
+  EXPECT_TRUE(health.value().alive);
 }
 
 TEST_F(DaemonStatusTest, DeadFailedHealthRemainsAvailableAsHistorical) {
@@ -120,13 +120,13 @@ TEST_F(DaemonStatusTest, DeadFailedHealthRemainsAvailableAsHistorical) {
   file.close();
   const auto health = ReadDaemonHealth(path_);
   ASSERT_TRUE(health.has_value());
-  EXPECT_EQ(health->phase, ServicePhase::kFailed);
-  EXPECT_EQ(health->reason, ServiceReason::kStartFailed);
-  EXPECT_FALSE(health->alive);
+  EXPECT_EQ(health.value().phase, ServicePhase::kFailed);
+  EXPECT_EQ(health.value().reason, ServiceReason::kStartFailed);
+  EXPECT_FALSE(health.value().alive);
 }
 
 TEST_F(DaemonStatusTest, HealthRejectsUnknownVersionAndMalformedRecords) {
-  for (const std::string& record :
+  for (const char* record :
        {"off\n1\nhealth-v2\n0\n0\n\n", "off\n1\nhealth-v1\n99\n0\n\n",
         "off\n1\nhealth-v1\n0\n7\n\n", "off\n1x\nhealth-v1\n0\n0\n\n",
         "off\n1\nhealth-v1\n0\n0\n"}) {
@@ -144,7 +144,7 @@ TEST_F(DaemonStatusTest, HealthBoundsDetailsAndRejectsOversizedRecords) {
                                   std::string(300, 'a'), error));
   const auto health = ReadDaemonHealth(path_);
   ASSERT_TRUE(health.has_value());
-  EXPECT_EQ(health->detail, std::string(256, 'a'));
+  EXPECT_EQ(health.value().detail, std::string(256, 'a'));
   std::ofstream file(path_);
   file << "off\n1\nhealth-v1\n4\n3\n" << std::string(2000, 'a');
   file.close();
@@ -188,9 +188,9 @@ TEST_F(DaemonStatusTest, LivePidAloneDoesNotAssertDaemonIdentity) {
   file.close();
   const auto health = ReadDaemonHealth(path_);
   ASSERT_TRUE(health.has_value());
-  EXPECT_EQ(health->pid, 1);
-  EXPECT_TRUE(health->alive);
-  EXPECT_EQ(health->phase, ServicePhase::kFailed);
+  EXPECT_EQ(health.value().pid, 1);
+  EXPECT_TRUE(health.value().alive);
+  EXPECT_EQ(health.value().phase, ServicePhase::kFailed);
 }
 
 TEST_F(DaemonStatusTest, HealthMissingOrUnreadableRecordIsAbsent) {
@@ -206,7 +206,7 @@ TEST_F(DaemonStatusTest, HealthSanitizesNonPrintableBytes) {
                                   std::string("x\x01\xff", 3), error));
   const auto health = ReadDaemonHealth(path_);
   ASSERT_TRUE(health.has_value());
-  EXPECT_EQ(health->detail, "x  ");
+  EXPECT_EQ(health.value().detail, "x  ");
 }
 
 TEST_F(DaemonStatusTest, CameraStatusRejectsPidOutsideOperatingSystemRange) {
