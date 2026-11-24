@@ -18,9 +18,11 @@ a line saying which entry replaced it.
 
 ## 2026-11-24: Separate service intent from socket readiness
 
-Issue #192: an installed service file records the person's choice, not a
-running daemon. The menu probes the existing local socket without requesting
-camera access and enables preview and calibration only when it connects.
+Issue #192: the first public release is 0.1.1 so it upgrades the 0.1.0
+candidate already installed by the user. An installed service file records
+the person's choice, not a running daemon. The menu probes the existing local
+socket without requesting camera access and enables preview and calibration
+only when it connects.
 Linux reports a failed or activating systemd state only from a bounded current
 manager query; an unavailable manager or an unrecognized state remains
 unavailable. macOS reports unavailable without inferring failure from launchd.

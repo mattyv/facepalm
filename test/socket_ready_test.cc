@@ -20,7 +20,8 @@ using ::testing::Return;
 class MockCalls {
  public:
   MOCK_METHOD(int, Socket, (int, int, int));
-  MOCK_METHOD(int, Fcntl, (int, int));
+  MOCK_METHOD(int, GetFlags, (int));
+  MOCK_METHOD(int, SetFlags, (int, int));
   MOCK_METHOD(int, Connect, (int, const sockaddr*, socklen_t));
   MOCK_METHOD(int, Poll, (pollfd*, nfds_t, int));
   MOCK_METHOD(int, Option, (int, int, int, void*, socklen_t*));
@@ -33,7 +34,8 @@ MockCalls* active = nullptr;
 int Socket(int domain, int type, int protocol) {
   return active->Socket(domain, type, protocol);
 }
-int Fcntl(int fd, int command, ...) { return active->Fcntl(fd, command); }
+int GetFlags(int fd) { return active->GetFlags(fd); }
+int SetFlags(int fd, int flags) { return active->SetFlags(fd, flags); }
 int Connect(int fd, const sockaddr* address, socklen_t length) {
   return active->Connect(fd, address, length);
 }
@@ -50,7 +52,8 @@ class SocketReadyTest : public ::testing::Test {
   void SetUp() override {
     active = &mock_;
     ON_CALL(mock_, Socket).WillByDefault(Return(7));
-    ON_CALL(mock_, Fcntl).WillByDefault(Return(0));
+    ON_CALL(mock_, GetFlags).WillByDefault(Return(0));
+    ON_CALL(mock_, SetFlags).WillByDefault(Return(0));
     ON_CALL(mock_, Connect).WillByDefault([](int, const sockaddr*, socklen_t) {
       errno = EINPROGRESS;
       return -1;
@@ -66,7 +69,13 @@ class SocketReadyTest : public ::testing::Test {
         });
   }
   void TearDown() override { active = nullptr; }
-  SocketReadyCalls calls_{Socket, Fcntl, Connect, Poll, Option, Close};
+  SocketReadyCalls calls_{.socket = Socket,
+                          .get_flags = GetFlags,
+                          .set_flags = SetFlags,
+                          .connect = Connect,
+                          .poll = Poll,
+                          .getsockopt = Option,
+                          .close = Close};
   NiceMock<MockCalls> mock_;
 };
 
@@ -86,16 +95,23 @@ TEST_F(SocketReadyTest, OversizedPathAndSocketFailureDoNotClose) {
   EXPECT_FALSE(SocketReady("socket", calls_));
 }
 
+TEST_F(SocketReadyTest, PreservesFlagsAndEnablesNonblocking) {
+  EXPECT_CALL(mock_, GetFlags(7)).WillOnce(Return(O_APPEND));
+  EXPECT_CALL(mock_, SetFlags(7, O_APPEND + O_NONBLOCK)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, Close(7));
+  EXPECT_TRUE(SocketReady("socket", calls_));
+}
+
 TEST_F(SocketReadyTest, FlagReadFailureClosesDescriptor) {
   EXPECT_CALL(mock_, Close(7));
-  EXPECT_CALL(mock_, Fcntl(7, F_GETFL)).WillOnce(Return(-1));
+  EXPECT_CALL(mock_, GetFlags(7)).WillOnce(Return(-1));
   EXPECT_FALSE(SocketReady("socket", calls_));
 }
 
 TEST_F(SocketReadyTest, FlagWriteFailureClosesDescriptor) {
   EXPECT_CALL(mock_, Close(7));
-  EXPECT_CALL(mock_, Fcntl(7, F_GETFL)).WillOnce(Return(0));
-  EXPECT_CALL(mock_, Fcntl(7, F_SETFL)).WillOnce(Return(-1));
+  EXPECT_CALL(mock_, GetFlags(7)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, SetFlags(7, O_NONBLOCK)).WillOnce(Return(-1));
   EXPECT_FALSE(SocketReady("socket", calls_));
 }
 

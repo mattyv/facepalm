@@ -13,7 +13,10 @@ namespace facepalm {
 // System calls are injectable so the error paths can be tested in isolation.
 struct SocketReadyCalls {
   int (*socket)(int, int, int) = ::socket;
-  int (*fcntl)(int, int, ...) = ::fcntl;
+  int (*get_flags)(int) = [](int fd) { return ::fcntl(fd, F_GETFL); };
+  int (*set_flags)(int, int) = [](int fd, int flags) {
+    return ::fcntl(fd, F_SETFL, flags);
+  };
   int (*connect)(int, const sockaddr*, socklen_t) = ::connect;
   int (*poll)(pollfd*, nfds_t, int) = ::poll;
   int (*getsockopt)(int, int, int, void*, socklen_t*) = ::getsockopt;

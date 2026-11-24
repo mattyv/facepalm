@@ -27,8 +27,11 @@ bool SocketReady(const std::string& path, const SocketReadyCalls& calls) {
     return false;
   }
   bool ready = false;
-  const int flags = calls.fcntl(fd, F_GETFL);
-  if (flags >= 0 && calls.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0) {
+  const int flags = calls.get_flags(fd);
+  if (flags >= 0 &&
+      calls.set_flags(
+          fd, static_cast<int>(static_cast<unsigned>(flags) |
+                               static_cast<unsigned>(O_NONBLOCK))) == 0) {
     const int result = calls.connect(
         fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
     if (result == 0) {
@@ -39,7 +42,8 @@ bool SocketReady(const std::string& path, const SocketReadyCalls& calls) {
       socklen_t length = sizeof(error);
       ready =
           calls.poll(&item, 1, kProbeTimeoutMs) > 0 &&
-          (item.revents & POLLOUT) != 0 &&
+          (static_cast<unsigned>(item.revents) &
+           static_cast<unsigned>(POLLOUT)) != 0 &&
           calls.getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 &&
           error == 0;
     }
