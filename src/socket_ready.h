@@ -14,6 +14,8 @@ namespace facepalm {
 struct SocketReadyCalls {
   int (*socket)(int, int, int) = ::socket;
   int (*get_flags)(int) = [](int fd) { return ::fcntl(fd, F_GETFL); };
+  // POSIX fcntl uses int for both the descriptor and the distinct flags.
+  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
   int (*set_flags)(int, int) = [](int fd, int flags) {
     return ::fcntl(fd, F_SETFL, flags);
   };
