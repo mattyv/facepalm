@@ -173,7 +173,7 @@ std::unique_ptr<ScreenSource> MakeScreenSource() {
 // error (#114): IsFreshPreviewRequest's own `modified_ms`, the one real
 // collaborator that function is tested with a fake for.
 std::optional<std::int64_t> FileModifiedMs(const std::string& path) {
-  struct stat info {};
+  struct stat info{};
   if (stat(path.c_str(), &info) != 0) {
     return std::nullopt;
   }
