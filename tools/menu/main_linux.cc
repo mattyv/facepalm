@@ -192,7 +192,7 @@ struct ConfigSnapshot {
 };
 
 std::optional<ConfigSnapshot> ReadConfig(const QString& path, QString& error) {
-  constexpr qint64 kMaxConfigBytes =
+  constexpr auto kMaxConfigBytes =
       static_cast<qint64>(facepalm::kMaxSettingsFileBytes);
   const QFileInfo info(path);
   if (!info.exists() && !info.isSymLink()) {
