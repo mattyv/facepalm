@@ -35,6 +35,10 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CameraStatus_Crash.cfg` | one crash or clean shutdown, one restart (#184) | holds, with `NeverStaleWhileRunning` and `CameraOffLeadsToDisplayOff` | 21 |
 | `CameraStatus_OpenFailure.cfg` | one failed camera open and its recovery (#185) | holds, with `OpenFailLeadsToDisplayOff` and `OpenRecoversLeadsToDisplayOn` | 10 |
 | `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 25,404 |
+| `CameraRetry.cfg` | two generation changes, delay bounded to four units | holds | 1,237 |
+| `CameraRetryRetirement.cfg` | consent, demand, repeated loss and delayed retirement | holds, with `Recovery` | 25 |
+| `PreviewRecovery.cfg` | Boolean preview, recovery and identity state | holds | 11 |
+| `CalibrationRetirement.cfg` | one attempt and terminal connection release | holds | 4 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none, #142's gaze inert (`MaxLooks = 0`, one kind) | holds | 3,815,485 |
 | `FeelingBeat_Gaze.cfg` | one client, two readings, up to two Look steps, both kinds and every zone reachable (#142, #144) | holds | 20,352 |
@@ -182,8 +186,8 @@ already begun. Retirement retains it and exit reports it. The model uses
 | `ReopenAfterRetire` | A camera opens only once the previous face model is destroyed. | `ReopenAfterRetireTest` in `test/daemon_control_test.cc` |
 | `ExitClean` | The daemon exits only with the camera closed and stopped, and every face model destroyed. | `ExitCleanTest` |
 | `FirstFailure` | The first failure remains the cause while stopping. | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure` |
-| `FailureReported` | Exit reports the retained reason. | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure`, `StopEndsTest.ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
-| `StopEnds` | Liveness: stopping, by the person, a signal, a failed model or a failed open, always ends with the daemon exiting. | `StopEndsTest` |
+| `FailureReported` | Exit reports the retained reason. | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure`, `StopEndsTest.AFailureDuringCleanStopIsReported` |
+| `StopEnds` | Liveness: stopping, by the person, a signal or a failed model, always ends with the daemon exiting. | `StopEndsTest` |
 | `LastLeaveCloses` | Liveness: with no client left, the camera closes, unless one joins. | `SubscriptionMatchesTest.OnlyTheFirstJoinAndTheLastLeaveCount`; `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` in `test/camera_controller_test.cc` |
 | `JoinOpens` | Liveness, and something must happen: from every point, a connected client, the device and whatever else Start needs, all held, lead to the camera being open (#52). | `JoinOpensTest`, `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`; `WantedOpensTest`, `RetriesTest` in `test/camera_controller_test.cc`; `ADeniedPermissionDoesNotStopTheDaemon`, `AFailedStartDoesNotStopTheDaemon` in `test/daemon_control_test.cc` |
 
@@ -245,16 +249,15 @@ properties they break:
 |---|---|
 | `Subscription` is not ignored while stopping | `SubscriptionMatchesTest.ChangesAreIgnoredOnceStopping` |
 | `Stop` does not revoke consent | Seven tests, among them every `StopEndsTest` and `ExitCleanTest` |
-| `Stop` does not retire a closed camera's model | `StopEndsTest.StoppingWithTheCameraClosedRetiresAtOnce`, `AFailedModelStopsTheDaemonAsAFailure`, `ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
+| `Stop` does not retire a closed camera's model | `StopEndsTest.StoppingWithTheCameraClosedRetiresAtOnce`, `AFailedModelStopsTheDaemonAsAFailure` |
 | More than one retirement at a time | `ExitCleanTest.OneRetirementAtATime` |
 | `OnClosed` counts the camera closed before the retirement | `ReopenAfterRetireTest.AClosedCameraCountsOnlyOnceTheModelIsGone`, and two others |
 | A device coming back is not deferred | `ReopenAfterRetireTest.ADeviceComingBackWaitsForTheRetirement` |
 | Every `Opened` creates a model | `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`, and two others |
-| A camera with no device to use does not stop the daemon | `StopEndsTest.ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
-| A failure exits as a success | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure`, `ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
+| A failure exits as a success | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure` |
 | Every join or every leave changes the subscription (`ApprovedFeed`) | `SubscriptionMatchesTest.OnlyTheFirstJoinAndTheLastLeaveCount` |
 | A denied permission or a failed start stops the daemon (#52) | `StopEndsTest.ADeniedPermissionDoesNotStopTheDaemon`, `AFailedStartDoesNotStopTheDaemon` |
-| `CameraController::OnOpenFailed` treats every reason as `kNoDevice`, or `Retry` does not clear `blocked_` | `RetriesTest` in `test/camera_controller_test.cc` (the same rows `CameraLifecycle`'s own table lists) |
+| `Retry` does not clear `blocked_` | `RetriesTest` in `test/camera_controller_test.cc` (the same rows `CameraLifecycle`'s own table lists) |
 
 The model does not cover the OS camera itself, which `CameraLifecycle`
 models, nor the secrecy of the token files, which only file permissions
@@ -888,7 +891,6 @@ tests that stand for the properties they break:
 | A frame from an ended attempt gets a ticket | `NoStaleEventTest.AFrameFromBeforeARevokeAndReopenGetsNoTicket` |
 | Closing does not end the attempt | `NoStaleEventTest.EachOpenIsANewAttemptAndClosingEndsIt` |
 | Losing an open camera does not end its attempt | `NoStaleEventTest.LosingAnOpenCameraEndsItsAttempt` |
-| `OnOpenFailed` treats every reason as `kNoDevice` | `RetriesTest.ADeniedPermissionIsRetried`, `AFailedStartIsRetried`, `ANoDeviceFailureIsNotRetried` (#52) |
 | `Retry` does not clear `blocked_`, or does not call `OpenIfWanted` | `RetriesTest.ADeniedPermissionIsRetried`, `AFailedStartIsRetried` |
 | `OpenIfWanted` does not check `blocked_` | `RetriesTest.WithoutAScheduleABlockedCameraStaysBlocked` |
 
@@ -1804,13 +1806,21 @@ disabling the cap violates `BackoffBounded`. `CameraRetryRetirement` checks
 consent, demand, repeated-loss and delayed-retirement interleavings in 25
 states. Disabling `GuardHoldUntilRetired` violates
 `NoReopenDuringRetirement`; disabling `GuardRetry` violates `Recovery`.
-These finite
-models abstract the actual timer and do not prove the OS or process lifetime.
+These finite models abstract the actual timer and do not prove the OS or
+process lifetime.
 The timer is fair only when the scheduler eventually dispatches it. The
 controller tests cover cancellation, backoff and stale callbacks; daemon
 control tests cover the retirement boundary. `camera_recovery_integration`
 connects both real owners to controlled camera, timer and model ports and
 checks the blocked-loss and delayed-retirement trace end to end.
+
+| Model property | Named implementation test |
+|---|---|
+| `CameraRetry.NoStaleOpen` | `RetriesTest.StaleRetryCannotAffectNewDemand`, `RevokedConsentInvalidatesTheOldRetry` in `test/camera_controller_test.cc` |
+| `CameraRetry.BackoffBounded` | `RetriesTest.BackoffIsBoundedAndResetsAfterOpen` in `test/camera_controller_test.cc` |
+| `CameraRetryRetirement.NoReopenDuringRetirement` | `RetriesTest.FiredTimerCannotReopenDuringLaterRetirement`; `CameraRecoveryIntegration.RetryCannotOvertakeModelRetirement` |
+| `CameraRetryRetirement.Recovery` | `CameraRecoveryIntegration.DemandAfterRetirementArmsNewRetry`, `DeviceBackDuringRetirementIsDeferred` |
+| `DaemonAdmission.NoDeviceDoesNotStop` | `StopEndsTest.ACameraThatFailsToOpenLeavesTheDaemonRunning` in `test/daemon_control_test.cc` |
 
 ### PreviewRecovery (#195)
 
@@ -1842,3 +1852,8 @@ assumptions. Setting `GuardClose = FALSE` violates `TerminalReleases`. The
 model abstracts physical sockets; `calibration_transport_integration` checks
 EOF with a real Unix socket. The flow test checks evidence capture before
 closing.
+
+| Model property | Named implementation test |
+|---|---|
+| `TerminalReleases` | `CalibrationTransportIntegration.FailedStartClosesRealSocket`; `CalibrationFlowTest.NextTransitionsToDoneOnADoneReply`, `CancelSendsCancelAndReturnsToClosedOnOk`, `WindowClosedSendsCancelWhilePrompting` |
+| Capture before release | `CalibrationFlowTest.FailureEvidenceIsCapturedBeforeClose` |
