@@ -20,6 +20,7 @@ constexpr auto kSocketPath = "/tmp/service.sock";
 // call.
 class RefusingIo : public CalibrateClientIo {
  public:
+  void Close() override {}
   explicit RefusingIo(std::string message) : message_(std::move(message)) {}
 
   bool Connect(const std::string& /* path */) override { return true; }

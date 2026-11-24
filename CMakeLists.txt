@@ -746,6 +746,9 @@ endif()
 
 # Composed lifecycle trace; solitary owner coverage remains in their unit tests.
 if(BUILD_TESTING)
+  add_executable(calibration_transport_integration test/calibration_transport_integration.cc)
+  target_link_libraries(calibration_transport_integration PRIVATE calibration_flow GTest::gtest_main)
+  add_test(NAME calibration_transport_integration COMMAND calibration_transport_integration)
   add_executable(camera_recovery_integration test/camera_recovery_integration.cc)
   target_link_libraries(camera_recovery_integration PRIVATE camera_controller daemon_control GTest::gtest_main)
   add_test(NAME camera_recovery_integration COMMAND camera_recovery_integration)

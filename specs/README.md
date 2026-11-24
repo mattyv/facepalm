@@ -1833,3 +1833,12 @@ wizard reports a camera failure and offers a fresh attempt. An open preview
 continues to refresh its request while the verified daemon is retrying.
 The preview widget's displayed pixels and its behavior with real hardware are
 not exercised by these model and solitary tests; they require a manual check.
+
+### CalibrationRetirement (#195)
+
+`CalibrationRetirement` models terminal states releasing their connection.
+TLC checked 7 generated states and 4 distinct states, without fairness
+assumptions. Setting `GuardClose = FALSE` violates `TerminalReleases`. The
+model abstracts physical sockets; `calibration_transport_integration` checks
+EOF with a real Unix socket. The flow test checks evidence capture before
+closing.

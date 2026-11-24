@@ -130,7 +130,13 @@ QString RefusalText(const std::string& hint) {
 // QtSingleInstanceIo above main().
 class QtCalibrateClientIo : public facepalm::CalibrateClientIo {
  public:
+  void Close() override {
+    socket_.abort();
+    pending_.clear();
+  }
+
   bool Connect(const std::string& path) override {
+    Close();
     socket_.connectToServer(QString::fromStdString(path));
     return socket_.state() == QLocalSocket::ConnectedState ||
            socket_.waitForConnected(kConnectTimeoutMs);
@@ -254,6 +260,8 @@ void CalibrationWindow::Open(std::string token) {
   io_ = std::make_unique<QtCalibrateClientIo>();
   flow_ = std::make_unique<facepalm::CalibrationFlow>(socket_path_,
                                                       std::move(token), *io_);
+  failure_reason_.clear();
+  flow_->SetBeforeFailureClose([this] { failure_reason_ = camera_failure_(); });
   started_ = false;
   constexpr int kHealthRefreshMs = 1000;
   failure_timer_.start(kHealthRefreshMs);
@@ -297,14 +305,16 @@ void CalibrationWindow::Render() {
       secondary_->setText(QStringLiteral("Cancel"));
       break;
     case facepalm::CalibrationFlow::State::kDone:
+      failure_timer_.stop();
       label_->setText(QStringLiteral("%1 The new profile is saved.")
                           .arg(ResultText(view.screens)));
       primary_->setVisible(false);
       secondary_->setText(QStringLiteral("Close"));
       break;
     case facepalm::CalibrationFlow::State::kFailed:
+      failure_timer_.stop();
       if (view.connection_failed || view.camera_unavailable) {
-        const std::string reason = camera_failure_();
+        const std::string& reason = failure_reason_;
         label_->setText(
             QStringLiteral("Calibration could not finish: %1. Try again.")
                 .arg(QString::fromStdString(reason.empty() ? view.error
@@ -317,6 +327,7 @@ void CalibrationWindow::Render() {
       secondary_->setText(QStringLiteral("Close"));
       break;
     case facepalm::CalibrationFlow::State::kClosed:
+      failure_timer_.stop();
       // A cancel the daemon confirmed: nothing left to show.
       window_.hide();
       break;

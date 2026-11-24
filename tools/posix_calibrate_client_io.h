@@ -38,13 +38,18 @@ inline constexpr int kPosixCalibrateSendFlags = 0;  // macOS: SO_NOSIGPIPE.
 
 class PosixCalibrateClientIo : public CalibrateClientIo {
  public:
-  ~PosixCalibrateClientIo() override {
+  ~PosixCalibrateClientIo() override { Close(); }
+
+  void Close() override {
     if (fd_ >= 0) {
       close(fd_);
+      fd_ = -1;
     }
+    pending_.clear();
   }
 
   bool Connect(const std::string& path) override {
+    Close();
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     if (path.size() >= sizeof(address.sun_path)) {

@@ -177,6 +177,7 @@ NSString* RefusalText(const std::string& hint) {
   // fixed reference throughout.
   NSScreen* _primaryScreen;
   std::function<std::string()> _cameraFailure;
+  std::string _failureReason;
 }
 
 - (instancetype)initWithSocketPath:(std::string)socketPath
@@ -187,6 +188,11 @@ NSString* RefusalText(const std::string& hint) {
     _cameraFailure = std::move(cameraFailure);
     _flow =
         std::make_unique<facepalm::CalibrationFlow>(std::move(socketPath), std::move(token), _io);
+    __weak CalibrationWindowController* weakSelf = self;
+    _flow->SetBeforeFailureClose([weakSelf] {
+      CalibrationWindowController* strongSelf = weakSelf;
+      if (strongSelf) strongSelf->_failureReason = strongSelf->_cameraFailure();
+    });
   }
   return self;
 }
@@ -272,14 +278,18 @@ NSString* RefusalText(const std::string& hint) {
       self.secondaryButton.title = @"Cancel";
       break;
     case facepalm::CalibrationFlow::State::kDone:
+      [self.failureTimer invalidate];
+      self.failureTimer = nil;
       self.label.stringValue =
           [NSString stringWithFormat:@"%@ The new profile is saved.", ResultText(view.screens)];
       self.primaryButton.hidden = YES;
       self.secondaryButton.title = @"Close";
       break;
     case facepalm::CalibrationFlow::State::kFailed:
+      [self.failureTimer invalidate];
+      self.failureTimer = nil;
       if (view.connection_failed || view.camera_unavailable) {
-        const std::string reason = _cameraFailure();
+        const std::string& reason = _failureReason;
         self.label.stringValue =
             [NSString stringWithFormat:@"Calibration could not finish: %s. Try again.",
                                        reason.empty() ? view.error.c_str() : reason.c_str()];
@@ -291,6 +301,8 @@ NSString* RefusalText(const std::string& hint) {
       self.secondaryButton.title = @"Close";
       break;
     case facepalm::CalibrationFlow::State::kClosed:
+      [self.failureTimer invalidate];
+      self.failureTimer = nil;
       // A cancel the daemon confirmed: nothing left to show.
       [self.window close];
       break;

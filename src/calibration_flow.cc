@@ -177,6 +177,10 @@ CalibrationFlow::CalibrationFlow(std::string socket_path, std::string token,
       wait_(std::move(wait)) {}
 
 void CalibrationFlow::Fail(std::string error) {
+  if (before_failure_close_) {
+    before_failure_close_();
+  }
+  io_.Close();
   view_ = View{.state = State::kFailed, .error = std::move(error)};
 }
 
@@ -192,6 +196,7 @@ std::optional<CalibrationController::Status> CalibrationFlow::ReadStatus(
 
 void CalibrationFlow::ApplyStatus(const CalibrationController::Status& status) {
   if (status.done) {
+    io_.Close();
     view_ = View{.state = State::kDone, .screens = status.screens, .error = {}};
     return;
   }
@@ -289,6 +294,7 @@ void CalibrationFlow::SendCancelAndClose() {
     Fail(error);
     return;
   }
+  io_.Close();
   view_ = View{};
 }
 

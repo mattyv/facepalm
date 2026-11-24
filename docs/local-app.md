@@ -277,3 +277,7 @@ and `calibration.min_spread_degrees`. Once #139's fixtures exist, replay
 them through `src/eye_gaze.h`'s `EyeSignalFrom` and `EstimateGains` to see
 whether these hold up, the way #34's and #46's own defaults were tuned on
 a real recording.
+
+When calibration ends or fails, its connection closes and releases its camera
+demand. A failure message retains the service status observed immediately
+before the connection closed; retry calibration to check the camera again.

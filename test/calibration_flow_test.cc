@@ -23,6 +23,7 @@ constexpr auto kSocketPath = "/tmp/service.sock";
 
 class MockCalibrateClientIo : public CalibrateClientIo {
  public:
+  MOCK_METHOD(void, Close, (), (override));
   MOCK_METHOD(bool, Connect, (const std::string&), (override));
   MOCK_METHOD(void, WriteLine, (std::string_view), (override));
   MOCK_METHOD(std::optional<std::string>, ReadLine, (), (override));
@@ -56,6 +57,31 @@ class CalibrationFlowTest : public ::testing::Test {
   std::vector<std::string> sent_;
   std::vector<std::chrono::milliseconds> waits_;
 };
+
+TEST_F(CalibrationFlowTest, FailureEvidenceIsCapturedBeforeClose) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine).WillOnce(Return(std::nullopt));
+  bool closed = false;
+  EXPECT_CALL(io_, Close()).WillOnce([&] { closed = true; });
+  CalibrationFlow flow = Make();
+  bool captured_before_close = false;
+  flow.SetBeforeFailureClose([&] { captured_before_close = !closed; });
+  flow.Start(1);
+  EXPECT_TRUE(captured_before_close);
+}
+
+TEST_F(CalibrationFlowTest, FailedStartReleasesConnectionAndCloseIsRepeatable) {
+  RecordWrites();
+  EXPECT_CALL(io_, ReadLine)
+      .WillOnce(Return(R"({"ok":true})"))
+      .WillOnce(Return(R"({"error":"another failure"})"));
+  EXPECT_CALL(io_, Close()).Times(1);
+  CalibrationFlow flow = Make();
+  flow.Start(1);
+  flow.WindowClosed();
+  flow.WindowClosed();
+  EXPECT_EQ(flow.CurrentView().state, CalibrationFlow::State::kFailed);
+}
 
 // -- Start -------------------------------------------------------------
 

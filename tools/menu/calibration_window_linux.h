@@ -54,6 +54,7 @@ class CalibrationWindow {
   QTimer failure_timer_;
   const std::string socket_path_;
   std::function<std::string()> camera_failure_;
+  std::string failure_reason_;
   std::unique_ptr<facepalm::CalibrateClientIo> io_;
   std::unique_ptr<facepalm::CalibrationFlow> flow_;
   bool started_ = false;

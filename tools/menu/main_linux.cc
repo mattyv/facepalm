@@ -332,8 +332,8 @@ facepalm::CameraHealthView CameraView(
   const bool verified =
       (peer_pid && *peer_pid > 0 && *peer_pid == health->pid) ||
       (!peer_pid && manager &&
-       facepalm::HealthMatchesManager(health->pid, manager->pid,
-                                      manager->state));
+       facepalm::HealthMatchesManager(health->pid, manager->pid, manager->state,
+                                      health->phase));
   return facepalm::DescribeCameraHealth(*health, verified);
 }
 
@@ -345,8 +345,10 @@ std::string CameraFailure() {
   const auto probe = facepalm::ProbeSocketReady(SocketPath().toStdString());
   const auto manager = probe.ready ? std::nullopt : ManagerState();
   const auto camera = CameraView(health, manager, probe.peer_pid);
-  if (camera.verified && (health->phase == facepalm::ServicePhase::kIdle ||
-                          health->phase == facepalm::ServicePhase::kActive)) {
+  if (camera.verified && health->phase == facepalm::ServicePhase::kIdle) {
+    return "Camera service is available";
+  }
+  if (camera.verified && health->phase == facepalm::ServicePhase::kActive) {
     return "Camera is available";
   }
   return camera.title;

@@ -64,7 +64,7 @@ struct CameraHealthView {
 CameraHealthView DescribeCameraHealth(const DaemonHealth& health,
                                       bool identity_verified);
 bool HealthMatchesManager(std::int64_t health_pid, std::int64_t manager_pid,
-                          std::string_view active_state);
+                          std::string_view active_state, ServicePhase phase);
 
 enum class ServiceHealth : std::uint8_t { kFailed, kStarting, kUnavailable };
 ServiceHealth ParseServiceHealth(std::string_view active_state);

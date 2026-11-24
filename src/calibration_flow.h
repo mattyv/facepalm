@@ -6,6 +6,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "src/calibrate_cli.h"
 #include "src/calibration.h"
@@ -102,6 +103,9 @@ class CalibrationFlow {
   // (main.mm, main_linux.cc). Proven by CalibrationMenu.tla's
   // NoOrphanOnClose never to leave a session running with the window gone.
   void WindowClosed();
+  void SetBeforeFailureClose(std::function<void()> callback) {
+    before_failure_close_ = std::move(callback);
+  }
 
   [[nodiscard]] const View& CurrentView() const { return view_; }
 
@@ -126,6 +130,7 @@ class CalibrationFlow {
   std::string token_;
   CalibrateClientIo& io_;
   Wait wait_;
+  std::function<void()> before_failure_close_;
   View view_;
 };
 

@@ -193,13 +193,19 @@ TEST(CameraHealthTest, CurrentPhasesAreDistinctAndRecoveryClearsReason) {
   EXPECT_TRUE(DescribeCameraHealth(health, true).verified);
   EXPECT_FALSE(DescribeCameraHealth(health, false).verified);
 }
+TEST(CameraHealthTest, OfflineManagerProvesOnlyFailedSnapshot) {
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "failed", ServicePhase::kIdle));
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "failed", ServicePhase::kRetrying));
+  EXPECT_TRUE(HealthMatchesManager(42, 42, "failed", ServicePhase::kFailed));
+}
 TEST(CameraHealthTest, ManagerPidMustMatchTheSnapshot) {
-  EXPECT_TRUE(HealthMatchesManager(42, 42, "active"));
-  EXPECT_TRUE(HealthMatchesManager(42, 42, "activating"));
-  EXPECT_TRUE(HealthMatchesManager(42, 42, "failed"));
-  EXPECT_FALSE(HealthMatchesManager(42, 43, "active"));
-  EXPECT_FALSE(HealthMatchesManager(42, 0, "failed"));
-  EXPECT_FALSE(HealthMatchesManager(42, 42, "inactive"));
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "active", ServicePhase::kFailed));
+  EXPECT_FALSE(
+      HealthMatchesManager(42, 42, "activating", ServicePhase::kFailed));
+  EXPECT_TRUE(HealthMatchesManager(42, 42, "failed", ServicePhase::kFailed));
+  EXPECT_FALSE(HealthMatchesManager(42, 43, "active", ServicePhase::kFailed));
+  EXPECT_FALSE(HealthMatchesManager(42, 0, "failed", ServicePhase::kFailed));
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "inactive", ServicePhase::kFailed));
 }
 }  // namespace
 }  // namespace facepalm
@@ -261,7 +267,7 @@ TEST(CameraHealthTest, UnverifiedNonFailureCannotInventCurrentStatus) {
   health.phase = ServicePhase::kRetrying;
   EXPECT_EQ(DescribeCameraHealth(health, false).title,
             "Last camera failure: permission denied");
-  EXPECT_FALSE(HealthMatchesManager(0, 0, "active"));
+  EXPECT_FALSE(HealthMatchesManager(0, 0, "active", ServicePhase::kFailed));
 }
 TEST(CameraHealthTest, RejectsMalformedAndIncompleteManagerOutput) {
   EXPECT_FALSE(ParseManagerSnapshot("ActiveState=active\n"));

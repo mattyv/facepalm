@@ -1,5 +1,17 @@
 # Decisions
 
+## 2026-11-24: Keep calibration's terminal failure reason stable (#195)
+
+Capture the attempt's error before releasing its camera connection. A failed,
+completed or canceled attempt releases that connection immediately and stops
+its status timer; closing the window remains idempotent. Keep the captured
+failure visible with guidance to retry calibration. This replaces the earlier
+working proposal to refresh a failed wizard after recovery: an ended attempt
+must not keep camera demand or silently replace its original failure with a
+later service state. The preview remains a live request and continues to show
+verified recovery while open. The terminal dialog is evidence about its own
+attempt, not a claim about the camera's current readiness.
+
 ## 2026-11-24: Attribute camera health only to an identified service (#195)
 
 A connected local socket's peer PID must match the health publisher before

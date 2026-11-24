@@ -64,10 +64,9 @@ std::string_view ReasonText(ServiceReason reason) {
 }  // namespace
 
 bool HealthMatchesManager(std::int64_t health_pid, std::int64_t manager_pid,
-                          std::string_view active_state) {
-  return health_pid > 0 && health_pid == manager_pid &&
-         (active_state == "active" || active_state == "activating" ||
-          active_state == "failed");
+                          std::string_view active_state, ServicePhase phase) {
+  return phase == ServicePhase::kFailed && health_pid > 0 &&
+         health_pid == manager_pid && active_state == "failed";
 }
 
 CameraHealthView DescribeCameraHealth(const DaemonHealth& health,

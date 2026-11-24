@@ -93,8 +93,9 @@ bool ServiceReady() { return ObserveCamera().probe.ready; }
 std::string CameraFailure() {
   const auto observation = ObserveCamera();
   if (!observation.health) return {};
-  if (observation.camera.verified && (observation.health->phase == facepalm::ServicePhase::kIdle ||
-                                      observation.health->phase == facepalm::ServicePhase::kActive))
+  if (observation.camera.verified && observation.health->phase == facepalm::ServicePhase::kIdle)
+    return "Camera service is available";
+  if (observation.camera.verified && observation.health->phase == facepalm::ServicePhase::kActive)
     return "Camera is available";
   return observation.camera.title;
 }
