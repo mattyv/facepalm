@@ -424,6 +424,7 @@ TEST_F(CalibrationFlowTest, NextTransitionsToPromptingOnARunningReply) {
 
 TEST_F(CalibrationFlowTest, NextTransitionsToDoneOnADoneReply) {
   RecordWrites();
+  EXPECT_CALL(io_, Close()).Times(1);
   EXPECT_CALL(io_, ReadLine)
       .WillOnce(Return(R"({"ok":true})"))
       .WillOnce(Return(
@@ -629,6 +630,7 @@ TEST_F(CalibrationFlowTest, NextIsANoOpOnceDone) {
 
 TEST_F(CalibrationFlowTest, CancelSendsCancelAndReturnsToClosedOnOk) {
   RecordWrites();
+  EXPECT_CALL(io_, Close()).Times(1);
   EXPECT_CALL(io_, ReadLine)
       .WillOnce(Return(R"({"ok":true})"))
       .WillOnce(Return(
@@ -701,6 +703,7 @@ TEST_F(CalibrationFlowTest, CancelIsANoOpOnceFailed) {
 
 TEST_F(CalibrationFlowTest, WindowClosedSendsCancelWhilePrompting) {
   RecordWrites();
+  EXPECT_CALL(io_, Close()).Times(1);
   EXPECT_CALL(io_, ReadLine)
       .WillOnce(Return(R"({"ok":true})"))
       .WillOnce(Return(
