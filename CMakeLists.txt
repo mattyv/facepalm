@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(facepalm VERSION 0.1.1 LANGUAGES CXX)
+project(facepalm VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -527,6 +527,7 @@ endif()
 if(APPLE)
   enable_language(OBJCXX)
   add_executable(facepalm_menu tools/menu/main.mm tools/menu/calibration_window_macos.mm)
+  target_compile_definitions(facepalm_menu PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
   set_target_properties(facepalm_menu PROPERTIES OUTPUT_NAME facepalm-menu)
   target_compile_options(facepalm_menu PRIVATE -fobjc-arc)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
@@ -535,6 +536,7 @@ if(APPLE)
     socket_ready calibrate_client_token "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm tools/menu/calibration_window_macos.mm)
+    target_compile_definitions(menu_store_checks PRIVATE FACEPALM_VERSION="${PROJECT_VERSION}")
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
       client_approvals client_token user_paths daemon_status calibration_flow calibration

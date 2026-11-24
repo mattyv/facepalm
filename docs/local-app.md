@@ -164,6 +164,10 @@ camera access once its wizard is closed.
 
 ### Menu items by state (#176)
 
+The first line of the macOS menu and Linux tray shows the running menu
+executable's version, such as **Facepalm 0.1.2** (#194). It is informational
+and cannot be selected.
+
 `src/menu_state.h`'s `DecideMenuState` is the one table both the macOS
 menu (`tools/menu/main.mm`) and the Linux tray (`tools/menu/main_linux.cc`)
 read for the always-disabled camera-status line and the **Show Camera
