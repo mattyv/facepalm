@@ -1,5 +1,19 @@
 # Decisions
 
+## 2026-11-24: Attribute camera health only to an identified service (#195)
+
+A connected local socket's peer PID must match the health publisher before
+its idle, opening, active or retrying state is treated as current. When the
+socket is unavailable, Linux may attribute a failure only when systemd reports
+failed and its recorded main PID matches the failed health snapshot. Other
+recorded failures remain historical. PID matching does not eliminate PID
+reuse; unavailable identity stays unknown. An idle service does not prove a
+camera can capture. Calibration remains a bounded attempt with a useful
+reason and retry guidance, rather than an indefinitely waiting wizard. Closing
+that wizard must release its connection and camera demand in terminal states
+as well as during an active attempt. Evidence and remaining desktop validation
+are tracked in #195.
+
 ## 2026-11-24: Select usable Linux color nodes independently of bus transport (#195)
 
 An empty device choice selects a usable color capture node discovered under
