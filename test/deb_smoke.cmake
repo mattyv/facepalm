@@ -59,7 +59,7 @@ file(GLOB_RECURSE packaged_files RELATIVE "${payload}" "${payload}/*")
 list(SORT files)
 list(SORT packaged_files)
 if(UBUNTU_PACKAGE)
-  list(APPEND files usr/bin/facepalm-install-model usr/bin/facepalm-daemon usr/lib/facepalm/libmediapipe.so
+  list(APPEND files usr/share/doc/facepalm/ubuntu-release.md usr/bin/facepalm-install-model usr/bin/facepalm-daemon usr/lib/facepalm/libmediapipe.so
     usr/share/facepalm/MEDIAPIPE-LICENSE usr/share/facepalm/mcp/main.js
     usr/share/facepalm/mcp/feeling-widget.html
     usr/share/facepalm/mcp/node_modules/@modelcontextprotocol/sdk/package.json)
@@ -86,6 +86,7 @@ if(INSTALL_PACKAGE)
   endif()
   # The Debian slim image excludes most /usr/share/doc files by default.
   execute_process(COMMAND apt-get -o "Dpkg::Options::=--path-include=/usr/share/doc/facepalm/README.md"
+    -o "Dpkg::Options::=--path-include=/usr/share/doc/facepalm/ubuntu-release.md"
     install -y --no-install-recommends "${package}" RESULT_VARIABLE result)
   set(installed TRUE)
   check("${result}" "install package and runtime dependencies")
