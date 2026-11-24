@@ -1,5 +1,18 @@
 # Decisions
 
+## 2026-11-24: Name screens by reported model and position (#199)
+
+Use the operating system's model and manufacturer in Linux calibration
+prompts, retaining relative position to distinguish identical models. Trim
+ASCII whitespace before selecting a name. Connector codes only classify a
+missing-model fallback: known internal connectors identify a built-in display,
+known external connectors identify an external display, and unknown connectors
+use a generic display label. Never infer built-in from the primary-screen
+flag or invent a marketing name when metadata is missing. macOS keeps its
+localized display name. This changes presentation only: screen ordering,
+calibration indices and stored identity remain unchanged. No new lifecycle
+or architecture owner is introduced. Evidence and limitations are in #199.
+
 ## 2026-11-24: Read status records through a bounded stream boundary (#195)
 
 Keep the pathname reader and expose the same bounded parser through an input

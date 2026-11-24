@@ -555,6 +555,13 @@
       "functions": 100
     }
   },
+  "src/screen_label.cc": {
+    "unit": {
+      "lines": 100,
+      "branches": 100,
+      "functions": 100
+    }
+  },
   "src/menu_field_format.cc": {
     "unit": {
       "lines": 100,
