@@ -410,8 +410,7 @@ class Probe : public CameraReports {
 
   void OnOpenFailed(OpenFailure reason,
                     std::optional<ConfigureError> detail) override {
-    (void)detail;
-    controller_.OnOpenFailed(reason);
+    controller_.OnOpenFailed(reason, detail);
     std::fprintf(stderr,
                  "camera_probe: no camera, or camera permission denied\n");
     model_.reset();

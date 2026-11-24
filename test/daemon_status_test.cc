@@ -99,6 +99,14 @@ TEST_F(PublishTest, FailsWhenThePathIsADirectory) {
   EXPECT_THAT(error, Not(IsEmpty()));
 }
 
+void ExpectRetryHealth(const DaemonHealth& health) {
+  EXPECT_EQ(health.phase, ServicePhase::kRetrying);
+  EXPECT_EQ(health.reason, ServiceReason::kPermissionDenied);
+  EXPECT_EQ(health.detail, "open denied /dev/video0");
+  EXPECT_EQ(health.pid, ::getpid());
+  EXPECT_TRUE(health.alive);
+}
+
 TEST_F(DaemonStatusTest, HealthRoundTripsAndPreservesLegacyCameraStatus) {
   std::string error;
   ASSERT_TRUE(PublishDaemonHealth(path_, true, ServicePhase::kRetrying,
@@ -109,11 +117,7 @@ TEST_F(DaemonStatusTest, HealthRoundTripsAndPreservesLegacyCameraStatus) {
   if (!health.has_value()) {
     FAIL() << "Expected health to be present";
   }
-  EXPECT_EQ(health.value().phase, ServicePhase::kRetrying);
-  EXPECT_EQ(health.value().reason, ServiceReason::kPermissionDenied);
-  EXPECT_EQ(health.value().detail, "open denied /dev/video0");
-  EXPECT_EQ(health.value().pid, ::getpid());
-  EXPECT_TRUE(health.value().alive);
+  ExpectRetryHealth(health.value());
 }
 
 TEST_F(DaemonStatusTest, DeadFailedHealthRemainsAvailableAsHistorical) {
