@@ -50,11 +50,15 @@ Turning off stops the daemon, which closes the camera, and removes the
 agent. The daemon's errors go to `~/Library/Logs/facepalm-daemon.log`. The 🤦
 menu's disabled **Camera** line reads **Camera on** within a couple of
 seconds of a client subscribing, and **Camera off** once the last one
-leaves (#61 item 8); it rereads the daemon's status file,
-`~/Library/Application Support/Facepalm/status`, on its own timer, so it
-shows this even while the dropdown was closed when the camera started.
-Running the daemon by hand with no `--status` flag skips writing it, and
-the indicator then reads as off throughout.
+leaves (#61 item 8), and **Camera off** too for a denied or failed open,
+even while a client keeps asking (#185). It rereads the daemon's status
+file, `~/Library/Application Support/Facepalm/status`, on its own timer,
+so it shows this even while the dropdown was closed when the camera
+started. That file names the daemon's own pid alongside on or off, so a
+daemon that stopped with the camera on, with no later run to republish
+it, still reads as off (#184) rather than freezing an open preview on its
+last frame. Running the daemon by hand with no `--status` flag skips
+writing it, and the indicator then reads as off throughout.
 
 Approving the adapter writes a new random token to
 `~/Library/Application Support/Facepalm/clients/mcp`, private to you; the

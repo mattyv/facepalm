@@ -530,11 +530,17 @@ class Engine : public DaemonController, public DaemonPipeline {
                  calibration_.Controller(), &capture_),
         control_(
             *this, *this, [this] { service_.Stop(); },
-            [](bool failed) {
+            // CameraStatus!Shutdown (#184): a clean stop gets the chance
+            // a bare crash never does to publish off before the process
+            // ends, so an open preview does not freeze on a status file
+            // left saying on. ReadCameraStatus's own pid check is the
+            // other half of the fix, for when this chance never comes.
+            [this](bool failed) {
               if (failed) {
                 std::fputs("facepalm-daemon: stopped after a failure\n",
                            stderr);
               }
+              PublishStatus(false);
               std::_Exit(failed ? 1 : 0);
             }),
 #ifdef __linux__
@@ -613,9 +619,39 @@ class Engine : public DaemonController, public DaemonPipeline {
   void Subscribe() override { controller_.Subscribe("approved"); }
   void Leave() override { controller_.Leave("approved"); }
   void Revoke() override { controller_.RevokeConsent(); }
-  void Opened() override { controller_.OnOpened(); }
+  // CameraStatus!OpenSucceeds (#185): the same call whether this is the
+  // first open or a retry finally succeeding after OpenFailed below, so
+  // a transient denial does not leave the file stuck off once the
+  // camera genuinely opens. Published only for a report CameraController
+  // actually accepted (it really was opening, and really reached kOpen),
+  // the same two-part check DaemonControl::OnOpened makes of it just
+  // above this, so a stray or late report can never publish on for a
+  // camera that was never really made to open by it.
+  void Opened() override {
+    const bool was_opening =
+        controller_.CurrentState() == CameraController::State::kOpening;
+    controller_.OnOpened();
+    if (was_opening &&
+        controller_.CurrentState() == CameraController::State::kOpen) {
+      PublishStatus(true);
+    }
+  }
+  // CameraStatus!OpenFails (#185): the demand edge already published on
+  // before this open was even attempted (camera_demand_'s own callback,
+  // kept as is for the preview's grace period); a denied permission or
+  // a failed start must correct that publish itself, since CameraLifecycle
+  // .tla's own retry (schedule_retry_) keeps the camera wanted throughout,
+  // with no demand edge of its own to otherwise republish on the fix.
+  // Published only for a report that really was opening, the same guard
+  // Opened() above takes, so a stray or late report can never publish
+  // off for a camera a genuinely later attempt already opened.
   void OpenFailed(OpenFailure reason) override {
+    const bool was_opening =
+        controller_.CurrentState() == CameraController::State::kOpening;
     controller_.OnOpenFailed(reason);
+    if (was_opening) {
+      PublishStatus(false);
+    }
   }
   void Closed() override { controller_.OnClosed(); }
   void DeviceLost() override { controller_.OnDeviceLost(); }
