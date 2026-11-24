@@ -32,15 +32,13 @@ TEST(DecideMenuStateTest, ServiceOffWithACameraInUseReadingStillStale) {
   EXPECT_FALSE(state.calibrate_enabled);
 }
 
-// Disabled, so a window that was somehow still open when the service
-// stopped is not offered as something to click "Hide" on; it closes on
-// its own next refresh once it sees the camera gone.
+// A preview already open can still be hidden after the service stops.
 TEST(DecideMenuStateTest, ServiceOffWithThePreviewStillMarkedOpen) {
   const MenuState state = DecideMenuState(
       {.service_on = false, .camera_in_use = true, .preview_open = true});
 
-  EXPECT_EQ(state.preview_title, "Turn on Facepalm first");
-  EXPECT_FALSE(state.preview_enabled);
+  EXPECT_EQ(state.preview_title, "Hide Camera Preview");
+  EXPECT_TRUE(state.preview_enabled);
 }
 
 TEST(DecideMenuStateTest, ServiceOffWithCameraIdleAndPreviewMarkedOpen) {
@@ -48,13 +46,15 @@ TEST(DecideMenuStateTest, ServiceOffWithCameraIdleAndPreviewMarkedOpen) {
       {.service_on = false, .camera_in_use = false, .preview_open = true});
 
   EXPECT_EQ(state.camera_status_title, "Facepalm off");
-  EXPECT_FALSE(state.preview_enabled);
+  EXPECT_TRUE(state.preview_enabled);
   EXPECT_FALSE(state.calibrate_enabled);
 }
 
 TEST(DecideMenuStateTest, ServiceOnWithCameraIdleAndPreviewClosed) {
-  const MenuState state = DecideMenuState(
-      {.service_on = true, .camera_in_use = false, .preview_open = false});
+  const MenuState state = DecideMenuState({.service_on = true,
+                                           .service_ready = true,
+                                           .camera_in_use = false,
+                                           .preview_open = false});
 
   EXPECT_EQ(state.camera_status_title, "Camera off");
   EXPECT_EQ(state.preview_title, "Show Camera Preview");
@@ -64,8 +64,10 @@ TEST(DecideMenuStateTest, ServiceOnWithCameraIdleAndPreviewClosed) {
 }
 
 TEST(DecideMenuStateTest, ServiceOnWithCameraIdleAndPreviewOpen) {
-  const MenuState state = DecideMenuState(
-      {.service_on = true, .camera_in_use = false, .preview_open = true});
+  const MenuState state = DecideMenuState({.service_on = true,
+                                           .service_ready = true,
+                                           .camera_in_use = false,
+                                           .preview_open = true});
 
   EXPECT_EQ(state.camera_status_title, "Camera off");
   EXPECT_EQ(state.preview_title, "Hide Camera Preview");
@@ -74,8 +76,10 @@ TEST(DecideMenuStateTest, ServiceOnWithCameraIdleAndPreviewOpen) {
 }
 
 TEST(DecideMenuStateTest, ServiceOnWithCameraRunningAndPreviewClosed) {
-  const MenuState state = DecideMenuState(
-      {.service_on = true, .camera_in_use = true, .preview_open = false});
+  const MenuState state = DecideMenuState({.service_on = true,
+                                           .service_ready = true,
+                                           .camera_in_use = true,
+                                           .preview_open = false});
 
   EXPECT_EQ(state.camera_status_title, "Camera on");
   EXPECT_EQ(state.preview_title, "Show Camera Preview");
@@ -86,8 +90,10 @@ TEST(DecideMenuStateTest, ServiceOnWithCameraRunningAndPreviewClosed) {
 // The preview itself is why the camera is running (#176): still "Camera
 // on", "Hide Camera Preview", and Calibrate… untouched by it.
 TEST(DecideMenuStateTest, ServiceOnWithCameraRunningAndPreviewOpen) {
-  const MenuState state = DecideMenuState(
-      {.service_on = true, .camera_in_use = true, .preview_open = true});
+  const MenuState state = DecideMenuState({.service_on = true,
+                                           .service_ready = true,
+                                           .camera_in_use = true,
+                                           .preview_open = true});
 
   EXPECT_EQ(state.camera_status_title, "Camera on");
   EXPECT_EQ(state.preview_title, "Hide Camera Preview");
@@ -96,5 +102,56 @@ TEST(DecideMenuStateTest, ServiceOnWithCameraRunningAndPreviewOpen) {
   EXPECT_TRUE(state.calibrate_enabled);
 }
 
+}  // namespace
+}  // namespace facepalm
+
+namespace facepalm {
+namespace {
+TEST(DecideMenuStateTest, FailedServiceIsNotReady) {
+  const auto state = DecideMenuState(
+      {.service_on = true, .service_ready = false, .service_failed = true});
+  EXPECT_EQ(state.camera_status_title, "Service failed to start");
+  EXPECT_FALSE(state.preview_enabled);
+  EXPECT_FALSE(state.calibrate_enabled);
+}
+TEST(DecideMenuStateTest, StartingServiceIsNotReady) {
+  const auto state = DecideMenuState(
+      {.service_on = true, .service_ready = false, .service_starting = true});
+  EXPECT_EQ(state.camera_status_title, "Facepalm starting");
+  EXPECT_FALSE(state.preview_enabled);
+  EXPECT_FALSE(state.calibrate_enabled);
+}
+TEST(DecideMenuStateTest, UnavailableServiceAllowsHidingPreview) {
+  const auto state = DecideMenuState(
+      {.service_on = true, .service_ready = false, .preview_open = true});
+  EXPECT_EQ(state.camera_status_title, "Facepalm unavailable");
+  EXPECT_EQ(state.preview_title, "Hide Camera Preview");
+  EXPECT_TRUE(state.preview_enabled);
+  EXPECT_FALSE(state.calibrate_enabled);
+}
+}  // namespace
+}  // namespace facepalm
+
+namespace facepalm {
+namespace {
+TEST(ServiceManagerHealthTest, ParsesOnlyAuthoritativeActiveState) {
+  EXPECT_EQ(ParseServiceHealth("failed\n"), ServiceHealth::kFailed);
+  EXPECT_EQ(ParseServiceHealth("activating\n"), ServiceHealth::kStarting);
+  EXPECT_EQ(ParseServiceHealth("active\n"), ServiceHealth::kUnavailable);
+  EXPECT_EQ(ParseServiceHealth("failed stale\n"), ServiceHealth::kUnavailable);
+  EXPECT_EQ(ParseServiceHealth(""), ServiceHealth::kUnavailable);
+}
+}  // namespace
+}  // namespace facepalm
+
+namespace facepalm {
+namespace {
+TEST(DecideMenuStateTest, ReachableSocketWinsOverStaleFailure) {
+  const auto state = DecideMenuState(
+      {.service_on = true, .service_ready = true, .service_failed = true});
+  EXPECT_EQ(state.camera_status_title, "Camera off");
+  EXPECT_TRUE(state.preview_enabled);
+  EXPECT_TRUE(state.calibrate_enabled);
+}
 }  // namespace
 }  // namespace facepalm

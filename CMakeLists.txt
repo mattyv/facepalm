@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(facepalm VERSION 0.1.0 LANGUAGES CXX)
+project(facepalm VERSION 0.1.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -146,6 +146,13 @@ target_link_libraries(settings_document PUBLIC facepalm_config)
 facepalm_unit(client_token)
 facepalm_unit(client_approvals)
 facepalm_unit(daemon_control)
+facepalm_unit(socket_ready)
+if(BUILD_TESTING)
+  add_executable(socket_ready_checks test/socket_ready_checks.cc)
+  target_link_libraries(socket_ready_checks PRIVATE socket_ready GTest::gtest_main)
+  add_test(NAME socket_ready_checks COMMAND socket_ready_checks)
+  set_tests_properties(socket_ready_checks PROPERTIES TIMEOUT 10)
+endif()
 facepalm_unit(camera_demand)
 facepalm_unit(menu_state)
 facepalm_unit(preview_lease)
@@ -468,6 +475,9 @@ if(FACEPALM_LINUX_TRAY)
     set_target_properties(facepalm_menu PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
     configure_file(tools/menu/linux/facepalm.png
       "${CMAKE_CURRENT_BINARY_DIR}/share/icons/hicolor/128x128/apps/facepalm.png" COPYONLY)
+    add_executable(service_health_linux_checks test/service_health_linux_checks.cc)
+    target_link_libraries(service_health_linux_checks PRIVATE menu_state Qt6::Core GTest::gtest)
+    add_test(NAME service_health_linux_checks COMMAND service_health_linux_checks)
     add_executable(linux_tray_integration test/linux_tray_integration.cc)
     set_target_properties(linux_tray_integration PROPERTIES AUTOMOC ON)
     add_dependencies(linux_tray_integration facepalm_menu)
@@ -522,14 +532,14 @@ if(APPLE)
   target_link_libraries(facepalm_menu PRIVATE settings_document user_service client_approvals
     client_token user_paths daemon_status calibration_flow calibration cameras_listing
     window_activation menu_state settings_config_path menu_field_format settings_save_guard
-    calibrate_client_token "-framework AppKit")
+    socket_ready calibrate_client_token "-framework AppKit")
   if(BUILD_TESTING)
     add_executable(menu_store_checks test/menu_store_check.mm tools/menu/calibration_window_macos.mm)
     target_compile_options(menu_store_checks PRIVATE -fobjc-arc)
     target_link_libraries(menu_store_checks PRIVATE settings_document user_service
       client_approvals client_token user_paths daemon_status calibration_flow calibration
       cameras_listing window_activation menu_state settings_config_path menu_field_format
-      settings_save_guard calibrate_client_token GTest::gtest_main "-framework AppKit")
+      settings_save_guard socket_ready calibrate_client_token GTest::gtest_main "-framework AppKit")
     add_test(NAME menu_store_checks COMMAND menu_store_checks)
   endif()
 

@@ -16,6 +16,24 @@ evidence and the discussion are in the issue it names. An entry is never
 edited once made; a decision that is reversed gets a new entry, and the old one
 a line saying which entry replaced it.
 
+## 2026-11-24: Separate service intent from socket readiness
+
+Issue #192: the first public release is 0.1.1 so it upgrades the 0.1.0
+candidate already installed by the user. An installed service file records
+the person's choice, not a running daemon. The menu probes the existing local
+socket without requesting camera access and enables preview and calibration
+only when it connects.
+Linux reports a failed or activating systemd state only from a bounded current
+manager query; an unavailable manager or an unrecognized state remains
+unavailable. macOS reports unavailable without inferring failure from launchd.
+The daemon retains the first admission failure reason through retirement,
+using a fallback when no detail exists. The historical crash cause remains
+unknown. A timed-out Linux manager query is killed and retained until it
+exits; application shutdown can still wait for a process the OS cannot reap.
+The socket can disappear after a check, so actions recheck and report errors;
+connecting proves transport availability, not camera readiness. An open
+preview can still be closed. No probe starts or resets the service.
+
 ## 2026-11-24: A stale camera status reads as off by checking the daemon's pid, not a timestamp
 
 Issue #184: a daemon that stops with the camera on left the status file

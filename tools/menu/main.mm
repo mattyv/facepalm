@@ -19,6 +19,7 @@
 #include "src/settings_config_path.h"
 #include "src/settings_document.h"
 #include "src/settings_save_guard.h"
+#include "src/socket_ready.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
 #include "src/window_activation.h"
@@ -74,6 +75,12 @@ BOOL CameraInUse() {
   const std::optional<facepalm::UserPaths> paths =
       facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
   return paths && facepalm::ReadCameraStatus(paths->status) ? YES : NO;
+}
+
+bool ServiceReady() {
+  const auto paths = facepalm::PathsFor(Utf8Bytes(NSHomeDirectory()), facepalm::Platform::kMacOs);
+  if (!paths) return false;
+  return facepalm::SocketReady(paths->socket);
 }
 
 // The camera preview's own paths (#37 item 8, #108): creating
@@ -345,6 +352,7 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   const BOOL serviceOn = ServiceIsOn();
   const facepalm::MenuState state =
       facepalm::DecideMenuState({.service_on = serviceOn ? true : false,
+                                 .service_ready = serviceOn && ServiceReady(),
                                  .camera_in_use = CameraInUse() ? true : false,
                                  .preview_open = self.previewWindow.visible ? true : false});
   self.power.title = serviceOn ? @"Turn Off Facepalm" : @"Turn On Facepalm…";
@@ -393,6 +401,11 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   (void)sender;
   if (self.previewWindow.visible) {
     [self stopPreview];
+    return;
+  }
+  if (!ServiceIsOn() || !ServiceReady()) {
+    [self showError:@"Facepalm is unavailable." title:@"Preview could not start"];
+    [self refreshMenuState];
     return;
   }
   [self startPreview];
@@ -489,6 +502,11 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
   (void)sender;
   if (self.calibrationController != nil) {
     [NSApp activateIgnoringOtherApps:YES];
+    return;
+  }
+  if (!ServiceIsOn() || !ServiceReady()) {
+    [self showError:@"Facepalm is unavailable." title:@"Calibration could not start"];
+    [self refreshMenuState];
     return;
   }
   const std::optional<facepalm::UserPaths> paths =

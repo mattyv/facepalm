@@ -34,7 +34,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CameraStatus.cfg` | one daemon, the camera wanted and released, the menu polling | holds, with `CameraOnLeadsToDisplayOn` and `CameraOffLeadsToDisplayOff` | 4 |
 | `CameraStatus_Crash.cfg` | one crash or clean shutdown, one restart (#184) | holds, with `NeverStaleWhileRunning` and `CameraOffLeadsToDisplayOff` | 21 |
 | `CameraStatus_OpenFailure.cfg` | one failed camera open and its recovery (#185) | holds, with `OpenFailLeadsToDisplayOff` and `OpenRecoversLeadsToDisplayOn` | 10 |
-| `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 19,892 |
+| `DaemonAdmission.cfg` | three clients, two approved; each client and the OS queue at most two changes; a camera that can be blocked and retried (item 10 of #61, #52) | holds, with `StopEnds`, `LastLeaveCloses` and `JoinOpens` | 28,932 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none, #142's gaze inert (`MaxLooks = 0`, one kind) | holds | 3,815,485 |
 | `FeelingBeat_Gaze.cfg` | one client, two readings, up to two Look steps, both kinds and every zone reachable (#142, #144) | holds | 20,352 |
@@ -173,6 +173,10 @@ stops the daemon and is retried instead, fairly, through the new `Retry`
 the device (`specs/CameraLifecycle.tla`'s `permitted /\ startWorks`); while
 it is false, an open attempt can only come back blocked.
 
+For #192, `Fail` records the first failure reason even if a clean stop has
+already begun. Retirement retains it and exit reports it. The model uses
+`model` and `camera` as representative causes; it does not model the text.
+
 | Property | What it says | Test |
 |---|---|---|
 | `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
@@ -181,6 +185,8 @@ it is false, an open attempt can only come back blocked.
 | `SubscriptionMatches` | Once the subscription changes are handled, the camera is wanted exactly while some client is connected: one client leaving does not take it from another. | `SubscriptionMatchesTest` in `test/approved_feed_test.cc` and `test/daemon_control_test.cc`; `approval.test.mjs`'s "camera on" and "camera off" |
 | `ReopenAfterRetire` | A camera opens only once the previous face model is destroyed. | `ReopenAfterRetireTest` in `test/daemon_control_test.cc` |
 | `ExitClean` | The daemon exits only with the camera closed and stopped, and every face model destroyed. | `ExitCleanTest` |
+| `FirstFailure` | The first failure remains the cause while stopping. | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure` |
+| `FailureReported` | Exit reports the retained reason. | `StopEndsTest.AFailedModelStopsTheDaemonAsAFailure`, `StopEndsTest.ACameraThatFailsToOpenStopsTheDaemonAsAFailure` |
 | `StopEnds` | Liveness: stopping, by the person, a signal, a failed model or a failed open, always ends with the daemon exiting. | `StopEndsTest` |
 | `LastLeaveCloses` | Liveness: with no client left, the camera closes, unless one joins. | `SubscriptionMatchesTest.OnlyTheFirstJoinAndTheLastLeaveCount`; `OpenOnlyWhenSubscribedTest.TheLastClientLeavingCloses` in `test/camera_controller_test.cc` |
 | `JoinOpens` | Liveness, and something must happen: from every point, a connected client, the device and whatever else Start needs, all held, lead to the camera being open (#52). | `JoinOpensTest`, `ReopenAfterRetireTest.OnlyTheOpeningCameraCreatesAModel`; `WantedOpensTest`, `RetriesTest` in `test/camera_controller_test.cc`; `ADeniedPermissionDoesNotStopTheDaemon`, `AFailedStartDoesNotStopTheDaemon` in `test/daemon_control_test.cc` |
@@ -201,6 +207,8 @@ Each mutation, and what TLC found (counts are the counterexample's states):
 | `GuardDeferDeviceBack = FALSE`: a device coming back is let in during a retirement | `ReopenAfterRetire` |
 | `GuardOpenOnce = FALSE`: an `Opened` after closing began creates a model | Nothing: the model is destroyed behind it on the same FIFO inference queue, so the guard only saves loading a model no frame will reach |
 | `GuardOpenFailStops = FALSE`: a camera with no device to use leaves the daemon running | Nothing: stopping for that cause is a choice, not a protection; without it the camera waits for the device to come back, which `JoinOpens` allows |
+| `GuardFailureReason = FALSE`: a later failure overwrites the first | `FirstFailure` |
+| `GuardFailureReported = FALSE`: exit drops the reason | `FailureReported` |
 | `GuardRetries = FALSE`: a denied permission or a failed start never clears | `JoinOpens` (#52): `ctl.blocked` latches forever, so a session that stays joined, with the device and everything else Start needs, never reopens |
 | `OpenIf` never opens | `JoinOpens` |
 | `Leave` does not close | `LastLeaveCloses` |
@@ -1756,3 +1764,29 @@ which `specs/Calibration.tla` already proves, nor which connection the
 daemon ties that session to, which `specs/Service.tla` does; only a hand
 check on a real Mac and Ubuntu, with two screens, against a live daemon,
 shows the window itself moving and naming them.
+
+### MenuReadiness (#192)
+
+`MenuReadiness.tla` separates installed intent, socket readiness and current
+manager failure. A socket means transport readiness only; it can disappear
+immediately after a menu refresh. The model does not describe QProcess
+ownership or retirement. The real-child
+`ServiceHealthCheck.TimesOutAndRetiresBeforeAnotherQuery` check covers the
+single pending query, timeout, kill and retirement before another query.
+
+| Property | Implementation test |
+|---|---|
+| `ReadyOnly` | `DecideMenuStateTest.FailedServiceIsNotReady`, `StartingServiceIsNotReady` |
+| `FailureOnly` | `ServiceManagerHealthTest.ParsesOnlyAuthoritativeActiveState`, `DecideMenuStateTest.StartingServiceIsNotReady` |
+| `OffOnly` | `DecideMenuStateTest.ServiceOffWithCameraIdleAndPreviewClosed`, `ServiceOnWithCameraIdleAndPreviewClosed` |
+| `ReadyEnabled` | `DecideMenuStateTest.ServiceOnWithCameraIdleAndPreviewClosed`, `ReachableSocketWinsOverStaleFailure` |
+| `FailureShown` | `DecideMenuStateTest.FailedServiceIsNotReady` |
+
+| Configuration | Bounds and TLC result |
+|---|---|
+| `MenuReadiness.cfg` | Boolean state, 5 distinct states, 18 generated; all invariants pass |
+| `GuardReady = FALSE` | `ReadyOnly` violated |
+| `GuardFailureTruth = FALSE` | `FailureOnly` violated |
+| `GuardOffTruth = FALSE` | `OffOnly` violated |
+| `GuardShowReady = FALSE` | `ReadyEnabled` violated |
+| `GuardShowFailure = FALSE` | `FailureShown` violated |

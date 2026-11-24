@@ -55,6 +55,8 @@ CONSTANTS
     GuardDeferDeviceBack, \* A device coming back waits for the retirement.
     GuardOpenOnce,        \* Only the opening camera's Opened creates a model.
     GuardOpenFailStops,   \* A camera with no device to use stops the daemon.
+    GuardFailureReported,  \* Exit reports the stored reason.
+    GuardFailureReason,    \* The first failure survives until exit.
     GuardRetries          \* A denied permission or a failed start is retried.
 
 VARIABLES
@@ -86,7 +88,7 @@ Init ==
     /\ sq = <<>> /\ running = FALSE /\ reports = <<>>
     /\ iq = <<>> /\ model = "none" /\ dones = <<>>
     /\ dc = [stopping |-> FALSE, retiring |-> FALSE, deviceBack |-> FALSE,
-             exited |-> FALSE]
+             exited |-> FALSE, reason |-> "none", first |-> "none", reported |-> "none"]
     /\ canStart \in BOOLEAN
 
 -----------------------------------------------------------------------------
@@ -146,6 +148,17 @@ StopFrom(c0, q0, d0, i0) ==
                 /\ GuardStopRetires
                 THEN Retire(d1, i0, FALSE) ELSE [d |-> d1, i |-> i0]
     IN [c |-> r.c, q |-> r.q, d |-> t.d, i |-> t.i]
+
+\* A model failure records the first cause, even during an existing stop.
+Fail ==
+    /\ ~dc.exited
+    /\ LET d == [dc EXCEPT !.reason = IF @ = "none" \/ ~GuardFailureReason
+                                          THEN "model" ELSE @,
+                    !.first = IF @ = "none" THEN "model" ELSE @]
+           s == StopFrom(ctl, sq, d, iq)
+       IN /\ ctl' = s.c /\ sq' = s.q /\ dc' = s.d /\ iq' = s.i
+    /\ sessions' = {}
+    /\ UNCHANGED <<subq, running, reports, model, dones, canStart>>
 
 Stop ==
     /\ ~dc.exited /\ ~dc.stopping
@@ -248,7 +261,10 @@ OnOpenFailed ==
     IF ctl.cam = "opening"
        THEN LET c == [ctl EXCEPT !.cam = "closed", !.device = FALSE]
             IN IF GuardOpenFailStops
-                  THEN LET s == StopFrom(c, sq, dc, iq)
+                  THEN LET d == [dc EXCEPT !.reason = IF @ = "none" \/ ~GuardFailureReason
+                                                     THEN "camera" ELSE @,
+                                     !.first = IF @ = "none" THEN "camera" ELSE @]
+                           s == StopFrom(c, sq, d, iq)
                        IN /\ ctl' = s.c /\ sq' = s.q /\ dc' = s.d
                           /\ iq' = s.i /\ sessions' = {}
                   ELSE ctl' = c /\ UNCHANGED <<sq, dc, iq, sessions>>
@@ -345,7 +361,7 @@ Retired ==
     /\ LET r == IF Head(dones) THEN Closed(ctl, sq) ELSE [c |-> ctl, q |-> sq]
            d == [dc EXCEPT !.retiring = FALSE]
        IN IF d.stopping
-             THEN ctl' = r.c /\ sq' = r.q /\ dc' = [d EXCEPT !.exited = TRUE]
+             THEN ctl' = r.c /\ sq' = r.q /\ dc' = [d EXCEPT !.exited = TRUE, !.reported = IF GuardFailureReported THEN d.reason ELSE "none"]
              ELSE IF d.deviceBack
                 THEN LET b == DeviceBack(r.c, r.q)
                      IN /\ ctl' = b.c /\ sq' = b.q
@@ -356,7 +372,7 @@ Retired ==
 -----------------------------------------------------------------------------
 
 Next ==
-    \/ Stop \/ Subscription \/ SessionTask \/ Lost \/ Back \/ Report
+    \/ Stop \/ Fail \/ Subscription \/ SessionTask \/ Lost \/ Back \/ Report
     \/ InferenceTask \/ Retired \/ Retry \/ ToggleCanStart
     \/ \E cl \in Clients : Join(cl) \/ Disconnect(cl)
 
@@ -379,7 +395,9 @@ TypeOK ==
     /\ model \in {"none", "live"}
     /\ dones \in Seq(BOOLEAN)
     /\ dc \in [stopping : BOOLEAN, retiring : BOOLEAN, deviceBack : BOOLEAN,
-               exited : BOOLEAN]
+               exited : BOOLEAN, reason : {"none", "model", "camera"},
+               first : {"none", "model", "camera"},
+               reported : {"none", "model", "camera"}]
     /\ canStart \in BOOLEAN
 
 \* Only approved clients are connected.
@@ -406,6 +424,11 @@ ExitClean ==
     dc.exited =>
         /\ ctl.cam = "closed" /\ ~running /\ sq = <<>>
         /\ model = "none" /\ iq = <<>>
+
+\* Once a failure is recorded, it is retained until and at exit.
+FailureReported == dc.exited => dc.reported = dc.reason
+FirstFailure == /\ dc.reason = dc.first
+                /\ (dc.reason # "none" => dc.stopping)
 
 \* Liveness: stopping always ends with the daemon exiting.
 StopEnds == dc.stopping ~> dc.exited

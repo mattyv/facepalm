@@ -20,7 +20,6 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPixmap>
-#include <QProcess>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QSpinBox>
@@ -53,6 +52,7 @@
 #include "src/user_paths.h"
 #include "src/user_service.h"
 #include "tools/menu/calibration_window_linux.h"
+#include "tools/menu/service_health_linux.h"
 
 namespace {
 
@@ -306,6 +306,31 @@ bool ServiceIsOn() {
       },
       *io);
   return service.IsOn();
+}
+
+facepalm::ServiceHealth ServiceHealth() {
+  static facepalm_menu::ServiceHealthQuery query;
+  constexpr int kQueryTimeoutMs = 200;
+  return query.Read(
+      QStringLiteral("systemctl"),
+      {QStringLiteral("--user"), QStringLiteral("show"),
+       QStringLiteral("--property=ActiveState"), QStringLiteral("--value"),
+       QStringLiteral("facepalm.service")},
+      kQueryTimeoutMs);
+}
+
+facepalm::ServiceHealth HealthWhenUnavailable(bool on, bool ready) {
+  return on && !ready ? ServiceHealth() : facepalm::ServiceHealth::kUnavailable;
+}
+
+void OpenCalibrationIfReady(facepalm_menu::CalibrationWindow& calibration,
+                            QWidget* parent) {
+  if (!ServiceIsOn() || !ServiceReady(SocketPath())) {
+    QMessageBox::warning(parent, QStringLiteral("Calibration could not start"),
+                         QStringLiteral("Facepalm is unavailable."));
+    return;
+  }
+  OpenCalibration(calibration, parent);
 }
 
 // facepalm-daemon's own path: the tray's own install first, then the
@@ -708,9 +733,12 @@ class CameraPreview {
   }
 
   // Starts the preview if it is hidden, and stops it if it is showing.
-  void Toggle() {
+  void Toggle(QWidget* parent) {
     if (window_.isVisible()) {
       Stop();
+    } else if (!ServiceIsOn() || !ServiceReady(SocketPath())) {
+      QMessageBox::warning(parent, QStringLiteral("Preview could not start"),
+                           QStringLiteral("Facepalm is unavailable."));
     } else {
       Start();
     }
@@ -905,8 +933,13 @@ int main(int argc, char* argv[]) {
   const QString status_path = StatusPath();
   const auto refresh_menu_state = [=, &preview] {
     const bool service_on = ServiceIsOn();
+    const bool service_ready = service_on && ServiceReady(SocketPath());
+    const auto health = HealthWhenUnavailable(service_on, service_ready);
     const facepalm::MenuState state = facepalm::DecideMenuState(
         {.service_on = service_on,
+         .service_ready = service_ready,
+         .service_failed = health == facepalm::ServiceHealth::kFailed,
+         .service_starting = health == facepalm::ServiceHealth::kStarting,
          .camera_in_use = facepalm::ReadCameraStatus(status_path.toStdString()),
          .preview_open = preview.IsOpen()});
     power->setText(service_on ? QStringLiteral("Turn Off Facepalm")
@@ -947,8 +980,8 @@ int main(int argc, char* argv[]) {
       });
 
   QObject::connect(preview_action, &QAction::triggered, &window,
-                   [&preview, refresh_menu_state] {
-                     preview.Toggle();
+                   [&preview, &window, refresh_menu_state] {
+                     preview.Toggle(&window);
                      refresh_menu_state();
                    });
   // A request file an earlier launch left behind -- it crashed, or its
@@ -965,9 +998,10 @@ int main(int argc, char* argv[]) {
   QObject::connect(&app, &QCoreApplication::aboutToQuit, &window,
                    [&preview] { preview.RemoveRequest(); });
 
-  QObject::connect(
-      calibrate_action, &QAction::triggered, &window,
-      [&calibration, &window] { OpenCalibration(calibration, &window); });
+  QObject::connect(calibrate_action, &QAction::triggered, &window,
+                   [&calibration, &window] {
+                     OpenCalibrationIfReady(calibration, &window);
+                   });
 
   const QAction* quit_action = menu.addAction(QStringLiteral("Quit"));
   QObject::connect(quit_action, &QAction::triggered, &app, &QApplication::quit);
