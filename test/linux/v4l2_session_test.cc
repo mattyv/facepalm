@@ -5,11 +5,13 @@
 #include "src/linux/v4l2_session.h"
 
 #include <fcntl.h>
+#include <glob.h>
 #include <libv4l2.h>
 #include <linux/videodev2.h>
 #include <poll.h>
 #include <sys/types.h>
 
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
@@ -66,6 +68,8 @@ class MockV4l2 {
   MOCK_METHOD(int, Open, (const char* file, int flags));
   MOCK_METHOD(int, Close, (int fd));
   MOCK_METHOD(int, QueryCap, (int fd, v4l2_capability* cap));
+  MOCK_METHOD(int, EnumFormat, (int fd, v4l2_fmtdesc* format));
+  MOCK_METHOD(int, TryFormat, (int fd, v4l2_format* format));
   MOCK_METHOD(int, SetFormat, (int fd, v4l2_format* format));
   MOCK_METHOD(int, SetRate, (int fd, v4l2_streamparm* rate));
   MOCK_METHOD(ssize_t, Read, (int fd, void* buffer, std::size_t size));
@@ -73,6 +77,8 @@ class MockV4l2 {
 };
 
 MockV4l2* v4l2 = nullptr;
+std::vector<std::string> paths;
+int glob_result = 0;
 
 // Probed first, so the device-choice tests below do not have to mock every
 // node V4l2Session tries before it (#13, item 10 of #61).
@@ -132,6 +138,7 @@ auto Capability(std::string card, std::string bus_info) {
   return [card = std::move(card), bus_info = std::move(bus_info)](
              int, v4l2_capability* cap) {
     std::memset(cap, 0, sizeof(*cap));
+    cap->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_READWRITE;
     std::memcpy(cap->card, card.c_str(), card.size());
     std::memcpy(cap->bus_info, bus_info.c_str(), bus_info.size());
     return 0;
@@ -183,6 +190,21 @@ class V4l2SessionTest : public ::testing::Test {
  protected:
   void SetUp() override {
     v4l2 = &mock_;
+    failure = ENOENT;
+    glob_result = 0;
+    paths = {"/dev/video0", "/dev/video1", "/dev/video2", "/dev/video3"};
+    EXPECT_CALL(mock_, TryFormat(_, _))
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(0));
+    EXPECT_CALL(mock_, EnumFormat(_, _))
+        .Times(AnyNumber())
+        .WillRepeatedly([](int, v4l2_fmtdesc* format) {
+          if (format->index != 0) {
+            return -1;
+          }
+          format->pixelformat = V4L2_PIX_FMT_RGB24;
+          return 0;
+        });
     session_ = std::make_unique<V4l2Session>(
         /*device_id=*/"",
         [this](const Frame& frame) {
@@ -323,6 +345,321 @@ TEST_F(V4l2SessionTest, ConfigureOpensTheDeviceWithoutBlocking) {
   EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
 
   EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
+}
+
+TEST_F(V4l2SessionTest, DefaultAcceptsIntegratedUsbCamera) {
+  EXPECT_CALL(mock_, Open(StrEq(kDevice), _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(kFd, _))
+      .WillOnce(Capability("Integrated Camera", "usb-0000:00:14.0-1"));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(),
+              Optional(std::string("usb-0000:00:14.0-1")));
+}
+
+TEST_F(V4l2SessionTest, DefaultSkipsMetadataAndFindsLaterColorNode) {
+  paths = {"/dev/video4", "/dev/video8"};
+  EXPECT_CALL(mock_, Open(StrEq("/dev/video4"), _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce([](int, v4l2_capability* cap) {
+    cap->capabilities = V4L2_CAP_DEVICE_CAPS | V4L2_CAP_VIDEO_CAPTURE;
+    cap->device_caps = V4L2_CAP_META_CAPTURE;
+    return 0;
+  });
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, Open(StrEq("/dev/video8"), _)).WillOnce(Return(kFd + 1));
+  EXPECT_CALL(mock_, QueryCap(kFd + 1, _))
+      .WillOnce(Capability("Integrated Camera", "usb-camera"));
+  EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Optional(std::string("usb-camera")));
+}
+
+TEST_F(V4l2SessionTest, DefaultSkipsMonochromeNodeOnSameBus) {
+  paths = {"/dev/video0", "/dev/video1"};
+  EXPECT_CALL(mock_, Open(_, _))
+      .WillOnce(Return(kFd))
+      .WillOnce(Return(kFd + 1));
+  EXPECT_CALL(mock_, QueryCap(_, _))
+      .WillOnce(Capability("Integrated Camera IR", "usb-camera"))
+      .WillOnce(Capability("Integrated Camera", "usb-camera"));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Optional(std::string("usb-camera")));
+}
+
+TEST_F(V4l2SessionTest, RejectsGrayscaleEvenForExplicitBusChoice) {
+  session_ = std::make_unique<V4l2Session>(
+      "usb-camera", [](const Frame&) {}, [] {}, [](const std::string&) {},
+      [](const std::string&) {}, hotplug_);
+  paths = {"/dev/video0", "/dev/video1"};
+  EXPECT_CALL(mock_, Open(_, _))
+      .WillOnce(Return(kFd))
+      .WillOnce(Return(kFd + 1));
+  EXPECT_CALL(mock_, QueryCap(_, _))
+      .WillRepeatedly(Capability("Camera", "usb-camera"));
+  EXPECT_CALL(mock_, EnumFormat(kFd, _))
+      .Times(2)
+      .WillRepeatedly([](int, v4l2_fmtdesc* format) {
+        if (format->index != 0) {
+          return -1;
+        }
+        format->pixelformat = V4L2_PIX_FMT_GREY;
+        return 0;
+      });
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, Close(kFd + 1)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Optional(std::string("usb-camera")));
+}
+
+TEST_F(V4l2SessionTest, ReportsEnumerationFailure) {
+  glob_result = GLOB_ABORTED;
+  ::testing::internal::CaptureStderr();
+  EXPECT_THAT(session_->List(), IsEmpty());
+  EXPECT_THAT(::testing::internal::GetCapturedStderr(),
+              ::testing::HasSubstr("enumeration failed"));
+}
+
+TEST_F(V4l2SessionTest, NoMatchingPathsIsNotAnEnumerationError) {
+  glob_result = GLOB_NOMATCH;
+  ::testing::internal::CaptureStderr();
+  EXPECT_THAT(session_->List(), IsEmpty());
+  EXPECT_TRUE(::testing::internal::GetCapturedStderr().empty());
+}
+
+TEST_F(V4l2SessionTest, IgnoresNonNumericNodeSuffix) {
+  paths = {"/dev/video4-extra"};
+  EXPECT_THAT(session_->List(), IsEmpty());
+}
+
+TEST_F(V4l2SessionTest, RejectsCaptureWithoutReadOrStreaming) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce([](int, v4l2_capability* cap) {
+    cap->capabilities = V4L2_CAP_VIDEO_CAPTURE;
+    return 0;
+  });
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->List(), IsEmpty());
+}
+
+TEST_F(V4l2SessionTest, RejectsInfraredName) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _))
+      .WillOnce(Capability("Infrared Camera", "usb-camera"));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->List(), IsEmpty());
+}
+
+TEST_F(V4l2SessionTest, RejectsEmulatedOrMonochromeFormats) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce(BuiltInCapability());
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, EnumFormat(kFd, _))
+      .Times(5)
+      .WillRepeatedly([](int, v4l2_fmtdesc* fmt) {
+        constexpr std::array<std::uint32_t, 4> kFormats = {
+            V4L2_PIX_FMT_RGB24, V4L2_PIX_FMT_Y10, V4L2_PIX_FMT_Y12,
+            V4L2_PIX_FMT_Y16};
+        if (fmt->index >= 4) {
+          return -1;
+        }
+        fmt->pixelformat = kFormats[fmt->index];
+        fmt->flags = fmt->index == 0 ? V4L2_FMT_FLAG_EMULATED : 0;
+        return 0;
+      });
+  EXPECT_THAT(session_->List(), IsEmpty());
+}
+
+TEST_F(V4l2SessionTest, RejectsOtherLumaAndUnknownWithEmulatedRgb) {
+  constexpr std::array<std::uint32_t, 6> kLuma = {
+      V4L2_PIX_FMT_Y14,      V4L2_PIX_FMT_Y16_BE,
+      V4L2_PIX_FMT_Y10BPACK, V4L2_PIX_FMT_Y10P,
+      V4L2_PIX_FMT_IPU3_Y10, v4l2_fourcc('?', '?', '?', '?')};
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _))
+      .Times(kLuma.size())
+      .WillRepeatedly(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _))
+      .Times(kLuma.size())
+      .WillRepeatedly(Capability("Camera", "usb-camera"));
+  EXPECT_CALL(mock_, Close(kFd)).Times(kLuma.size()).WillRepeatedly(Return(0));
+  std::uint32_t native = 0;
+  EXPECT_CALL(mock_, EnumFormat(kFd, _))
+      .Times(kLuma.size() * 3)
+      .WillRepeatedly([&native](int, v4l2_fmtdesc* fmt) {
+        if (fmt->index == 0) {
+          fmt->pixelformat = native;
+          fmt->flags = 0;
+          return 0;
+        }
+        if (fmt->index == 1) {
+          fmt->pixelformat = V4L2_PIX_FMT_RGB24;
+          fmt->flags = V4L2_FMT_FLAG_EMULATED;
+          return 0;
+        }
+        return -1;
+      });
+  for (const auto format : kLuma) {
+    native = format;
+    EXPECT_THAT(session_->Configure(), Eq(std::nullopt)) << format;
+  }
+}
+
+TEST_F(V4l2SessionTest, AcceptsSupportedNativeColorFamilies) {
+  constexpr std::array<std::uint32_t, 10> kColor = {
+      V4L2_PIX_FMT_RGB24, V4L2_PIX_FMT_BGR24, V4L2_PIX_FMT_MJPEG,
+      V4L2_PIX_FMT_JPEG,  V4L2_PIX_FMT_YUYV,  V4L2_PIX_FMT_UYVY,
+      V4L2_PIX_FMT_YVYU,  V4L2_PIX_FMT_NV12,  V4L2_PIX_FMT_YUV420,
+      V4L2_PIX_FMT_YVU420};
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _))
+      .Times(kColor.size())
+      .WillRepeatedly(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _))
+      .Times(kColor.size())
+      .WillRepeatedly(BuiltInCapability());
+  EXPECT_CALL(mock_, Close(kFd)).Times(kColor.size()).WillRepeatedly(Return(0));
+  std::uint32_t native = 0;
+  EXPECT_CALL(mock_, EnumFormat(kFd, _))
+      .Times(kColor.size() * 2)
+      .WillRepeatedly([&native](int, v4l2_fmtdesc* fmt) {
+        if (fmt->index != 0) {
+          return -1;
+        }
+        fmt->pixelformat = native;
+        return 0;
+      });
+  for (const auto format : kColor) {
+    native = format;
+    EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)))
+        << format;
+  }
+}
+
+TEST_F(V4l2SessionTest, ListsOneEntryPerBus) {
+  paths = {"/dev/video0", "/dev/video1"};
+  EXPECT_CALL(mock_, Open(_, _)).WillRepeatedly(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillRepeatedly(BuiltInCapability());
+  EXPECT_CALL(mock_, Close(kFd)).Times(2).WillRepeatedly(Return(0));
+  EXPECT_THAT(session_->List(), SizeIs(1));
+}
+
+TEST_F(V4l2SessionTest, RejectsNodeThatCannotConvertToRgb) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce(BuiltInCapability());
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_CALL(mock_, TryFormat(kFd, _)).WillOnce(Return(-1));
+  EXPECT_THAT(session_->Configure(), Eq(std::nullopt));
+}
+
+TEST_F(V4l2SessionTest,
+       ConfigureErrorDescribesCurrentAttemptAndClearsOnSuccess) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _))
+      .WillOnce([](const char*, int) {
+        failure = EACCES;
+        return -1;
+      })
+      .WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce(BuiltInCapability());
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Eq(std::nullopt));
+  EXPECT_THAT(session_->LastConfigureError(),
+              Optional(CaptureSession::ConfigureError::kPermissionDenied));
+  EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
+  EXPECT_THAT(session_->LastConfigureError(), Eq(std::nullopt));
+}
+
+TEST_F(V4l2SessionTest, ConfigureReportsQueryFailure) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce(Return(-1));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Eq(std::nullopt));
+  EXPECT_THAT(session_->LastConfigureError(),
+              Optional(CaptureSession::ConfigureError::kQueryFailed));
+}
+
+TEST_F(V4l2SessionTest, InfraredHeuristicDoesNotRejectIrisInName) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _))
+      .WillOnce(Capability("Iris Camera", "usb-camera"));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Optional(std::string("usb-camera")));
+}
+
+TEST_F(V4l2SessionTest, RejectsRgbProbeThatSelectsAnotherFormat) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce(BuiltInCapability());
+  EXPECT_CALL(mock_, TryFormat(_, _)).WillOnce([](int, v4l2_format* fmt) {
+    fmt->fmt.pix.pixelformat = V4L2_PIX_FMT_GREY;
+    return 0;
+  });
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Eq(std::nullopt));
+  EXPECT_THAT(session_->LastConfigureError(),
+              Optional(CaptureSession::ConfigureError::kUnsupported));
+}
+
+TEST_F(V4l2SessionTest, PermissionDenialOutranksOtherNodeFailures) {
+  paths = {"/dev/video0", "/dev/video1"};
+  EXPECT_CALL(mock_, Open(_, _))
+      .WillOnce([](const char*, int) {
+        failure = EPERM;
+        return -1;
+      })
+      .WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce(Return(-1));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->Configure(), Eq(std::nullopt));
+  EXPECT_THAT(session_->LastConfigureError(),
+              Optional(CaptureSession::ConfigureError::kPermissionDenied));
+}
+
+TEST_F(V4l2SessionTest, ListRejectsRgbProbeFailure) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _)).WillOnce(BuiltInCapability());
+  EXPECT_CALL(mock_, TryFormat(_, _)).WillOnce(Return(-1));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  EXPECT_THAT(session_->List(), IsEmpty());
+}
+
+TEST_F(V4l2SessionTest, OptionalTryFormatUnsupportedStillAllowsCapture) {
+  paths = {"/dev/video0"};
+  EXPECT_CALL(mock_, Open(_, _)).Times(2).WillRepeatedly(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(_, _))
+      .Times(2)
+      .WillRepeatedly(BuiltInCapability());
+  EXPECT_CALL(mock_, TryFormat(_, _))
+      .WillOnce([](int, v4l2_format*) {
+        failure = ENOTTY;
+        return -1;
+      })
+      .WillOnce([](int, v4l2_format*) {
+        failure = EINVAL;
+        return -1;
+      });
+  EXPECT_CALL(mock_, Close(kFd)).Times(2).WillRepeatedly(Return(0));
+  EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
+  EXPECT_THAT(session_->Configure(), Optional(std::string(kBuiltInBusInfo)));
+}
+
+TEST_F(V4l2SessionTest, ReportsOpenAndQueryFailures) {
+  paths = {"/dev/video4", "/dev/video5"};
+  EXPECT_CALL(mock_, Open(_, _)).WillOnce(Return(-1)).WillOnce(Return(kFd));
+  EXPECT_CALL(mock_, QueryCap(kFd, _)).WillOnce(Return(-1));
+  EXPECT_CALL(mock_, Close(kFd)).WillOnce(Return(0));
+  ::testing::internal::CaptureStderr();
+  EXPECT_THAT(session_->List(), IsEmpty());
+  const auto diagnostic = ::testing::internal::GetCapturedStderr();
+  EXPECT_THAT(diagnostic,
+              ::testing::HasSubstr("/dev/video4: open failed errno="));
+  EXPECT_THAT(diagnostic,
+              ::testing::HasSubstr("/dev/video5: QUERYCAP failed errno="));
 }
 
 TEST_F(V4l2SessionTest, ConfigureGivesNothingWhenNoNodeOpens) {
@@ -747,7 +1084,9 @@ INSTANTIATE_TEST_SUITE_P(
 
 // The link-time seam: libv4l2 and poll, forwarding to the mock.
 int v4l2_open(const char* file, int oflag, ...) {
-  return facepalm::v4l2->Open(file, oflag);
+  const int result = facepalm::v4l2->Open(file, oflag);
+  errno = facepalm::failure;
+  return result;
 }
 
 int v4l2_close(int fd) { return facepalm::v4l2->Close(fd); }
@@ -760,6 +1099,15 @@ int v4l2_ioctl(int fd, unsigned long int request, ...) {
   void* argument = va_arg(arguments, void*);
   va_end(arguments);
   switch (request) {
+    case VIDIOC_ENUM_FMT:
+      return facepalm::v4l2->EnumFormat(fd,
+                                        static_cast<v4l2_fmtdesc*>(argument));
+    case VIDIOC_TRY_FMT: {
+      const int result =
+          facepalm::v4l2->TryFormat(fd, static_cast<v4l2_format*>(argument));
+      errno = facepalm::failure;
+      return result;
+    }
     case VIDIOC_S_FMT:
       return facepalm::v4l2->SetFormat(fd, static_cast<v4l2_format*>(argument));
     case VIDIOC_S_PARM:
@@ -785,3 +1133,23 @@ int poll(pollfd* fds, nfds_t nfds, int timeout) {
   errno = facepalm::failure;
   return ready;
 }
+
+// Directory enumeration is a replaceable OS boundary in this solitary test.
+int glob(
+    const char* /*unused*/, int /*unused*/,
+    int (* /*unused*/)(const char*, int),
+    glob_t* __pglob) {  // NOLINT(bugprone-reserved-identifier) Matches glob.h.
+  if (facepalm::glob_result != 0) {
+    return facepalm::glob_result;
+  }
+  static std::vector<char*> entries;
+  entries.clear();
+  for (auto& path : facepalm::paths) {
+    entries.push_back(path.data());
+  }
+  entries.push_back(nullptr);
+  __pglob->gl_pathc = facepalm::paths.size();
+  __pglob->gl_pathv = entries.data();
+  return 0;
+}
+void globfree(glob_t* /*unused*/) {}

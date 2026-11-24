@@ -95,7 +95,9 @@ TEST(SystemdUnitTest, RunsTheDaemonWithConsentAndRestartsOnFailure) {
 
   EXPECT_THAT(unit, HasSubstr("[Service]\nExecStart=\"/opt/fp/bin/"
                               "facepalm-daemon\" \"--consent\" \"--model\" "
-                              "\"/m\"\nRestart=on-failure\n"));
+                              "\"/m\"\nRestart=on-failure\nRestartSec=5\n"));
+  EXPECT_THAT(unit,
+              HasSubstr("StartLimitIntervalSec=30\nStartLimitBurst=10\n"));
   EXPECT_THAT(unit, HasSubstr("[Install]\nWantedBy=default.target\n"));
   EXPECT_THAT(unit, Not(HasSubstr("--config")));
 }

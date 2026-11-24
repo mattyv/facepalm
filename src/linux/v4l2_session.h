@@ -19,8 +19,9 @@ namespace facepalm {
 // joins the thread before closing its descriptor or acknowledging retirement.
 //
 // `device_id` is the person's choice (item 10 of #61, #13): empty for the
-// default, which Configure resolves to the first built-in camera it finds
-// (CameraDevice::built_in), never an external one chosen silently. A
+// default, which Configure resolves to the first usable color capture node.
+// Linux does not reliably distinguish integrated USB cameras from external
+// ones; reported formats and names do not prove a camera’s optical spectrum. A
 // non-empty `device_id` is matched by List's own `id`, a v4l2_capability's
 // `bus_info`, which stays the same across a reboot, unlike the node number
 // (`/dev/videoN`) a camera happens to land on.
@@ -55,6 +56,8 @@ class V4l2Session final : public CaptureSession {
   Permission CurrentPermission() override;
   void RequestPermission(std::function<void(bool)> done) override;
   std::optional<std::string> Configure() override;
+  [[nodiscard]] std::optional<ConfigureError> LastConfigureError()
+      const override;
   FrameRates SupportedFrameRates() override;
   bool Start(int frames_per_second, std::uint64_t attempt) override;
   void Stop() override;
@@ -67,6 +70,7 @@ class V4l2Session final : public CaptureSession {
   std::function<void(const std::string&)> on_disconnected_;
   std::function<void(const std::string&)> on_connected_;
   HotplugMonitor& hotplug_;
+  std::optional<ConfigureError> configure_error_;
   int fd_ = -1;
   std::jthread capture_;
 };

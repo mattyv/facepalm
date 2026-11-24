@@ -129,7 +129,7 @@ void SessionCamera::OnDeviceConnected(std::string id) {
 void SessionCamera::Start(std::uint64_t attempt) {
   const std::optional<std::string> device = capture_.Configure();
   if (!device.has_value()) {
-    ReportOpenFailed(OpenFailure::kNoDevice);
+    ReportOpenFailed(OpenFailure::kNoDevice, capture_.LastConfigureError());
     return;
   }
   device_id_ = *device;
@@ -146,8 +146,9 @@ void SessionCamera::Report(void (CameraReports::*report)()) {
   control_([this, report] { (reports_.*report)(); });
 }
 
-void SessionCamera::ReportOpenFailed(OpenFailure reason) {
-  control_([this, reason] { reports_.OnOpenFailed(reason); });
+void SessionCamera::ReportOpenFailed(OpenFailure reason,
+                                     std::optional<ConfigureError> detail) {
+  control_([this, reason, detail] { reports_.OnOpenFailed(reason, detail); });
 }
 
 }  // namespace facepalm

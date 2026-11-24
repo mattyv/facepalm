@@ -6,6 +6,8 @@
 #include <QProcess>
 #include <QString>
 #include <QStringList>
+#include <optional>
+#include <string>
 
 #include "src/menu_state.h"
 
@@ -21,8 +23,16 @@ class ServiceHealthQuery {
 
   facepalm::ServiceHealth Read(const QString& program, const QStringList& args,
                                int timeout_ms) {
+    const auto output = ReadOutput(program, args, timeout_ms);
+    return output ? facepalm::ParseServiceHealth(*output)
+                  : facepalm::ServiceHealth::kUnavailable;
+  }
+
+  std::optional<std::string> ReadOutput(const QString& program,
+                                        const QStringList& args,
+                                        int timeout_ms) {
     if (Pending()) {
-      return facepalm::ServiceHealth::kUnavailable;
+      return std::nullopt;
     }
     auto* process = new QProcess(QCoreApplication::instance());
     pending_ = process;
@@ -36,14 +46,13 @@ class ServiceHealthQuery {
       } else {
         process->kill();
       }
-      return facepalm::ServiceHealth::kUnavailable;
+      return std::nullopt;
     }
     if (process->exitStatus() != QProcess::NormalExit ||
         process->exitCode() != 0) {
-      return facepalm::ServiceHealth::kUnavailable;
+      return std::nullopt;
     }
-    return facepalm::ParseServiceHealth(
-        process->readAllStandardOutput().toStdString());
+    return process->readAllStandardOutput().toStdString();
   }
 
  private:

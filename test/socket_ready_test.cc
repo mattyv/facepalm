@@ -3,7 +3,9 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <unistd.h>
 
+#include <array>
 #include <cerrno>
 #include <string>
 
@@ -14,6 +16,7 @@ namespace facepalm {
 namespace {
 
 using ::testing::_;
+using ::testing::InSequence;
 using ::testing::NiceMock;
 using ::testing::Return;
 
@@ -153,6 +156,70 @@ TEST_F(SocketReadyTest, SocketErrorClosesDescriptor) {
         return 0;
       });
   EXPECT_FALSE(SocketReady("socket", calls_));
+}
+
+TEST_F(SocketReadyTest, CapturesPeerPidBeforeClosingTheConnectedSocket) {
+  InSequence order;
+  EXPECT_CALL(mock_, Connect).WillOnce(Return(0));
+#ifdef __linux__
+  EXPECT_CALL(mock_, Option(7, SOL_SOCKET, SO_PEERCRED, _, _))
+      .WillOnce([](int, int, int, void* value, socklen_t* length) {
+        auto* credentials = static_cast<ucred*>(value);
+        credentials->pid = 123;
+        *length = sizeof(*credentials);
+        return 0;
+      });
+#elif defined(__APPLE__)
+  EXPECT_CALL(mock_, Option(7, SOL_LOCAL, LOCAL_PEERPID, _, _))
+      .WillOnce([](int, int, int, void* value, socklen_t* length) {
+        *static_cast<pid_t*>(value) = 123;
+        *length = sizeof(pid_t);
+        return 0;
+      });
+#endif
+  EXPECT_CALL(mock_, Close(7));
+  const auto result = ProbeSocketReady("socket", calls_);
+  EXPECT_TRUE(result.ready);
+  EXPECT_EQ(result.peer_pid, 123);
+}
+
+#if defined(__linux__) || defined(__APPLE__)
+TEST_F(SocketReadyTest, MalformedPeerCredentialsRemainUnknown) {
+  EXPECT_CALL(mock_, Connect).Times(3).WillRepeatedly(Return(0));
+  EXPECT_CALL(mock_, Close(7)).Times(3);
+  int call = 0;
+  EXPECT_CALL(mock_, Option)
+      .Times(3)
+      .WillRepeatedly([&call](int, int, int, void* value, socklen_t* length) {
+#ifdef __linux__
+        constexpr std::array<pid_t, 3> kPids = {123, 0, -1};
+        auto* credentials = static_cast<ucred*>(value);
+        credentials->pid = kPids.at(static_cast<std::size_t>(call));
+#else
+        constexpr std::array<pid_t, 3> kPids = {123, 0, -1};
+        auto* pid = static_cast<pid_t*>(value);
+        *pid = kPids.at(static_cast<std::size_t>(call));
+#endif
+        if (call == 0) {
+          *length = 1;
+        }
+        ++call;
+        return 0;
+      });
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    const auto result = ProbeSocketReady("socket", calls_);
+    EXPECT_TRUE(result.ready);
+    EXPECT_FALSE(result.peer_pid.has_value());
+  }
+}
+#endif
+
+TEST_F(SocketReadyTest, MissingPeerCredentialsDoNotNegateConnection) {
+  EXPECT_CALL(mock_, Connect).WillOnce(Return(0));
+  EXPECT_CALL(mock_, Option).WillOnce(Return(-1));
+  const auto result = ProbeSocketReady("socket", calls_);
+  EXPECT_TRUE(result.ready);
+  EXPECT_FALSE(result.peer_pid.has_value());
 }
 
 }  // namespace

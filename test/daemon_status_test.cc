@@ -4,17 +4,21 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
+#include <streambuf>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-
 // Each test stands for the specs/CameraStatus.tla action or property it is
 // named for.
 
@@ -96,6 +100,163 @@ TEST_F(PublishTest, FailsWhenThePathIsADirectory) {
   std::string error;
   EXPECT_FALSE(PublishCameraStatus(path_, true, error));
   EXPECT_THAT(error, Not(IsEmpty()));
+}
+
+void ExpectRetryHealth(const DaemonHealth& health) {
+  EXPECT_EQ(health.phase, ServicePhase::kRetrying);
+  EXPECT_EQ(health.reason, ServiceReason::kPermissionDenied);
+  EXPECT_EQ(health.detail, "open denied /dev/video0");
+  EXPECT_EQ(health.pid, ::getpid());
+  EXPECT_TRUE(health.alive);
+}
+
+TEST_F(DaemonStatusTest, HealthRoundTripsAndPreservesLegacyCameraStatus) {
+  std::string error;
+  ASSERT_TRUE(PublishDaemonHealth(path_, true, ServicePhase::kRetrying,
+                                  ServiceReason::kPermissionDenied,
+                                  "open denied\n/dev/video0", error));
+  EXPECT_TRUE(ReadCameraStatus(path_));
+  const auto health = ReadDaemonHealth(path_);
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
+  ExpectRetryHealth(health.value());
+}
+
+TEST_F(DaemonStatusTest, DeadFailedHealthRemainsAvailableAsHistorical) {
+  std::ofstream file(path_);
+  file << "off\n" << DeadPid() << "\nhealth-v1\n4\n5\nfailed\n";
+  file.close();
+  const auto health = ReadDaemonHealth(path_);
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
+  EXPECT_EQ(health.value().phase, ServicePhase::kFailed);
+  EXPECT_EQ(health.value().reason, ServiceReason::kStartFailed);
+  EXPECT_FALSE(health.value().alive);
+}
+
+TEST_F(DaemonStatusTest, HealthRejectsUnknownVersionAndMalformedRecords) {
+  for (const char* record :
+       {"off\n1\nhealth-v2\n0\n0\n\n", "off\n1\nhealth-v1\n99\n0\n\n",
+        "off\n1\nhealth-v1\n0\n7\n\n", "off\n1x\nhealth-v1\n0\n0\n\n",
+        "off\n1\nhealth-v1\n0\n0\n"}) {
+    std::ofstream file(path_);
+    file << record;
+    file.close();
+    EXPECT_FALSE(ReadDaemonHealth(path_).has_value()) << record;
+  }
+}
+
+TEST_F(DaemonStatusTest, HealthBoundsDetailsAndRejectsOversizedRecords) {
+  std::string error;
+  ASSERT_TRUE(PublishDaemonHealth(path_, false, ServicePhase::kFailed,
+                                  ServiceReason::kQueryFailed,
+                                  std::string(300, 'a'), error));
+  const auto health = ReadDaemonHealth(path_);
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
+  EXPECT_EQ(health.value().detail, std::string(256, 'a'));
+  std::ofstream file(path_);
+  file << "off\n1\nhealth-v1\n4\n3\n" << std::string(2000, 'a');
+  file.close();
+  EXPECT_FALSE(ReadDaemonHealth(path_).has_value());
+}
+
+TEST_F(DaemonStatusTest, HealthRejectsMalformedFieldsAndExtraData) {
+  const std::string prefix = "off\n1\nhealth-v1\n";
+  const std::vector<std::string> records = {
+      "sideways\n1\nhealth-v1\n0\n0\n\n",
+      prefix + "0\n0\n\nextra",
+      "off\n0\nhealth-v1\n0\n0\n\n",
+      "off\n999999999999\nhealth-v1\n0\n0\n\n",
+      "off\ninvalid\nhealth-v1\n0\n0\n\n",
+      prefix + "bad\n0\n\n",
+      prefix + "-1\n0\n\n",
+      prefix + "0\nbad\n\n",
+      prefix + "0\n-1\n\n",
+      prefix + "0\n0\n" + std::string(257, 'x') + "\n",
+      prefix + "0\n0\nunsafe\ttext\n"};
+  for (const auto& record : records) {
+    std::ofstream file(path_);
+    file << record;
+    file.close();
+    EXPECT_FALSE(ReadDaemonHealth(path_).has_value()) << record;
+  }
+}
+
+TEST_F(DaemonStatusTest, HealthRejectsInvalidPublishStates) {
+  std::string error;
+  EXPECT_FALSE(PublishDaemonHealth(path_, false, static_cast<ServicePhase>(99),
+                                   ServiceReason::kNone, "", error));
+  EXPECT_FALSE(PublishDaemonHealth(path_, false, ServicePhase::kIdle,
+                                   static_cast<ServiceReason>(99), "", error));
+  EXPECT_FALSE(error.empty());
+}
+
+TEST_F(DaemonStatusTest, LivePidAloneDoesNotAssertDaemonIdentity) {
+  std::ofstream file(path_);
+  file << "off\n1\nhealth-v1\n4\n5\nold failure\n";
+  file.close();
+  const auto health = ReadDaemonHealth(path_);
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
+  EXPECT_EQ(health.value().pid, 1);
+  EXPECT_TRUE(health.value().alive);
+  EXPECT_EQ(health.value().phase, ServicePhase::kFailed);
+}
+
+TEST_F(DaemonStatusTest, HealthMissingOrUnreadableRecordIsAbsent) {
+  EXPECT_FALSE(ReadDaemonHealth(path_).has_value());
+  ASSERT_EQ(::mkdir(path_.c_str(), 0700), 0);
+  EXPECT_FALSE(ReadDaemonHealth(path_).has_value());
+}
+
+// Simulates a stream that delivers a complete record and reports a read error.
+class BadReadBuffer : public std::streambuf {
+ public:
+  explicit BadReadBuffer(std::istream& stream) : stream_(stream) {}
+
+ protected:
+  std::streamsize xsgetn(char* destination, std::streamsize count) override {
+    constexpr std::string_view kRecord = "off\n1\nhealth-v1\n0\n0\n\n";
+    const auto size =
+        std::min(count, static_cast<std::streamsize>(kRecord.size()));
+    std::memcpy(destination, kRecord.data(), static_cast<std::size_t>(size));
+    stream_.setstate(std::ios::badbit);
+    return size;
+  }
+
+ private:
+  std::istream& stream_;
+};
+
+TEST_F(DaemonStatusTest, HealthRejectsAValidRecordWhenReadFails) {
+  std::istream stream(nullptr);
+  BadReadBuffer buffer(stream);
+  stream.rdbuf(&buffer);
+  EXPECT_FALSE(ReadDaemonHealth(stream).has_value());
+}
+
+TEST_F(DaemonStatusTest, HealthSanitizesNonPrintableBytes) {
+  std::string error;
+  ASSERT_TRUE(PublishDaemonHealth(path_, false, ServicePhase::kIdle,
+                                  ServiceReason::kNone,
+                                  std::string("x\x01\xff", 3), error));
+  const auto health = ReadDaemonHealth(path_);
+  if (!health.has_value()) {
+    FAIL() << "Expected health to be present";
+  }
+  EXPECT_EQ(health.value().detail, "x  ");
+}
+
+TEST_F(DaemonStatusTest, CameraStatusRejectsPidOutsideOperatingSystemRange) {
+  std::ofstream file(path_);
+  file << "on\n999999999999\n";
+  file.close();
+  EXPECT_FALSE(ReadCameraStatus(path_));
 }
 
 using ReadTest = DaemonStatusTest;

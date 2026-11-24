@@ -176,12 +176,15 @@ std::string SystemdUnit(const ServiceProgram& program) {
   return "[Unit]\n"
          "Description=Facepalm perception service\n"
          "Documentation=https://github.com/mattyv/facepalm\n"
+         "StartLimitIntervalSec=30\n"
+         "StartLimitBurst=10\n"
          "\n"
          "[Service]\n"
          "ExecStart=" +
          command +
          "\n"
          "Restart=on-failure\n"
+         "RestartSec=5\n"
          "\n"
          "[Install]\n"
          "WantedBy=default.target\n";

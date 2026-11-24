@@ -19,21 +19,10 @@
 (* between the control queue's three sources is left free, which allows    *)
 (* more interleavings than the code has.                                   *)
 (*                                                                         *)
-(* Item 10 of #61 (#52) splits "the open failed" into two reports: no      *)
-(* device to use (the existing "openFailed", unchanged: GuardOpenFailStops *)
-(* still decides whether that stops the daemon) and everything else Start  *)
-(* can fail at, such as a denied permission or a configuration race (the   *)
-(* new "openBlocked"), which never stops the daemon and instead retries,   *)
-(* fairly, through the new Retry action. `canStart` stands for whatever    *)
-(* Start needs that the device and the controller's own state are not     *)
-(* (specs/CameraLifecycle.tla's `permitted /\ startWorks`): while it is    *)
-(* false, an open attempt can only come back blocked, never succeed, so    *)
-(* `Wanted` folds it in the way CameraLifecycle.tla's own `Wanted` does,   *)
-(* and `JoinOpens` moves to that spec's `[](<>[]P => <>Q)` shape to say    *)
-(* so: the plain "~>" it had before cannot express a cause that the        *)
-(* controller itself can clear (`ctl.blocked`, by Retry) the way it could  *)
-(* for one only a device reconnecting clears. `ctl.blocked` itself stands  *)
-(* for the CameraController's own blocked_.                                *)
+(* All open failures keep the daemon alive and enter its retry path (#195). *)
+(* canStart includes the device and the other start requirements; once it  *)
+(* remains true, a wanted camera eventually opens under the fairness below. *)
+(* GuardNoDeviceRecovers mutates the previous process-exit behavior.         *)
 (*                                                                         *)
 (* Each Guard constant is one of the design's protections. A mutation sets *)
 (* one to FALSE in a copy of the config, and TLC must then find a          *)
@@ -54,7 +43,7 @@ CONSTANTS
     GuardAckAfterRetire,  \* A closed camera counts as closed once retired.
     GuardDeferDeviceBack, \* A device coming back waits for the retirement.
     GuardOpenOnce,        \* Only the opening camera's Opened creates a model.
-    GuardOpenFailStops,   \* A camera with no device to use stops the daemon.
+    GuardNoDeviceRecovers,   \* No-device failure is retried in-process.
     GuardFailureReported,  \* Exit reports the stored reason.
     GuardFailureReason,    \* The first failure survives until exit.
     GuardRetries          \* A denied permission or a failed start is retried.
@@ -202,22 +191,18 @@ Subscription ==
 -----------------------------------------------------------------------------
 (* The camera session and the OS.                                          *)
 
-\* The session queue's next task. While Start has whatever else it needs
-\* (canStart), opening succeeds, or still finds no device to use, the same
-\* free choice as before; without it, opening always comes back blocked
-\* (#52), never succeeding and never that specific failure, since the
-\* device was never the cause.
+\* A working environment opens; otherwise it may report no device or
+\* another start failure. Environment recovery is represented by canStart.
 SessionTask ==
     /\ ~dc.exited /\ sq # <<>>
     /\ sq' = Tail(sq)
     /\ IF Head(sq) = "open"
           THEN IF canStart
-                  THEN \/ running' = TRUE
-                          /\ reports' = Append(reports, "opened")
-                       \/ running' = running
+                  THEN running' = TRUE /\ reports' = Append(reports, "opened")
+                  ELSE \/ running' = running
                           /\ reports' = Append(reports, "openFailed")
-                  ELSE running' = running
-                       /\ reports' = Append(reports, "openBlocked")
+                       \/ running' = running
+                          /\ reports' = Append(reports, "openBlocked")
           ELSE running' = FALSE /\ reports' = Append(reports, "closed")
     /\ UNCHANGED <<sessions, subq, ctl, iq, model, dones, dc, canStart>>
 
@@ -254,20 +239,17 @@ OnOpened ==
                 THEN Append(iq, [op |-> "create", ack |-> FALSE]) ELSE iq
     /\ UNCHANGED <<sq, dc, sessions>>
 
-\* DaemonControl::OnOpenFailed, for OpenFailure::kNoDevice: a camera that
-\* was opening is closed and its device unusable, and the daemon stops, as
-\* a failure.
+\* A no-device failure blocks for an in-process retry (#195).
 OnOpenFailed ==
     IF ctl.cam = "opening"
-       THEN LET c == [ctl EXCEPT !.cam = "closed", !.device = FALSE]
-            IN IF GuardOpenFailStops
-                  THEN LET d == [dc EXCEPT !.reason = IF @ = "none" \/ ~GuardFailureReason
-                                                     THEN "camera" ELSE @,
-                                     !.first = IF @ = "none" THEN "camera" ELSE @]
-                           s == StopFrom(c, sq, d, iq)
-                       IN /\ ctl' = s.c /\ sq' = s.q /\ dc' = s.d
-                          /\ iq' = s.i /\ sessions' = {}
-                  ELSE ctl' = c /\ UNCHANGED <<sq, dc, iq, sessions>>
+       THEN IF GuardNoDeviceRecovers
+               THEN ctl' = [ctl EXCEPT !.cam = "closed", !.blocked = TRUE]
+                    /\ UNCHANGED <<sq, dc, iq, sessions>>
+               ELSE LET c == [ctl EXCEPT !.cam = "closed", !.device = FALSE]
+                        d == [dc EXCEPT !.reason = "camera", !.first = "camera"]
+                        s == StopFrom(c, sq, d, iq)
+                    IN /\ ctl' = s.c /\ sq' = s.q /\ dc' = s.d
+                       /\ iq' = s.i /\ sessions' = {}
        ELSE UNCHANGED <<ctl, sq, dc, iq, sessions>>
 
 \* DaemonControl::OnOpenFailed, for OpenFailure::kPermissionDenied or
@@ -295,8 +277,8 @@ OnClosed ==
 \* its model retired.
 OnDeviceLost ==
     LET c == [ctl EXCEPT !.device = FALSE,
-                         !.cam = IF ctl.cam = "open" THEN "closed" ELSE @]
-        t == IF c.cam = "closed" THEN Retire(dc, iq, FALSE)
+                         !.cam = IF ctl.cam = "open" THEN "closing" ELSE @]
+        t == IF ctl.cam = "open" THEN Retire(dc, iq, TRUE)
                                  ELSE [d |-> dc, i |-> iq]
     IN /\ ctl' = c /\ dc' = t.d /\ iq' = t.i /\ UNCHANGED <<sq, sessions>>
 
@@ -333,8 +315,9 @@ Report ==
 \* Guarded by ~dc.exited for the same reason every other action is: once
 \* the daemon has exited, nothing need happen.
 Retry ==
-    /\ ~dc.exited /\ GuardRetries /\ ctl.blocked
-    /\ LET r == OpenIf([ctl EXCEPT !.blocked = FALSE], sq)
+    /\ ~dc.exited /\ GuardRetries /\ ctl.cam = "closed"
+    /\ ctl.consent /\ ctl.sub /\ (ctl.blocked \/ ~ctl.device)
+    /\ LET r == OpenIf([ctl EXCEPT !.blocked = FALSE, !.device = TRUE], sq)
        IN ctl' = r.c /\ sq' = r.q
     /\ UNCHANGED <<sessions, subq, running, reports, iq, model, dones, dc,
                    canStart>>
@@ -382,6 +365,8 @@ Spec ==
     /\ Init /\ [][Next]_vars
     /\ WF_vars(Subscription) /\ WF_vars(SessionTask) /\ WF_vars(Report)
     /\ WF_vars(InferenceTask) /\ WF_vars(Retired) /\ WF_vars(Retry)
+
+NoDeviceDoesNotStop == dc.reason # "camera"
 
 TypeOK ==
     /\ sessions \subseteq Clients
@@ -439,7 +424,7 @@ LastLeaveCloses ==
 
 \* The camera is wanted, and nothing but a device coming back or a retry
 \* stands in the way.
-Wanted == sessions # {} /\ ~dc.stopping /\ ctl.device /\ canStart
+Wanted == sessions # {} /\ ~dc.stopping /\ canStart
 
 \* Liveness, and something must happen: from every point, a connected
 \* client, the device and whatever else Start needs, all held, lead to the

@@ -155,3 +155,143 @@ TEST(DecideMenuStateTest, ReachableSocketWinsOverStaleFailure) {
 }
 }  // namespace
 }  // namespace facepalm
+
+namespace facepalm {
+namespace {
+TEST(CameraHealthTest, VerifiedRetryKeepsPreviewAndNamesReason) {
+  const DaemonHealth health{.phase = ServicePhase::kRetrying,
+                            .reason = ServiceReason::kPermissionDenied,
+                            .detail = "",
+                            .pid = 42,
+                            .alive = true};
+  const auto view = DescribeCameraHealth(health, true);
+  EXPECT_EQ(view.title, "Camera retrying: permission denied");
+  EXPECT_TRUE(view.keep_preview);
+}
+TEST(CameraHealthTest, UnverifiedFailureIsHistoricalAndNeverCurrent) {
+  const DaemonHealth health{.phase = ServicePhase::kFailed,
+                            .reason = ServiceReason::kNoCandidate,
+                            .detail = "",
+                            .pid = 42,
+                            .alive = false};
+  const auto view = DescribeCameraHealth(health, false);
+  EXPECT_EQ(view.title, "Last camera failure: no camera available");
+  EXPECT_FALSE(view.keep_preview);
+}
+TEST(CameraHealthTest, CurrentPhasesAreDistinctAndRecoveryClearsReason) {
+  DaemonHealth health{.phase = ServicePhase::kOpening,
+                      .reason = ServiceReason::kNone,
+                      .detail = "",
+                      .pid = 42,
+                      .alive = true};
+  EXPECT_EQ(DescribeCameraHealth(health, true).title, "Camera opening");
+  health.phase = ServicePhase::kIdle;
+  EXPECT_EQ(DescribeCameraHealth(health, true).title, "Camera idle");
+  health.phase = ServicePhase::kActive;
+  health.reason = ServiceReason::kPermissionDenied;
+  EXPECT_EQ(DescribeCameraHealth(health, true).title, "Camera on");
+  EXPECT_TRUE(DescribeCameraHealth(health, true).verified);
+  EXPECT_FALSE(DescribeCameraHealth(health, false).verified);
+}
+TEST(CameraHealthTest, OfflineManagerProvesOnlyFailedSnapshot) {
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "failed", ServicePhase::kIdle));
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "failed", ServicePhase::kRetrying));
+  EXPECT_TRUE(HealthMatchesManager(42, 42, "failed", ServicePhase::kFailed));
+}
+TEST(CameraHealthTest, ManagerPidMustMatchTheSnapshot) {
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "active", ServicePhase::kFailed));
+  EXPECT_FALSE(
+      HealthMatchesManager(42, 42, "activating", ServicePhase::kFailed));
+  EXPECT_TRUE(HealthMatchesManager(42, 42, "failed", ServicePhase::kFailed));
+  EXPECT_FALSE(HealthMatchesManager(42, 43, "active", ServicePhase::kFailed));
+  EXPECT_FALSE(HealthMatchesManager(42, 0, "failed", ServicePhase::kFailed));
+  EXPECT_FALSE(HealthMatchesManager(42, 42, "inactive", ServicePhase::kFailed));
+}
+}  // namespace
+}  // namespace facepalm
+
+namespace facepalm {
+namespace {
+TEST(CameraHealthTest, ParsesOnlyCompleteManagerIdentitySnapshots) {
+  const auto manager =
+      ParseManagerSnapshot("ExecMainPID=42\nActiveState=active\n");
+  if (!manager.has_value()) {
+    FAIL() << "Expected manager to be present";
+  }
+  EXPECT_EQ(manager.value().pid, 42);
+  EXPECT_EQ(manager.value().state, "active");
+  EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=42\n"));
+  EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=42x\nActiveState=active\n"));
+  EXPECT_FALSE(ParseManagerSnapshot(
+      "ExecMainPID=42\nExecMainPID=43\nActiveState=active\n"));
+  EXPECT_FALSE(
+      ParseManagerSnapshot("ExecMainPID=42\nActiveState=active\nextra\n"));
+}
+}  // namespace
+}  // namespace facepalm
+
+namespace facepalm {
+namespace {
+TEST(CameraHealthTest, FailureReasonsHaveUsefulUserMessages) {
+  DaemonHealth health{.phase = ServicePhase::kFailed,
+                      .reason = ServiceReason::kNone,
+                      .detail = "",
+                      .pid = 42,
+                      .alive = false};
+  for (const auto& [reason, expected] :
+       {std::pair{ServiceReason::kNone,
+                  "Camera service failed: unknown reason"},
+        std::pair{ServiceReason::kQueryFailed,
+                  "Camera service failed: camera query failed"},
+        std::pair{ServiceReason::kUnsupported,
+                  "Camera service failed: camera unsupported"},
+        std::pair{ServiceReason::kStartFailed,
+                  "Camera service failed: camera could not start"},
+        std::pair{ServiceReason::kModelFailure,
+                  "Camera service failed: face model failed"},
+        std::pair{static_cast<ServiceReason>(255),
+                  "Camera service failed: unknown reason"}}) {
+    health.reason = reason;
+    EXPECT_EQ(DescribeCameraHealth(health, true).title, expected);
+  }
+  health.phase = static_cast<ServicePhase>(255);
+  EXPECT_TRUE(DescribeCameraHealth(health, true).title.empty());
+}
+TEST(CameraHealthTest, UnverifiedNonFailureCannotInventCurrentStatus) {
+  DaemonHealth health{.phase = ServicePhase::kIdle,
+                      .reason = ServiceReason::kNone,
+                      .detail = "",
+                      .pid = 42,
+                      .alive = true};
+  EXPECT_TRUE(DescribeCameraHealth(health, false).title.empty());
+  health.reason = ServiceReason::kPermissionDenied;
+  EXPECT_TRUE(DescribeCameraHealth(health, false).title.empty());
+  health.phase = ServicePhase::kRetrying;
+  EXPECT_EQ(DescribeCameraHealth(health, false).title,
+            "Last camera failure: permission denied");
+  EXPECT_FALSE(HealthMatchesManager(0, 0, "active", ServicePhase::kFailed));
+}
+TEST(CameraHealthTest, RejectsMalformedAndIncompleteManagerOutput) {
+  EXPECT_FALSE(ParseManagerSnapshot("ActiveState=active\n"));
+  EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=42\nActiveState=\n"));
+  EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=xyz\nActiveState=active\n"));
+  EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=-1\nActiveState=active\n"));
+  EXPECT_FALSE(ParseManagerSnapshot("ExecMainPID=42\nActiveState=active"));
+  EXPECT_FALSE(ParseManagerSnapshot(
+      "ExecMainPID=42\nActiveState=active\nActiveState=failed\n"));
+}
+TEST(CameraHealthTest, MenuUsesVerifiedOrHistoricalCameraStatus) {
+  EXPECT_EQ(DecideMenuState({.service_on = true,
+                             .service_ready = false,
+                             .camera_status_override =
+                                 "Last camera failure: permission denied"})
+                .camera_status_title,
+            "Last camera failure: permission denied");
+  EXPECT_EQ(DecideMenuState({.service_on = true,
+                             .service_ready = true,
+                             .camera_status_override = "Camera opening"})
+                .camera_status_title,
+            "Camera opening");
+}
+}  // namespace
+}  // namespace facepalm

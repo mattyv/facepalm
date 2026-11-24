@@ -4,6 +4,10 @@ The Ubuntu 26.04.1 LTS x86-64 package includes the camera daemon and its
 MediaPipe runtime. The face landmarker model is downloaded separately after
 installation; it is not bundled in the package.
 
+For an upgrade, turn Facepalm off and quit the old tray first. Launch the
+new tray and turn it on after installation; this also regenerates the user
+service unit with its current restart settings.
+
 Download the `.deb` and `SHA256SUMS` from the same release into one folder.
 Verify the download, then install the package (replace the filename with the
 actual `.deb` name):
