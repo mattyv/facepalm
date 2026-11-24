@@ -31,7 +31,6 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -40,12 +39,16 @@
 #include <utility>
 #include <vector>
 
+#include "src/calibrate_client_token.h"
 #include "src/cameras_listing.h"
 #include "src/client_approvals.h"
 #include "src/client_token.h"
 #include "src/daemon_status.h"
+#include "src/menu_field_format.h"
 #include "src/menu_state.h"
+#include "src/settings_config_path.h"
 #include "src/settings_document.h"
+#include "src/settings_save_guard.h"
 #include "src/single_instance.h"
 #include "src/user_paths.h"
 #include "src/user_service.h"
@@ -173,24 +176,24 @@ class QtSingleInstanceIo : public facepalm::SingleInstanceIo {
   QString socket_path_;
 };
 
+// facepalm.conf's own path (src/settings_config_path.h, #64).
 QString ConfigPath() {
   const QString config = qEnvironmentVariable("XDG_CONFIG_HOME");
-  return QDir(config.isEmpty() ? QDir::homePath() + "/.config" : config)
-      .filePath(QStringLiteral("facepalm/facepalm.conf"));
+  return QString::fromStdString(facepalm::SettingsConfigPath(
+      config.toStdString(), QDir::homePath().toStdString()));
 }
 
-// A plain comparable value, not a class with an invariant to protect.
+// A plain value, not a class with an invariant to protect.
 struct ConfigSnapshot {
   // NOLINTNEXTLINE(misc-non-private-member-variables-in-classes)
   QByteArray bytes;
   // NOLINTNEXTLINE(misc-non-private-member-variables-in-classes)
   bool missing = false;
-
-  bool operator==(const ConfigSnapshot&) const = default;
 };
 
 std::optional<ConfigSnapshot> ReadConfig(const QString& path, QString& error) {
-  constexpr qint64 kMaxConfigBytes = qint64{1024} * 1024;
+  constexpr qint64 kMaxConfigBytes =
+      static_cast<qint64>(facepalm::kMaxSettingsFileBytes);
   const QFileInfo info(path);
   if (!info.exists() && !info.isSymLink()) {
     return ConfigSnapshot{.bytes = {}, .missing = true};
@@ -211,8 +214,8 @@ std::optional<ConfigSnapshot> ReadConfig(const QString& path, QString& error) {
   }
   QStringDecoder decoder(QStringDecoder::Utf8, QStringDecoder::Flag::Stateless);
   const QString decoded = decoder(bytes);
-  if (bytes.size() > kMaxConfigBytes || decoded.contains(QChar::Null) ||
-      decoder.hasError()) {
+  if (facepalm::SettingsFileTooLarge(static_cast<std::size_t>(bytes.size())) ||
+      decoded.contains(QChar::Null) || decoder.hasError()) {
     error =
         QStringLiteral("The settings file must be UTF-8 and at most 1 MiB.");
     return std::nullopt;
@@ -283,16 +286,15 @@ void OpenCalibration(facepalm_menu::CalibrationWindow& calibration,
       paths->clients,
       [](const std::string& path) { return facepalm::LoadClientToken(path); },
       *approvals_io);
-  std::string error;
-  const std::optional<std::string> token_path =
-      approvals.Approve("calibrate", error);
-  if (!token_path) {
+  const facepalm::CalibrateClientToken result = facepalm::ResolveCalibrateToken(
+      approvals,
+      [](const std::string& path) { return facepalm::LoadClientToken(path); });
+  if (!result.token) {
     QMessageBox::warning(parent, QStringLiteral("Calibration could not start"),
-                         QString::fromStdString(error));
+                         QString::fromStdString(result.error));
     return;
   }
-  calibration.Open(
-      facepalm::LoadClientToken(*token_path).value_or(std::string()));
+  calibration.Open(*result.token);
 }
 
 bool ServiceIsOn() {
@@ -349,12 +351,10 @@ std::vector<facepalm::CamerasListingEntry> ListCameras() {
       text.constData(), static_cast<std::size_t>(text.size())));
 }
 
+// facepalm::FormatFloat (src/menu_field_format.h, #64), wrapped for a
+// Settings field.
 QString Number(float value) {
-  constexpr std::size_t kBufferSize = 64;
-  std::array<char, kBufferSize> buffer{};
-  const auto result =
-      std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-  return QString::fromLatin1(buffer.data(), result.ptr - buffer.data());
+  return QString::fromStdString(facepalm::FormatFloat(value));
 }
 
 class SettingsDialog : public QDialog {
@@ -638,7 +638,12 @@ class SettingsDialog : public QDialog {
       ShowError(read_error);
       return;
     }
-    if (*current != *snapshot_) {
+    if (!facepalm::SettingsFileUnchanged(
+            std::string_view(snapshot_->bytes.constData(),
+                             snapshot_->bytes.size()),
+            snapshot_->missing,
+            std::string_view(current->bytes.constData(), current->bytes.size()),
+            current->missing)) {
       ShowError(
           QStringLiteral("The settings file changed. Reopen Facepalm Settings "
                          "and try again."));
