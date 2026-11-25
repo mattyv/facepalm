@@ -1501,8 +1501,9 @@ A connection either processes one complete valid request, rejects invalid
 input, or closes after a bounded read deadline. The finite model has a
 single connection and two abstract timer ticks; weak fairness assumes the
 Qt event loop eventually delivers the timer. It does not model scheduling
-latency, byte transport, window visibility, or process termination. TLC checks 7 distinct states. Removing the deadline violates
-`ReadSettles`; removing the one-shot guard violates `AtMostOnce`. The real Qt IPC test exercises
+latency, byte transport, window visibility, or process termination. TLC checks
+7 distinct states. Removing the deadline violates `ReadSettles`; removing the
+one-shot guard violates `AtMostOnce`. The real Qt IPC test exercises
 fragmentation, invalid input, and a stalled partial request separately.
 
 ## `Calibration`: an optional calibration session

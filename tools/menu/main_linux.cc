@@ -33,6 +33,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -146,6 +147,7 @@ QString MenuSocketPath() {
 
 constexpr auto kSettingsRequest = "settings";
 constexpr auto kSettingsAck = "ok";
+constexpr qint64 kRequestBytes = sizeof("settings") - 1;
 
 // The real primitives behind src/single_instance.h: QLockFile::tryLock()
 // is the one atomic call TryLockAtomic needs (specs/SingleInstance.tla),
@@ -173,14 +175,16 @@ class QtSingleInstanceIo : public facepalm::SingleInstanceIo {
     }
     QElapsedTimer timer;
     timer.start();
-    if (socket.write(kSettingsRequest) != 8 ||
+    if (socket.write(kSettingsRequest) != kRequestBytes ||
         !socket.waitForBytesWritten(kRequestTimeoutMs)) {
       return false;
     }
     QByteArray ack;
     while (ack.size() < 2) {
       ack += socket.read(2 - ack.size());
-      if (ack.size() == 2) break;
+      if (ack.size() == 2) {
+        break;
+      }
       const auto remaining = kRequestTimeoutMs - timer.elapsed();
       if (remaining <= 0 ||
           !socket.waitForReadyRead(static_cast<int>(remaining))) {
@@ -194,6 +198,53 @@ class QtSingleInstanceIo : public facepalm::SingleInstanceIo {
   QLockFile lock_;
   QString socket_path_;
 };
+
+// Each accepted socket owns its read deadline and is processed at most once.
+void HandleSettingsSocket(QLocalSocket* client,
+                          const std::function<void()>& show_window) {
+  constexpr int kReadDeadlineMs = 1000;
+  client->setReadBufferSize(kRequestBytes);
+  // Register cleanup before reading: buffered invalid data may close
+  // the connection synchronously during the first read.
+  QObject::connect(client, &QLocalSocket::disconnected, client,
+                   &QObject::deleteLater);
+  auto* deadline = new QTimer(client);
+  deadline->setSingleShot(true);
+  const auto terminal = std::make_shared<bool>(false);
+  const auto finish = [deadline, terminal] {
+    if (*terminal) {
+      return false;
+    }
+    *terminal = true;
+    deadline->stop();
+    return true;
+  };
+  QObject::connect(deadline, &QTimer::timeout, client, [client, finish] {
+    if (finish()) {
+      client->disconnectFromServer();
+    }
+  });
+  const auto request = std::make_shared<QByteArray>();
+  const auto read_request = [client, show_window, request, finish, terminal] {
+    if (*terminal) {
+      return;
+    }
+    *request += client->read(kRequestBytes - request->size());
+    if (!QByteArray(kSettingsRequest).startsWith(*request)) {
+      if (finish()) {
+        client->disconnectFromServer();
+      }
+    } else if (request->size() == kRequestBytes && finish()) {
+      show_window();
+      client->write(kSettingsAck);
+      client->disconnectFromServer();
+    }
+  };
+  QObject::connect(client, &QLocalSocket::readyRead, client, read_request);
+  deadline->start(kReadDeadlineMs);
+  // Data may already be buffered before the handler was connected.
+  read_request();
+}
 
 // facepalm.conf's own path (src/settings_config_path.h, #64).
 QString ConfigPath() {
@@ -989,7 +1040,9 @@ int main(int argc, char* argv[]) {
   QtSingleInstanceIo single_instance(lock_path, instance_socket);
   const auto role =
       facepalm::ClaimSingleInstance(parser.isSet(settings), single_instance);
-  if (role == facepalm::SingleInstanceRole::kForwarded) return 0;
+  if (role == facepalm::SingleInstanceRole::kForwarded) {
+    return 0;
+  }
   if (role == facepalm::SingleInstanceRole::kHandoffFailed) {
     std::fputs(
         "facepalm-menu: settings request was not acknowledged by the running "
@@ -1135,44 +1188,7 @@ int main(int argc, char* argv[]) {
       &tray_server, &QLocalServer::newConnection, &window,
       [&tray_server, show_window] {
         while (QLocalSocket* client = tray_server.nextPendingConnection()) {
-          constexpr int kReadDeadlineMs = 1000;
-          constexpr qint64 kRequestBytes = 8;
-          client->setReadBufferSize(kRequestBytes);
-          // Register cleanup before reading: buffered invalid data may close
-          // the connection synchronously during the first read.
-          QObject::connect(client, &QLocalSocket::disconnected, client,
-                           &QObject::deleteLater);
-          auto* deadline = new QTimer(client);
-          deadline->setSingleShot(true);
-          const auto terminal = std::make_shared<bool>(false);
-          const auto finish = [deadline, terminal] {
-            if (*terminal) return false;
-            *terminal = true;
-            deadline->stop();
-            return true;
-          };
-          QObject::connect(deadline, &QTimer::timeout, client,
-                           [client, finish] {
-                             if (finish()) client->disconnectFromServer();
-                           });
-          const auto request = std::make_shared<QByteArray>();
-          const auto read_request = [client, show_window, request, finish,
-                                     terminal] {
-            if (*terminal) return;
-            *request += client->read(kRequestBytes - request->size());
-            if (!QByteArray(kSettingsRequest).startsWith(*request)) {
-              if (finish()) client->disconnectFromServer();
-            } else if (request->size() == kRequestBytes && finish()) {
-              show_window();
-              client->write(kSettingsAck);
-              client->disconnectFromServer();
-            }
-          };
-          QObject::connect(client, &QLocalSocket::readyRead, client,
-                           read_request);
-          deadline->start(kReadDeadlineMs);
-          // Data may already be buffered before the handler was connected.
-          read_request();
+          HandleSettingsSocket(client, show_window);
         }
       });
 

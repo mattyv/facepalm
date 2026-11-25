@@ -164,6 +164,8 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
   app.setProcessChannelMode(QProcess::ForwardedChannels);
   auto environment = QProcessEnvironment::systemEnvironment();
   environment.insert("FACEPALM_SOCKET", socket);
+  environment.insert("FACEPALM_MENU_LOCK", runtime.filePath("menu.lock"));
+  environment.insert("FACEPALM_MENU_SOCKET", runtime.filePath("menu.sock"));
   app.setProcessEnvironment(environment);
   app.start(executable);
   if (!app.waitForStarted(kTimeoutMs) ||
@@ -501,6 +503,9 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
   app.setProcessChannelMode(QProcess::ForwardedChannels);
   auto environment = QProcessEnvironment::systemEnvironment();
   environment.insert("XDG_CONFIG_HOME", config_home.path());
+  environment.insert("FACEPALM_MENU_LOCK", config_home.filePath("menu.lock"));
+  environment.insert("FACEPALM_MENU_SOCKET", config_home.filePath("menu.sock"));
+  environment.insert("FACEPALM_SOCKET", config_home.filePath("service.sock"));
   app.setProcessEnvironment(environment);
   app.start(executable);
   if (!app.waitForStarted(kTimeoutMs)) return false;
