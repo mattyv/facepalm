@@ -491,7 +491,7 @@ Download `facepalm-debian13-amd64` from the Facepalm CI run, extract its
 `.deb`, and install the file with `apt`.
 
 ```shell
-sudo apt install ./facepalm_0.1.3_amd64.deb
+sudo apt install ./facepalm_0.1.4_amd64.deb
 ```
 
 For a local Debian 13 build, install `qt6-base-dev`, `qt6-wayland`, and

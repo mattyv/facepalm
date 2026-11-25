@@ -1,5 +1,13 @@
 # Decisions
 
+## 2026-11-25: Version the combined robustness build as 0.1.4 (#203, #204)
+
+Use 0.1.4 to distinguish the corrected calibration and settings handoff from
+the already shared 0.1.3 development package. Keep the package, tray header
+and macOS bundle version in sync. This version identifies the new installer;
+it does not turn unverified hardware or compositor behavior into a passed
+check. The model remains a separate explicit download.
+
 ## 2026-11-25: Request fullscreen target screens on Wayland (#203)
 
 For point steps, request a fullscreen wizard on the named output under Wayland;
