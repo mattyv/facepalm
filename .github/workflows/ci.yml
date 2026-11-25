@@ -196,8 +196,8 @@ jobs:
         run: |
           cmake -S . -B build-debian -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DFACEPALM_LINUX_TRAY=ON
-          cmake --build build-debian --target facepalm_menu gesture_replay_cli calibrate_cli_tool linux_tray_integration service_health_linux_checks
-          ctest --test-dir build-debian -R '^(linux_tray_integration|service_health_linux_checks)$' --output-on-failure --no-tests=error
+          cmake --build build-debian --target facepalm_menu gesture_replay_cli calibrate_cli_tool linux_tray_integration calibration_window_linux_integration service_health_linux_checks
+          ctest --test-dir build-debian -R '^(linux_tray_integration|calibration_window_linux_integration|service_health_linux_checks)$' --output-on-failure --no-tests=error
       - name: Build Debian package
         run: cpack --config build-debian/CPackConfig.cmake -B build-debian/package
       - uses: actions/upload-artifact@v7
@@ -390,8 +390,8 @@ jobs:
             -DFACEPALM_MEDIAPIPE_C_INCLUDE="$PWD/build-mediapipe-c/include" \
             -DFACEPALM_MEDIAPIPE_C_LIBRARY="$PWD/build-mediapipe-c/lib/libmediapipe.so" \
             -DFACEPALM_MEDIAPIPE_LICENSE="${RUNNER_TEMP}/MEDIAPIPE-LICENSE"
-          cmake --build build-ubuntu --target facepalm_menu facepalm_daemon gesture_replay_cli calibrate_cli_tool linux_tray_integration
-          ctest --test-dir build-ubuntu -R '^linux_tray_integration$' --output-on-failure --no-tests=error
+          cmake --build build-ubuntu --target facepalm_menu facepalm_daemon gesture_replay_cli calibrate_cli_tool linux_tray_integration calibration_window_linux_integration
+          ctest --test-dir build-ubuntu -R '^(linux_tray_integration|calibration_window_linux_integration)$' --output-on-failure --no-tests=error
           cpack --config build-ubuntu/CPackConfig.cmake -B build-ubuntu/package
       - name: Record checksum
         run: cd build-ubuntu/package && sha256sum *.deb > SHA256SUMS

@@ -217,7 +217,7 @@ CalibrationSession::Status CalibrationSession::AdvanceOrRefuse() {
             settings_.min_spread_degrees) {
       ResetStep();
       Status status = CurrentStatus();
-      status.refusal = "look further toward that corner, away from the centre";
+      status.refusal = "the corner reading was too close to the centre reading";
       return status;
     }
     points_[screen].points[point] = gaze;

@@ -10,6 +10,7 @@
 #include <QScreen>
 #include <QString>
 #include <QVBoxLayout>
+#include <QWindow>
 #include <cmath>
 #include <memory>
 #include <optional>
@@ -18,6 +19,7 @@
 #include <utility>
 
 #include "src/calibration.h"
+#include "src/menu_field_format.h"
 #include "src/screen_label.h"
 
 namespace facepalm_menu {
@@ -41,9 +43,10 @@ QString IntroText() {
 // #137's fixate-and-turn step.
 QString GainsStepText() {
   return QStringLiteral(
-      "Look at the dot the way you normally would and slowly turn your "
-      "head left, then right, keeping your eyes on it the whole time. "
-      "Then click Next.");
+             "Look at the dot the way you normally would and slowly turn your "
+             "head left, then right, keeping your eyes on it the whole time. "
+             "Then %1")
+      .arg(QString::fromStdString(facepalm::CalibrationAction()));
 }
 
 // Every screen Qt reports, primary first then the rest in
@@ -109,19 +112,6 @@ QString ResultText(int screens) {
       .arg(screens == 1 ? QStringLiteral("") : QStringLiteral("s"));
 }
 
-// The daemon's own hint on a refused step (#177), sentence-cased, with the
-// retry it still invites: "Look further toward that corner, away from the
-// centre. Click Next to try again." Shown in place of StepPrompt while
-// view.hint is set, so the person sees why the step did not advance
-// without the wizard ending over it.
-QString RefusalText(const std::string& hint) {
-  QString reason = QString::fromStdString(hint);
-  if (!reason.isEmpty()) {
-    reason = reason.left(1).toUpper() + reason.mid(1);
-  }
-  return QStringLiteral("%1. Click Next to try again.").arg(reason);
-}
-
 // A QLocalSocket behind src/calibrate_cli.h's CalibrateClientIo (#118),
 // the tray's own equivalent of tools/posix_calibrate_client_io.h: plain
 // Qt glue, untested by this repo's own convention, the same as
@@ -173,8 +163,9 @@ class QtCalibrateClientIo : public facepalm::CalibrateClientIo {
 QString StepPrompt(const facepalm::CalibrationFlow::View& view) {
   if (view.resting_step) {
     return QStringLiteral(
-        "Sit the way you normally would and look at the centre of the "
-        "screen in front of you, then click Next.");
+               "Sit the way you normally would and look at the centre of the "
+               "screen in front of you, then %1")
+        .arg(QString::fromStdString(facepalm::CalibrationAction()));
   }
   if (view.gains_step) {
     return GainsStepText();
@@ -203,8 +194,9 @@ QString StepPrompt(const facepalm::CalibrationFlow::View& view) {
                         : QStringLiteral("screen %1").arg(view.screen + 1);
   return QStringLiteral(
              "Look at %1 of %2, the way you normally would, then "
-             "click Next.")
-      .arg(where, screen_name);
+             "%3")
+      .arg(where, screen_name,
+           QString::fromStdString(facepalm::CalibrationAction()));
 }
 
 }  // namespace
@@ -219,6 +211,12 @@ CalibrationWindow::CalibrationWindow(
       socket_path_(std::move(socket_path)),
       camera_failure_(std::move(camera_failure)) {
   window_.setWindowTitle(QStringLiteral("Calibrate Facepalm"));
+  QObject::connect(qApp, &QGuiApplication::screenAdded, &window_,
+                   [this](QScreen*) { TopologyChanged(); });
+  QObject::connect(qApp, &QGuiApplication::screenRemoved, &window_,
+                   [this](QScreen*) { TopologyChanged(); });
+  QObject::connect(qApp, &QGuiApplication::primaryScreenChanged, &window_,
+                   [this](QScreen*) { TopologyChanged(); });
   window_.resize(kWindowSide, kWindowSide / 2);
   label_->setWordWrap(true);
   auto* buttons = new QHBoxLayout();
@@ -261,6 +259,9 @@ void CalibrationWindow::Open(std::string token) {
   failure_reason_.clear();
   flow_->SetBeforeFailureClose([this] { failure_reason_ = camera_failure_(); });
   started_ = false;
+  presentation_screen_ = -1;
+  ++presentation_generation_;
+  window_.setWindowState(Qt::WindowNoState);
   constexpr int kHealthRefreshMs = 1000;
   failure_timer_.start(kHealthRefreshMs);
   Render();
@@ -268,20 +269,116 @@ void CalibrationWindow::Open(std::string token) {
   window_.raise();
 }
 
-void CalibrationWindow::MoveToScreenForStep(
-    const facepalm::CalibrationFlow::View& view) {
-  if (view.resting_step || view.gains_step) {
+void CalibrationWindow::CaptureScreens() {
+  for (const auto& connection : screen_connections_) {
+    QObject::disconnect(connection);
+  }
+  screen_connections_.clear();
+  screens_.clear();
+  screen_geometries_.clear();
+  for (const QScreen* screen : OrderedScreens()) {
+    auto* mutable_screen = const_cast<QScreen*>(screen);
+    screens_.append(mutable_screen);
+    screen_geometries_.append(screen->geometry());
+    screen_connections_.append(
+        QObject::connect(mutable_screen, &QScreen::geometryChanged, &window_,
+                         [this](const QRect&) { TopologyChanged(); }));
+  }
+}
+
+bool CalibrationWindow::ScreensUnchanged() const {
+  const auto ordered = OrderedScreens();
+  if (ordered.size() != screens_.size()) {
+    return false;
+  }
+  for (int i = 0; i < ordered.size(); ++i) {
+    if ((screens_[i] == nullptr) || screens_[i].data() != ordered[i] ||
+        screen_geometries_[i] != ordered[i]->geometry()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void CalibrationWindow::TopologyChanged() {
+  if (!started_ || !flow_ ||
+      flow_->CurrentView().state !=
+          facepalm::CalibrationFlow::State::kPrompting) {
     return;
   }
-  const QScreen* screen = ScreenAt(view.screen);
-  if (screen == nullptr) {
-    return;
+  ++presentation_generation_;
+  started_ = false;
+  failure_timer_.stop();
+  flow_->Cancel();
+  label_->setText(QStringLiteral(
+      "The display layout changed. Restart calibration to continue."));
+  primary_->setVisible(false);
+  secondary_->setText(QStringLiteral("Close"));
+  const unsigned generation = presentation_generation_;
+  QTimer::singleShot(0, &window_, [this, generation] {
+    if (generation != presentation_generation_ || started_) {
+      return;
+    }
+    window_.setWindowState(Qt::WindowNoState);
+    if (generation != presentation_generation_ || started_) {
+      return;
+    }
+    window_.show();
+  });
+}
+
+bool CalibrationWindow::MoveToScreenForStep(
+    const facepalm::CalibrationFlow::View& view) {
+  if (view.resting_step || view.gains_step) {
+    return true;
+  }
+  if (!ScreensUnchanged() || view.screen < 0 ||
+      view.screen >= screens_.size()) {
+    TopologyChanged();
+    return false;
+  }
+  QScreen* screen = screens_[view.screen];
+  if (QGuiApplication::platformName() == QStringLiteral("wayland")) {
+    if (presentation_screen_ == view.screen) {
+      return true;
+    }
+    const unsigned generation = ++presentation_generation_;
+    const auto current = [this, generation] {
+      if (generation != presentation_generation_ || !started_) {
+        return false;
+      }
+      if (!ScreensUnchanged()) {
+        TopologyChanged();
+        return false;
+      }
+      return true;
+    };
+    window_.hide();
+    if (!current()) {
+      return false;
+    }
+    window_.setWindowState(Qt::WindowNoState);
+    if (!current()) {
+      return false;
+    }
+    window_.move(screen->geometry().topLeft());
+    if (!current()) {
+      return false;
+    }
+    window_.windowHandle()->setScreen(screen);
+    if (!current()) {
+      return false;
+    }
+    presentation_screen_ = view.screen;
+    window_.showFullScreen();
+    return current();
   }
   const QRect visible = screen->availableGeometry();
   const QPoint origin(
       visible.x() + ((visible.width() - window_.width()) / 2),
       visible.y() + ((visible.height() - window_.height()) / 2));
   window_.move(origin);
+  return true;
 }
 
 void CalibrationWindow::Render() {
@@ -292,12 +389,14 @@ void CalibrationWindow::Render() {
     secondary_->setText(QStringLiteral("Cancel"));
     return;
   }
-  const facepalm::CalibrationFlow::View& view = flow_->CurrentView();
+  const facepalm::CalibrationFlow::View view = flow_->CurrentView();
   switch (view.state) {
     case facepalm::CalibrationFlow::State::kPrompting:
-      MoveToScreenForStep(view);
-      label_->setText(view.hint.empty() ? StepPrompt(view)
-                                        : RefusalText(view.hint));
+      if (!MoveToScreenForStep(view)) {
+        return;
+      }
+      label_->setText(QString::fromStdString(facepalm::CalibrationPrompt(
+          StepPrompt(view).toStdString(), view.hint)));
       primary_->setText(QStringLiteral("Next"));
       primary_->setVisible(true);
       secondary_->setText(QStringLiteral("Cancel"));
@@ -333,7 +432,9 @@ void CalibrationWindow::Render() {
 }
 
 void CalibrationWindow::PrimaryClicked() {
+  ++presentation_generation_;
   if (!started_) {
+    CaptureScreens();
     started_ = true;
     // The real screen count (#135), not a hardcoded one screen.
     flow_->Start(static_cast<int>(QGuiApplication::screens().size()));
@@ -345,6 +446,7 @@ void CalibrationWindow::PrimaryClicked() {
 }
 
 void CalibrationWindow::SecondaryClicked() {
+  ++presentation_generation_;
   if (started_ && flow_->CurrentView().state ==
                       facepalm::CalibrationFlow::State::kPrompting) {
     flow_->Cancel();
@@ -361,10 +463,12 @@ void CalibrationWindow::SecondaryClicked() {
 // CalibrationFlow::WindowClosed is a no-op unless a step was showing, so
 // calling it unconditionally is always safe.
 void CalibrationWindow::WindowClosed() {
+  ++presentation_generation_;
   failure_timer_.stop();
   if (flow_) {
     flow_->WindowClosed();
   }
+  started_ = false;
   window_.hide();
 }
 

@@ -276,7 +276,7 @@ TEST_F(NoSaveWithWeakStepTest, RefusesACornerTooCloseToItsOwnCentre) {
       session_.Next(error);
   ASSERT_TRUE(status.has_value()) << error;
   EXPECT_THAT(status->refusal,
-              Eq("look further toward that corner, away from the centre"));
+              Eq("the corner reading was too close to the centre reading"));
   // Still the same corner, not a new one (#177): the step was reset, not
   // advanced.
   EXPECT_THAT(status->point, Eq(CalibrationPoint::kTopLeft));

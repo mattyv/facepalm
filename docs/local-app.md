@@ -165,7 +165,7 @@ camera access once its wizard is closed.
 ### Menu items by state (#176)
 
 The first line of the macOS menu and Linux tray shows the running menu
-executable's version, such as **Facepalm 0.1.3** (#194). It is informational
+executable's version, such as **Facepalm 0.1.4** (#194). It is informational
 and cannot be selected.
 
 `src/menu_state.h`'s `DecideMenuState` is the one table both the macOS
@@ -234,7 +234,12 @@ panel model code (#201). Other screens use the model and manufacturer
 reported by Qt; when the model is unavailable they say external display or
 display where the connector type permits (#199). The position helps
 distinguish identical models. On macOS it
-uses the name reported by AppKit. Closing
+uses the name reported by AppKit. On a refused reading, the explanation
+appears before the complete screen and corner instruction; the target is
+never replaced by an unspecified "that corner" (#203). A corner reading too
+close to the centre reading is explained without asking you to look beyond
+the screen. Linux window movement is a request to the window manager;
+Wayland placement remains under verification. Closing
 the window at any point, whether by Cancel or its own close control, asks
 the daemon to cancel cleanly, so the old profile is always what is left
 in place unless every step finished, and the wizard ends with a plain
@@ -268,6 +273,10 @@ reading at once (`ScreenContextReporter::SetProfile`, called from
 (#136). A profile a version before #137 saved has no gains or resting eye
 level, so it fails to load (`calibration_store.cc`'s own version check)
 and the daemon reads coarse gaze as uncalibrated until it is redone. The
+menu prompts let you press Enter or click Next while calibrating. On Wayland,
+point steps request a fullscreen window on the named screen; placement depends
+on the compositor. If the display layout changes, restart calibration so it
+can use the new screen order. On X11 the wizard stays a centered window. The
 menu approves its own "calibrate" client the first time **Calibrate…** is
 chosen, the same way **Turn On Facepalm…** approves its own client, rather
 than when the menu itself starts.

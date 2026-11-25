@@ -27,6 +27,8 @@
 #include <QVariantMap>
 #include <functional>
 #include <iostream>
+#include <queue>
+#include <utility>
 
 namespace {
 constexpr int kTimeoutMs = 10000;
@@ -42,30 +44,34 @@ bool WaitUntil(const std::function<bool()>& condition) {
   return condition();
 }
 
+// Qt requires QObject for D-Bus export and QDBusContext for the caller.
+// NOLINTNEXTLINE(misc-multiple-inheritance)
 class Watcher : public QObject, protected QDBusContext {
   Q_OBJECT
   Q_CLASSINFO("D-Bus Interface", "org.kde.StatusNotifierWatcher")
-  Q_PROPERTY(bool IsStatusNotifierHostRegistered READ hostRegistered)
-  Q_PROPERTY(int ProtocolVersion READ protocolVersion)
-  Q_PROPERTY(QStringList RegisteredStatusNotifierItems READ registeredItems)
+  Q_PROPERTY(bool IsStatusNotifierHostRegistered READ HostRegistered)
+  Q_PROPERTY(int ProtocolVersion READ ProtocolVersion)
+  Q_PROPERTY(QStringList RegisteredStatusNotifierItems READ RegisteredItems)
 
- public:
-  bool hostRegistered() const { return true; }
-  int protocolVersion() const { return 0; }
-  QStringList registeredItems() const { return items_; }
-  QString service() const { return service_; }
-
- public slots:
+ public Q_SLOTS:
   void RegisterStatusNotifierItem(const QString& item) {
     service_ = item.startsWith(QLatin1Char('/')) ? message().service() : item;
     items_.append(item);
     emit StatusNotifierItemRegistered(item);
   }
-  void RegisterStatusNotifierHost(const QString&) {}
+  void RegisterStatusNotifierHost(const QString& /*unused*/) {}
+
+  // D-Bus methods must be public slots, while property readers are ordinary
+  // methods. NOLINTNEXTLINE(readability-redundant-access-specifiers)
+ public:
+  [[nodiscard]] static bool HostRegistered() { return true; }
+  [[nodiscard]] static int ProtocolVersion() { return 0; }
+  [[nodiscard]] QStringList RegisteredItems() const { return items_; }
+  [[nodiscard]] QString Service() const { return service_; }
 
  signals:
-  void StatusNotifierItemRegistered(const QString& service);
-  void StatusNotifierItemUnregistered(const QString& service);
+  void StatusNotifierItemRegistered(const QString& _t1);
+  void StatusNotifierItemUnregistered(const QString& _t1);
   void StatusNotifierHostRegistered();
   void StatusNotifierHostUnregistered();
 
@@ -96,60 +102,75 @@ struct MenuScan {
   int top_items = 0;
 };
 
-void ScanMenu(const QDBusArgument& argument, MenuScan& scan, int depth = 0) {
-  argument.beginStructure();
-  int id = 0;
-  QVariantMap properties;
-  argument >> id >> properties;
-  QString label = properties.value("label").toString();
-  label.remove(QLatin1Char('&'));
-  if (depth == 1 && scan.top_items++ == 0) {
-    scan.version_first = label == scan.expected_version &&
-                         !properties.value("enabled", true).toBool();
-  }
-  if (label.compare("Quit", Qt::CaseInsensitive) == 0) scan.quit = id;
-  if (label.startsWith("Settings") &&
-      properties.value("enabled", true).toBool()) {
-    scan.settings = true;
-  }
-  if (label == "Gesture replay is available offline." &&
-      !properties.value("enabled", true).toBool()) {
-    scan.replay_status = true;
-  }
-  if (label == scan.expected_camera &&
-      !properties.value("enabled", true).toBool()) {
-    scan.camera_status = true;
-  }
-  argument.beginArray();
-  while (!argument.atEnd()) {
-    QVariant child;
-    argument >> child;
-    if (child.metaType() == QMetaType::fromType<QDBusVariant>()) {
-      child = qvariant_cast<QDBusVariant>(child).variant();
+void ScanMenu(const QDBusArgument& root, MenuScan& scan) {
+  std::queue<std::pair<QDBusArgument, int>> pending;
+  pending.emplace(root, 0);
+  while (!pending.empty()) {
+    const auto [argument, depth] = pending.front();
+    pending.pop();
+    argument.beginStructure();
+    int id = 0;
+    QVariantMap properties;
+    argument >> id >> properties;
+    QString label = properties.value("label").toString();
+    label.remove(QLatin1Char('&'));
+    if (depth == 1 && scan.top_items++ == 0) {
+      scan.version_first = label == scan.expected_version &&
+                           !properties.value("enabled", true).toBool();
     }
-    if (child.metaType() == QMetaType::fromType<QDBusArgument>()) {
-      ScanMenu(qvariant_cast<QDBusArgument>(child), scan, depth + 1);
+    if (label.compare("Quit", Qt::CaseInsensitive) == 0) {
+      scan.quit = id;
     }
+    if (label.startsWith("Settings") &&
+        properties.value("enabled", true).toBool()) {
+      scan.settings = true;
+    }
+    if (label == "Gesture replay is available offline." &&
+        !properties.value("enabled", true).toBool()) {
+      scan.replay_status = true;
+    }
+    if (label == scan.expected_camera &&
+        !properties.value("enabled", true).toBool()) {
+      scan.camera_status = true;
+    }
+    argument.beginArray();
+    while (!argument.atEnd()) {
+      QVariant child;
+      argument >> child;
+      if (child.metaType() == QMetaType::fromType<QDBusVariant>()) {
+        child = qvariant_cast<QDBusVariant>(child).variant();
+      }
+      if (child.metaType() == QMetaType::fromType<QDBusArgument>()) {
+        pending.emplace(qvariant_cast<QDBusArgument>(child), depth + 1);
+      }
+    }
+    argument.endArray();
+    argument.endStructure();
   }
-  argument.endArray();
-  argument.endStructure();
 }
 
 bool RunWithWatcher(const QString& executable, bool service_available) {
   QProcess version;
   version.start(executable, {"--version"});
-  if (!version.waitForFinished(kTimeoutMs) || version.exitCode() != 0)
+  if (!version.waitForFinished(kTimeoutMs) || version.exitCode() != 0) {
     return false;
+  }
   const QString version_output =
       QString::fromUtf8(version.readAllStandardOutput()).trimmed();
-  if (!version_output.startsWith("facepalm-menu ")) return false;
+  if (!version_output.startsWith("facepalm-menu ")) {
+    return false;
+  }
   const QString expected_version =
       "Facepalm " + version_output.mid(QString("facepalm-menu ").size());
-  QTemporaryDir runtime;
-  if (!runtime.isValid()) return false;
+  QTemporaryDir const runtime;
+  if (!runtime.isValid()) {
+    return false;
+  }
   const QString socket = runtime.filePath("service.sock");
   QLocalServer service;
-  if (service_available && !service.listen(socket)) return false;
+  if (service_available && !service.listen(socket)) {
+    return false;
+  }
   auto bus = QDBusConnection::sessionBus();
   Watcher watcher;
   if (!bus.registerService("org.kde.StatusNotifierWatcher") ||
@@ -169,17 +190,18 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
   app.setProcessEnvironment(environment);
   app.start(executable);
   if (!app.waitForStarted(kTimeoutMs) ||
-      !WaitUntil([&] { return !watcher.service().isEmpty(); })) {
+      !WaitUntil([&] { return !watcher.Service().isEmpty(); })) {
     std::cerr << "Menu did not register a StatusNotifierItem\n";
     app.kill();
     app.waitForFinished(kTimeoutMs);
     return false;
   }
-  QDBusInterface properties(watcher.service(), "/StatusNotifierItem",
+  QDBusInterface properties(watcher.Service(), "/StatusNotifierItem",
                             "org.freedesktop.DBus.Properties", bus);
-  auto icon =
+  auto const icon =
       Call(properties, "Get", {"org.kde.StatusNotifierItem", "IconPixmap"});
-  auto menu = Call(properties, "Get", {"org.kde.StatusNotifierItem", "Menu"});
+  auto const menu =
+      Call(properties, "Get", {"org.kde.StatusNotifierItem", "Menu"});
   if (icon.type() == QDBusMessage::ErrorMessage || icon.arguments().isEmpty() ||
       menu.type() == QDBusMessage::ErrorMessage || menu.arguments().isEmpty()) {
     std::cerr << "Tray did not export icon and menu properties\n";
@@ -192,7 +214,7 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
   const QVariant menu_value =
       qvariant_cast<QDBusVariant>(menu.arguments().first()).variant();
   const QString menu_path = qvariant_cast<QDBusObjectPath>(menu_value).path();
-  const QDBusArgument pixmaps = qvariant_cast<QDBusArgument>(icon_value);
+  const auto pixmaps = qvariant_cast<QDBusArgument>(icon_value);
   pixmaps.beginArray();
   bool has_pixels = false;
   if (!pixmaps.atEnd()) {
@@ -211,7 +233,7 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
     app.waitForFinished(kTimeoutMs);
     return false;
   }
-  QDBusInterface menu_interface(watcher.service(), menu_path,
+  QDBusInterface menu_interface(watcher.Service(), menu_path,
                                 "com.canonical.dbusmenu", bus);
   const auto layout = Call(menu_interface, "GetLayout", {0, -1, QStringList{}});
   if (layout.type() == QDBusMessage::ErrorMessage ||
@@ -226,8 +248,9 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
   scan.expected_camera = service_available ? "Camera service is ready."
                                            : "Camera service is offline.";
   ScanMenu(qvariant_cast<QDBusArgument>(layout.arguments().at(1)), scan);
-  if (!scan.version_first)
+  if (!scan.version_first) {
     std::cerr << "Version is not the first disabled item\n";
+  }
   if (!scan.version_first || scan.quit < 0 || !scan.settings ||
       !scan.replay_status || !scan.camera_status ||
       Call(menu_interface, "Event",
@@ -248,12 +271,15 @@ bool RunWithWatcher(const QString& executable, bool service_available) {
 
 // A listening but unresponsive owner must not be reported as success.
 bool RunUnresponsiveOwner(const QString& executable) {
-  QTemporaryDir runtime;
-  if (!runtime.isValid()) return false;
+  QTemporaryDir const runtime;
+  if (!runtime.isValid()) {
+    return false;
+  }
   QLockFile lock(runtime.filePath("menu.lock"));
   QLocalServer server;
-  if (!lock.tryLock(0) || !server.listen(runtime.filePath("menu.sock")))
+  if (!lock.tryLock(0) || !server.listen(runtime.filePath("menu.sock"))) {
     return false;
+  }
   auto environment = QProcessEnvironment::systemEnvironment();
   environment.insert("FACEPALM_MENU_LOCK", runtime.filePath("menu.lock"));
   environment.insert("FACEPALM_MENU_SOCKET", runtime.filePath("menu.sock"));
@@ -275,30 +301,16 @@ bool RunUnresponsiveOwner(const QString& executable) {
              "running tray");
 }
 
-// Runs the real tray server with isolated paths and a headless Qt platform.
-bool RunHeadlessIpc(const QString& executable) {
-  QTemporaryDir runtime;
-  QTemporaryDir config;
-  if (!runtime.isValid() || !config.isValid()) return false;
-  auto environment = QProcessEnvironment::systemEnvironment();
-  environment.insert("QT_QPA_PLATFORM", "offscreen");
-  environment.insert("FACEPALM_MENU_LOCK", runtime.filePath("menu.lock"));
-  environment.insert("FACEPALM_MENU_SOCKET", runtime.filePath("menu.sock"));
-  environment.insert("FACEPALM_SOCKET", runtime.filePath("service.sock"));
-  environment.insert("XDG_CONFIG_HOME", config.path());
-  QProcess first;
-  first.setProcessEnvironment(environment);
-  first.start(executable);
-  const bool started = first.waitForStarted(kTimeoutMs) && WaitUntil([&] {
-                         return QFile::exists(runtime.filePath("menu.sock"));
-                       });
-  bool ok = started;
+bool CheckInvalidRequests(const QString& socket) {
+  bool ok = true;
   // Invalid input and incomplete requests must close without an ACK. The
   // invalid bytes can already be buffered when newConnection is dispatched.
   for (const QByteArray& input : {QByteArray("bad"), QByteArray("set")}) {
-    if (!ok) break;
+    if (!ok) {
+      break;
+    }
     QLocalSocket client;
-    client.connectToServer(runtime.filePath("menu.sock"));
+    client.connectToServer(socket);
     ok = client.waitForConnected(kTimeoutMs) &&
          client.write(input) == input.size() &&
          client.waitForBytesWritten(kTimeoutMs);
@@ -306,11 +318,18 @@ bool RunHeadlessIpc(const QString& executable) {
       ok = client.waitForDisconnected(2000);
     }
     ok = ok && client.readAll().isEmpty();
-    if (!ok) std::cerr << "Invalid or stalled request did not close\n";
+    if (!ok) {
+      std::cerr << "Invalid or stalled request did not close\n";
+    }
   }
+  return ok;
+}
+
+bool CheckFragmentedRequest(const QString& socket) {
+  bool ok = true;
   if (ok) {
     QLocalSocket client;
-    client.connectToServer(runtime.filePath("menu.sock"));
+    client.connectToServer(socket);
     ok = client.waitForConnected(kTimeoutMs) && client.write("set") == 3 &&
          client.waitForBytesWritten(kTimeoutMs);
     if (ok) {
@@ -330,6 +349,31 @@ bool RunHeadlessIpc(const QString& executable) {
       ok = ok && client.readAll().isEmpty();
     }
   }
+  return ok;
+}
+
+// Runs the real tray server with isolated paths and a headless Qt platform.
+bool RunHeadlessIpc(const QString& executable) {
+  QTemporaryDir runtime;
+  QTemporaryDir const config;
+  if (!runtime.isValid() || !config.isValid()) {
+    return false;
+  }
+  auto environment = QProcessEnvironment::systemEnvironment();
+  environment.insert("QT_QPA_PLATFORM", "offscreen");
+  environment.insert("FACEPALM_MENU_LOCK", runtime.filePath("menu.lock"));
+  environment.insert("FACEPALM_MENU_SOCKET", runtime.filePath("menu.sock"));
+  environment.insert("FACEPALM_SOCKET", runtime.filePath("service.sock"));
+  environment.insert("XDG_CONFIG_HOME", config.path());
+  QProcess first;
+  first.setProcessEnvironment(environment);
+  first.start(executable);
+  const bool started = first.waitForStarted(kTimeoutMs) && WaitUntil([&] {
+                         return QFile::exists(runtime.filePath("menu.sock"));
+                       });
+  bool ok = started;
+  ok = ok && CheckInvalidRequests(runtime.filePath("menu.sock")) &&
+       CheckFragmentedRequest(runtime.filePath("menu.sock"));
   if (ok) {
     QProcess second;
     second.setProcessEnvironment(environment);
@@ -351,9 +395,11 @@ bool RunHeadlessIpc(const QString& executable) {
 // tray icon, and its --settings should raise the first's Settings window
 // instead (specs/SingleInstance.tla's TryLockHeld and Forward).
 bool RunSecondLaunch(const QString& executable) {
-  QTemporaryDir runtime;
-  QTemporaryDir config_home;
-  if (!runtime.isValid() || !config_home.isValid()) return false;
+  QTemporaryDir const runtime;
+  QTemporaryDir const config_home;
+  if (!runtime.isValid() || !config_home.isValid()) {
+    return false;
+  }
   auto bus = QDBusConnection::sessionBus();
   Watcher watcher;
   if (!bus.registerService("org.kde.StatusNotifierWatcher") ||
@@ -378,7 +424,7 @@ bool RunSecondLaunch(const QString& executable) {
   first.setProcessEnvironment(environment);
   first.start(executable);
   if (!first.waitForStarted(kTimeoutMs) ||
-      !WaitUntil([&] { return !watcher.service().isEmpty(); })) {
+      !WaitUntil([&] { return !watcher.Service().isEmpty(); })) {
     std::cerr << "First instance did not register a StatusNotifierItem\n";
     first.kill();
     first.waitForFinished(kTimeoutMs);
@@ -422,7 +468,7 @@ bool RunSecondLaunch(const QString& executable) {
     second.waitForFinished(kTimeoutMs);
     return false;
   }
-  if (watcher.registeredItems().size() != 1) {
+  if (watcher.RegisteredItems().size() != 1) {
     std::cerr << "A second launch opened its own tray icon\n";
     first.kill();
     first.waitForFinished(kTimeoutMs);
@@ -443,7 +489,7 @@ bool RunSecondLaunch(const QString& executable) {
     return false;
   }
 
-  QDBusInterface properties(watcher.service(), "/StatusNotifierItem",
+  QDBusInterface properties(watcher.Service(), "/StatusNotifierItem",
                             "org.freedesktop.DBus.Properties", bus);
   const auto menu =
       Call(properties, "Get", {"org.kde.StatusNotifierItem", "Menu"});
@@ -457,7 +503,7 @@ bool RunSecondLaunch(const QString& executable) {
       qvariant_cast<QDBusObjectPath>(
           qvariant_cast<QDBusVariant>(menu.arguments().first()).variant())
           .path();
-  QDBusInterface menu_interface(watcher.service(), menu_path,
+  QDBusInterface menu_interface(watcher.Service(), menu_path,
                                 "com.canonical.dbusmenu", bus);
   const auto layout = Call(menu_interface, "GetLayout", {0, -1, QStringList{}});
   MenuScan scan;
@@ -484,8 +530,22 @@ bool RunSecondLaunch(const QString& executable) {
   return quit_ok;
 }
 
+std::pair<int, int> WindowSize(const QByteArray& output) {
+  int width = 0;
+  int height = 0;
+  for (const QString& line : QString::fromUtf8(output).split('\n')) {
+    if (line.startsWith("WIDTH=")) {
+      width = line.mid(6).toInt();
+    }
+    if (line.startsWith("HEIGHT=")) {
+      height = line.mid(7).toInt();
+    }
+  }
+  return {width, height};
+}
+
 bool RunWithoutWatcher(const QString& executable, bool close_window) {
-  QTemporaryDir config_home;
+  QTemporaryDir const config_home;
   if (!config_home.isValid() || !QDir(config_home.path()).mkpath("facepalm")) {
     return false;
   }
@@ -508,14 +568,17 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
   environment.insert("FACEPALM_SOCKET", config_home.filePath("service.sock"));
   app.setProcessEnvironment(environment);
   app.start(executable);
-  if (!app.waitForStarted(kTimeoutMs)) return false;
+  if (!app.waitForStarted(kTimeoutMs)) {
+    return false;
+  }
   QString window;
   const bool shown = WaitUntil([&] {
     QProcess search;
     search.start("xdotool",
                  {"search", "--onlyvisible", "--name", "^Facepalm Settings$"});
-    if (!search.waitForFinished(kTimeoutMs) || search.exitCode() != 0)
+    if (!search.waitForFinished(kTimeoutMs) || search.exitCode() != 0) {
       return false;
+    }
     window = QString::fromUtf8(search.readAllStandardOutput())
                  .split('\n', Qt::SkipEmptyParts)
                  .value(0);
@@ -526,13 +589,7 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
     geometry.start("xdotool", {"getwindowgeometry", "--shell", window});
     geometry.waitForFinished(kTimeoutMs);
   }
-  int width = 0;
-  int height = 0;
-  for (const QString& line :
-       QString::fromUtf8(geometry.readAllStandardOutput()).split('\n')) {
-    if (line.startsWith("WIDTH=")) width = line.mid(6).toInt();
-    if (line.startsWith("HEIGHT=")) height = line.mid(7).toInt();
-  }
+  const auto [width, height] = WindowSize(geometry.readAllStandardOutput());
   QProcess close;
   if (shown && width > 0 && height > 20) {
     if (close_window) {
@@ -567,9 +624,13 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
     app.kill();
     app.waitForFinished(kTimeoutMs);
   }
-  if (!exited || !config.open(QIODevice::ReadOnly)) return false;
+  if (!exited || !config.open(QIODevice::ReadOnly)) {
+    return false;
+  }
   const auto saved = config.readAll();
-  if (close_window) return saved == initial;
+  if (close_window) {
+    return saved == initial;
+  }
   if (!saved.contains("camera.frames_per_second = 24 # preserve me") ||
       !saved.contains("head_pose.enabled = false")) {
     std::cerr
@@ -581,12 +642,12 @@ bool RunWithoutWatcher(const QString& executable, bool close_window) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  QCoreApplication app(argc, argv);
-  if (app.arguments().size() != 2) {
+  QCoreApplication const app(argc, argv);
+  if (QCoreApplication::arguments().size() != 2) {
     std::cerr << "Expected the path to facepalm-menu\n";
     return 2;
   }
-  const QString executable = app.arguments().at(1);
+  const QString executable = QCoreApplication::arguments().at(1);
   if (qEnvironmentVariableIsSet("FACEPALM_TEST_IPC_ONLY")) {
     return RunHeadlessIpc(executable) && RunUnresponsiveOwner(executable) ? 0
                                                                           : 1;

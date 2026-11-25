@@ -1,5 +1,35 @@
 # Decisions
 
+## 2026-11-25: Version the combined robustness build as 0.1.4 (#203, #204)
+
+Use 0.1.4 to distinguish the corrected calibration and settings handoff from
+the already shared 0.1.3 development package. Keep the package, tray header
+and macOS bundle version in sync. This version identifies the new installer;
+it does not turn unverified hardware or compositor behavior into a passed
+check. The model remains a separate explicit download.
+
+## 2026-11-25: Request fullscreen target screens on Wayland (#203)
+
+For point steps, request a fullscreen wizard on the named output under Wayland;
+keep the same dialog and flow across output changes. A topology change cancels
+the attempt and asks the user to restart using a fresh screen order. X11 keeps
+its centered window. Compositors control actual placement and can deny a
+request; fullscreen is a deliberate visual change, not proof of placement.
+A private GNOME Mutter 48 test observed both output transitions; a nested
+Weston setup did not honor the requested output. Real hardware and macOS visual
+layout remain unverified. The lifecycle model records logical mapping intent,
+not physical compositor retirement.
+
+## 2026-11-25: Keep calibration targets visible during retries (#203)
+
+Keep the original screen and point instruction alongside the refusal reason.
+Describe a corner reading that is too close to the centre reading without
+instructing someone to look beyond the corner. Tell users Enter activates Next
+so they can keep looking at the target. This changes presentation only;
+thresholds, timing and calibration state remain unchanged. Display placement
+on Wayland remains a separate investigation; a target instruction does not
+guarantee that the compositor places the window on that screen.
+
 ## 2026-11-25: Acknowledge Linux settings handoffs (#204)
 
 The running tray acknowledges a settings request only after its existing

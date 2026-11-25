@@ -3,7 +3,10 @@
 
 #include <QDialog>
 #include <QLabel>
+#include <QPointer>
 #include <QPushButton>
+#include <QRect>
+#include <QScreen>
 #include <QTimer>
 #include <QWidget>
 #include <functional>
@@ -42,10 +45,13 @@ class CalibrationWindow {
   void Render();
   // Moves the window onto `view`'s own screen (#135): only a screen's
   // point step names one.
-  void MoveToScreenForStep(const facepalm::CalibrationFlow::View& view);
+  bool MoveToScreenForStep(const facepalm::CalibrationFlow::View& view);
   void PrimaryClicked();
   void SecondaryClicked();
   void WindowClosed();
+  void CaptureScreens();
+  bool ScreensUnchanged() const;
+  void TopologyChanged();
 
   QDialog window_;
   QLabel* label_;
@@ -58,6 +64,11 @@ class CalibrationWindow {
   std::unique_ptr<facepalm::CalibrateClientIo> io_;
   std::unique_ptr<facepalm::CalibrationFlow> flow_;
   bool started_ = false;
+  QList<QPointer<QScreen>> screens_;
+  QList<QRect> screen_geometries_;
+  QList<QMetaObject::Connection> screen_connections_;
+  int presentation_screen_ = -1;
+  unsigned presentation_generation_ = 0;
 };
 
 }  // namespace facepalm_menu
