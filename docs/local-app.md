@@ -165,7 +165,7 @@ camera access once its wizard is closed.
 ### Menu items by state (#176)
 
 The first line of the macOS menu and Linux tray shows the running menu
-executable's version, such as **Facepalm 0.1.2** (#194). It is informational
+executable's version, such as **Facepalm 0.1.3** (#194). It is informational
 and cannot be selected.
 
 `src/menu_state.h`'s `DecideMenuState` is the one table both the macOS
@@ -229,9 +229,11 @@ then steps through the resting pose, the gains step, and each screen's
 centre and four corners with Next and Cancel, moving itself onto the
 screen a step names and naming that screen (its position and display
 name) in the prompt, for every screen the computer has (#135). On Linux,
-the name uses the model and manufacturer reported by Qt; when the model is
-unavailable it says built-in, external, or display where the connector type
-permits (#199). The position helps distinguish identical models. On macOS it
+eDP and LVDS screens say built-in display even when Qt supplies an internal
+panel model code (#201). Other screens use the model and manufacturer
+reported by Qt; when the model is unavailable they say external display or
+display where the connector type permits (#199). The position helps
+distinguish identical models. On macOS it
 uses the name reported by AppKit. Closing
 the window at any point, whether by Cancel or its own close control, asks
 the daemon to cancel cleanly, so the old profile is always what is left
