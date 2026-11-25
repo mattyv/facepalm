@@ -51,7 +51,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `ProbeShutdown.cfg` | four frames, a backlog of two | holds | 185 |
 | `ReactionFeed.cfg` | two clients, three readings, a timeline keeping one | holds | 12,171 |
 | `Service.cfg` | three connections, two client names, an approved token and a stranger's | holds, with `StopEnds` and `HangUpEnds` | 9,776 |
-| `SingleInstance.cfg` | two launches, each free to run with or without `--settings` | holds, with `LaunchSettles` and `RequestServed` | 77 |
+| `SingleInstance.cfg` | two launches, three failed handoffs | holds, with `LaunchSettles` and `RequestSettles` | 177 |
 | `UserService.cfg` | the menu, the service manager, one daemon and a session that may log out and in | holds, with `TurnOffStops` and `OnRuns` | 15 |
 | `TurnExcursion.cfg` | yaw near or away, two moves a turn, two hold lengths | holds | 26 |
 
@@ -1477,45 +1477,34 @@ can see the lock as free in the moment between seeing that and claiming it,
 and it reclaims a lock left by a process that has since died rather than
 wedging every later launch.
 
-`SingleInstance.cfg` checks two launches, each free to run with or without
-`--settings`, over 77 states, with no bound on retries after a lost handoff.
+`SingleInstance.cfg` checks two launches and at most three failed handoffs.
+TLC explored 177 distinct states. Weak fairness applies to enabled implementation
+steps; launches, crashes and quits are not fair. A live owner can still fail a
+handoff. Success means the owner processed the request, not that a compositor
+showed or focused the window. The model abstracts the socket and its deadline.
 
-| Property | What it says | Test |
-|---|---|---|
-| `TypeOK` | Every variable stays in its type. | None needed: it constrains the model only |
-| `AtMostOnePrimary` | At most one launch ever holds the tray's claim at a time. | `NoInstanceClaimsTheLockAndBecomesPrimary` and `ALostHandoffRetriesAndClaimsTheLock` in `test/single_instance_test.cc`; `RunWithWatcher` and `RunSecondLaunch` in `test/linux_tray_integration.cc` (one `StatusNotifierItem` registered) |
-| `LockMatchesPrimary` | The lock names the live primary, and only it. | Covered by the same tests as `AtMostOnePrimary`: a mock that let two callers both win `TryLock` would fail them |
-| `LaunchSettles` | Liveness: every launch settles, either as the tray or handed off to one. | Every `ClaimSingleInstanceTest` in `test/single_instance_test.cc` returns a role; `RunSecondLaunch` (the second process exits) |
-| `RequestServed` | Liveness, and something must happen: a launch that asked for Settings eventually gets it shown. | `AnInstanceWithSettingsForwardsToTheRunningOne`, `ALostHandoffRetriesAndClaimsTheLock`, `ALostHandoffRetriesAndForwardsToTheNextOwner`; `RunSecondLaunch` (the first instance's window is raised) |
-
-The code bounds a lost handoff's retries at `kMaxSingleInstanceAttempts`,
-which the model leaves unbounded (fairness alone proves it settles); when a
-handoff keeps losing its owner past that bound, `ClaimSingleInstance` gives
-up and exits without having shown anything, which `GivesUpAfterRepeatedLost
-Handoffs` covers and the model does not need to, since it is a finite patience
-the code chose, not a correctness requirement.
-
-| Mutation | Broke |
+| Property | Evidence |
 |---|---|
-| `GuardAtomicClaim = FALSE`: a non-atomic probe splits the lock's check and claim into two steps | `AtMostOnePrimary` and `LockMatchesPrimary`, 7 states: two launches both observe the lock free and both claim it |
-| `GuardStaleReclaimed = FALSE`: a dead owner's lock can never be reclaimed | `LaunchSettles` and `RequestServed`: the launch after a crash is wedged in `"trying"` forever |
-| `GuardForwardOnSettings = FALSE`: a launch that wants Settings never asks the running instance | `RequestServed`: it exits having never had Settings shown |
-| No fairness on the code's own steps | `LaunchSettles` and `RequestServed`: a launch can stay `"trying"` forever even with the lock free |
+| `TypeOK`, `AtMostOnePrimary`, `LockMatchesPrimary` | Atomic lock and cleanup; `ClaimSingleInstanceTest` and `RunSecondLaunch` |
+| `SuccessMeansProcessed` | A successful settings handoff requires processing before acknowledgement |
+| `LaunchSettles`, `RequestSettles` | Processing, primary ownership, or explicit failure after three attempts |
 
-The same mutations, made to the code, fail the tests that stand for the
-properties they break:
+Mutations checked with TLC: disabling atomic claim violates `AtMostOnePrimary`;
+disabling stale reclaim violates `LaunchSettles`; disabling forwarding or
+acknowledging before processing violates `SuccessMeansProcessed`. The model
+is bounded evidence, not a proof of Qt, OS lock behavior, or desktop visibility.
+The integration test exercises real Qt IPC separately.
 
-| Mutation to `ClaimSingleInstance` | Fails |
-|---|---|
-| Returns `kPrimary` without calling `TryLock` | `NoInstanceClaimsTheLockAndBecomesPrimary` (mock `.Times` expectations go unmet) |
-| Never calls `RequestSettings` when `wants_settings` is true | `AnInstanceWithSettingsForwardsToTheRunningOne`, `ALostHandoffRetriesAndForwardsToTheNextOwner` |
-| Does not retry after `RequestSettings` returns false | `ALostHandoffRetriesAndClaimsTheLock`, `ALostHandoffRetriesAndForwardsToTheNextOwner` |
-| Retries without bound | `GivesUpAfterRepeatedLostHandoffs` (the mock's `.Times(kMaxSingleInstanceAttempts)` expectation is exceeded) |
+## `SettingsSocket`: accepted request lifetime (#204)
 
-The model does not cover `QLockFile`'s or `QLocalServer`'s own behavior, nor
-what happens when the state directory itself cannot be created; only a run
-on a real Linux desktop, through `test/linux_tray_integration.cc`'s
-`RunSecondLaunch`, shows the real tray icon and Settings window.
+A connection either processes one complete valid request, rejects invalid
+input, or closes after a bounded read deadline. The finite model has a
+single connection and two abstract timer ticks; weak fairness assumes the
+Qt event loop eventually delivers the timer. It does not model scheduling
+latency, byte transport, window visibility, or process termination. TLC checks
+7 distinct states. Removing the deadline violates `ReadSettles`; removing the
+one-shot guard violates `AtMostOnce`. The real Qt IPC test exercises
+fragmentation, invalid input, and a stalled partial request separately.
 
 ## `Calibration`: an optional calibration session
 
