@@ -232,7 +232,8 @@ name) in the prompt, for every screen the computer has (#135). On Linux,
 eDP and LVDS screens say built-in display even when Qt supplies an internal
 panel model code (#201). Other screens use the model and manufacturer
 reported by Qt; when the model is unavailable they say external display or
-display where the connector type permits (#199). The position helps distinguish identical models. On macOS it
+display where the connector type permits (#199). The position helps
+distinguish identical models. On macOS it
 uses the name reported by AppKit. Closing
 the window at any point, whether by Cancel or its own close control, asks
 the daemon to cancel cleanly, so the old profile is always what is left
