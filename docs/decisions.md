@@ -22,6 +22,20 @@ thresholds, timing and calibration state remain unchanged. Display placement
 on Wayland remains a separate investigation; a target instruction does not
 guarantee that the compositor places the window on that screen.
 
+## 2026-11-25: Acknowledge Linux settings handoffs (#204)
+
+The running tray acknowledges a settings request only after its existing
+window handler returns. The launcher retries at most three times and reports
+a fixed error with a nonzero exit if no valid acknowledgement arrives. A
+write to a local socket alone is not evidence that the tray processed the
+request. Connect and write/ack each retain a 200 ms budget per attempt; a
+slow handler may therefore open Settings even when the launcher reports
+failure. Retries can invoke the existing idempotent open handler again. The
+acknowledgement does not prove compositor visibility or focus. Accepted
+requests have an eight-byte read cap and a one-second server-side deadline;
+the Qt event loop must run to enforce it. This does not
+establish the cause of the separate Pair launch symptom; see #204.
+
 ## 2026-11-25: Label built-in displays without panel models (#201)
 
 For Linux calibration prompts, eDP and LVDS connectors use "built-in

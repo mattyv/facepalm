@@ -23,10 +23,10 @@ SingleInstanceRole ClaimSingleInstance(bool wants_settings,
     if (io.RequestSettings()) {
       return SingleInstanceRole::kForwarded;
     }
-    // ForwardLost: the owner quit or crashed before the request reached
-    // it. Try again: the lock it left behind may now be claimable.
+    // ForwardLost: no valid acknowledgement arrived. Try again: the
+    // owner may have quit, leaving the lock available.
   }
-  return SingleInstanceRole::kForwarded;
+  return SingleInstanceRole::kHandoffFailed;
 }
 
 }  // namespace facepalm

@@ -6,7 +6,7 @@
 (* state directory, src/user_paths.h) before it creates a QApplication. A  *)
 (* launch that finds the lock already held talks to the running instance  *)
 (* over a QLocalServer instead: if it was asked to open Settings           *)
-(* (--settings), it sends that request and waits for it to be shown;       *)
+(* (--settings), it awaits the handler acknowledgement, not visibility;     *)
 (* otherwise it exits without starting a redundant tray.                   *)
 (*                                                                         *)
 (* QLockFile::tryLock() is one atomic call: it sees the lock free, or left *)
@@ -35,27 +35,30 @@ CONSTANTS
     Launchers,             \* The launches of facepalm-menu to model.
     GuardAtomicClaim,      \* tryLock() sees "free" and claims it as one step.
     GuardStaleReclaimed,   \* tryLock() reclaims a dead owner's lock.
-    GuardForwardOnSettings \* A launch that wants Settings asks the owner.
+    GuardForwardOnSettings, \* A launch that wants Settings asks the owner.
+    GuardAckAfterShow       \* Success requires processing the request.
 
 VARIABLES
     lock,          \* "free", or the launcher currently holding the lock.
     alive,         \* alive[l]: whether l's process (once primary) still runs.
     state,         \* state[l]: "idle", "trying", "claiming" (the race
                    \* window), "forwarding", "primary" or "exited".
-    shown,         \* shown[l]: Settings was shown because l asked for it.
+    processed,         \* processed[l]: the handler ran for l; this is not visibility.
+    attempts,      \* Failed handoffs, bounded by three.
     wantsSettings  \* wantsSettings[l]: l was run with --settings, chosen
                    \* when it launches and kept through any retry.
 
-vars == <<lock, alive, state, shown, wantsSettings>>
+vars == <<lock, alive, state, processed, wantsSettings, attempts>>
 
-States == {"idle", "trying", "claiming", "forwarding", "primary", "exited"}
+States == {"idle", "trying", "claiming", "forwarding", "primary", "exited", "failed"}
 
 Init ==
     /\ lock = "free"
     /\ alive = [l \in Launchers |-> FALSE]
     /\ state = [l \in Launchers |-> "idle"]
-    /\ shown = [l \in Launchers |-> FALSE]
+    /\ processed = [l \in Launchers |-> FALSE]
     /\ wantsSettings = [l \in Launchers |-> FALSE]
+    /\ attempts = [l \in Launchers |-> 0]
 
 \* Whether the lock is held by a live owner. Written with IF so that
 \* `alive[lock]` is never applied to "free", which is not in its domain:
@@ -76,7 +79,7 @@ Launch(l) ==
     /\ state[l] = "idle"
     /\ state' = [state EXCEPT ![l] = "trying"]
     /\ \E flag \in BOOLEAN : wantsSettings' = [wantsSettings EXCEPT ![l] = flag]
-    /\ UNCHANGED <<lock, alive, shown>>
+    /\ UNCHANGED <<lock, alive, processed, attempts>>
 
 \* SingleInstance.tla: TryLockAtomic. QLockFile::tryLock() claims an
 \* unowned or stale lock in the one call that also checked it, becoming the
@@ -86,8 +89,8 @@ TryLockAtomic(l) ==
     /\ state[l] = "trying" /\ Claimable(l)
     /\ lock' = l /\ alive' = [alive EXCEPT ![l] = TRUE]
     /\ state' = [state EXCEPT ![l] = "primary"]
-    /\ shown' = [shown EXCEPT ![l] = IF wantsSettings[l] THEN TRUE ELSE @]
-    /\ UNCHANGED wantsSettings
+    /\ processed' = [processed EXCEPT ![l] = IF wantsSettings[l] THEN TRUE ELSE @]
+    /\ UNCHANGED <<wantsSettings, attempts>>
 
 \* The mutation for GuardAtomicClaim = FALSE: a non-atomic probe splits the
 \* same decision across two steps, so another launch's ObserveFree can land
@@ -98,7 +101,7 @@ ObserveFree(l) ==
     /\ ~GuardAtomicClaim
     /\ state[l] = "trying" /\ Claimable(l)
     /\ state' = [state EXCEPT ![l] = "claiming"]
-    /\ UNCHANGED <<lock, alive, shown, wantsSettings>>
+    /\ UNCHANGED <<lock, alive, processed, wantsSettings, attempts>>
 
 \* Claims without looking again: exactly the bug. Another launch's own
 \* ClaimAfterObserve may already have taken the lock since this one looked.
@@ -107,8 +110,8 @@ ClaimAfterObserve(l) ==
     /\ state[l] = "claiming"
     /\ lock' = l /\ alive' = [alive EXCEPT ![l] = TRUE]
     /\ state' = [state EXCEPT ![l] = "primary"]
-    /\ shown' = [shown EXCEPT ![l] = IF wantsSettings[l] THEN TRUE ELSE @]
-    /\ UNCHANGED wantsSettings
+    /\ processed' = [processed EXCEPT ![l] = IF wantsSettings[l] THEN TRUE ELSE @]
+    /\ UNCHANGED <<wantsSettings, attempts>>
 
 \* SingleInstance.tla: TryLockHeld. The lock is held by a live instance: l
 \* asks it for Settings only if it was asked for one itself, otherwise it
@@ -119,7 +122,7 @@ TryLockHeld(l) ==
     /\ state' = [state EXCEPT ![l] =
                      IF wantsSettings[l] /\ GuardForwardOnSettings
                         THEN "forwarding" ELSE "exited"]
-    /\ UNCHANGED <<lock, alive, shown, wantsSettings>>
+    /\ UNCHANGED <<lock, alive, processed, wantsSettings, attempts>>
 
 \* SingleInstance.tla: Forward. The owner is still listening: it raises
 \* its Settings window on l's behalf.
@@ -127,17 +130,18 @@ Forward(l) ==
     /\ state[l] = "forwarding"
     /\ Held
     /\ state' = [state EXCEPT ![l] = "exited"]
-    /\ shown' = [shown EXCEPT ![l] = TRUE]
-    /\ UNCHANGED <<lock, alive, wantsSettings>>
+    /\ processed' = [processed EXCEPT ![l] = GuardAckAfterShow]
+    /\ UNCHANGED <<lock, alive, wantsSettings, attempts>>
 
-\* The owner quit or crashed between TryLockHeld and Forward: the request
-\* never reached anyone, so l tries again, with the same --settings choice,
-\* instead of exiting as though it had been served.
+\* An acknowledgement can fail even if the owner remains alive. Retry
+\* with the same request, or explicitly fail after the third attempt.
 ForwardLost(l) ==
     /\ state[l] = "forwarding"
-    /\ ~Held
-    /\ state' = [state EXCEPT ![l] = "trying"]
-    /\ UNCHANGED <<lock, alive, shown, wantsSettings>>
+    \* Timeout or disconnect can occur even while the owner is alive.
+    /\ attempts' = [attempts EXCEPT ![l] = @ + 1]
+    /\ state' = [state EXCEPT ![l] =
+                     IF attempts[l] + 1 = 3 THEN "failed" ELSE "trying"]
+    /\ UNCHANGED <<lock, alive, processed, wantsSettings>>
 
 \* SingleInstance.tla: Quit. The running instance's person chooses Quit: it
 \* releases the lock cleanly.
@@ -145,7 +149,7 @@ Quit(l) ==
     /\ state[l] = "primary" /\ lock = l /\ alive[l]
     /\ lock' = "free" /\ alive' = [alive EXCEPT ![l] = FALSE]
     /\ state' = [state EXCEPT ![l] = "exited"]
-    /\ UNCHANGED <<shown, wantsSettings>>
+    /\ UNCHANGED <<processed, wantsSettings, attempts>>
 
 \* The running instance's process dies without releasing the lock (a crash,
 \* or a kill -9): the lock file is left behind, stale, for the next launch
@@ -154,7 +158,7 @@ Crash(l) ==
     /\ state[l] = "primary" /\ lock = l /\ alive[l]
     /\ alive' = [alive EXCEPT ![l] = FALSE]
     /\ state' = [state EXCEPT ![l] = "exited"]
-    /\ UNCHANGED <<lock, shown, wantsSettings>>
+    /\ UNCHANGED <<lock, processed, wantsSettings, attempts>>
 
 Next ==
     \E l \in Launchers :
@@ -175,8 +179,9 @@ TypeOK ==
     /\ lock \in Launchers \cup {"free"}
     /\ alive \in [Launchers -> BOOLEAN]
     /\ state \in [Launchers -> States]
-    /\ shown \in [Launchers -> BOOLEAN]
+    /\ processed \in [Launchers -> BOOLEAN]
     /\ wantsSettings \in [Launchers -> BOOLEAN]
+    /\ attempts \in [Launchers -> 0..3]
 
 \* At most one launch ever holds the tray's claim at a time.
 AtMostOnePrimary ==
@@ -186,14 +191,18 @@ AtMostOnePrimary ==
 LockMatchesPrimary ==
     \A l \in Launchers : (state[l] = "primary" /\ alive[l]) => lock = l
 
-\* Liveness: every launch settles, either as the tray or handed off to one.
+\* Every launch becomes primary, exits, or reports bounded failure.
 LaunchSettles ==
-    \A l \in Launchers : state[l] = "trying" ~> state[l] \in {"primary", "exited"}
+    \A l \in Launchers : state[l] = "trying" ~> state[l] \in {"primary", "exited", "failed"}
 
-\* Liveness, and something must happen: a launch that asked for Settings
-\* eventually gets it shown, whether as the tray itself or through the one
-\* already running.
-RequestServed ==
+\* Successful settings handoff requires application processing, not just
+\* transport delivery. Primary settings requests are processed locally.
+SuccessMeansProcessed ==
     \A l \in Launchers :
-        (state[l] = "trying" /\ wantsSettings[l]) ~> shown[l]
+        (state[l] = "exited" /\ wantsSettings[l] /\ attempts[l] <= 3) => processed[l]
+
+\* Requests settle honestly: processing or explicit bounded failure.
+RequestSettles ==
+    \A l \in Launchers :
+        (state[l] = "trying" /\ wantsSettings[l]) ~> (processed[l] \/ state[l] = "failed")
 ==============================================================================

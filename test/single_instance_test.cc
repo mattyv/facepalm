@@ -83,7 +83,7 @@ TEST(ClaimSingleInstanceTest, GivesUpAfterRepeatedLostHandoffs) {
       .WillRepeatedly(Return(false));
 
   EXPECT_EQ(ClaimSingleInstance(/*wants_settings=*/true, io),
-            SingleInstanceRole::kForwarded);
+            SingleInstanceRole::kHandoffFailed);
 }
 
 }  // namespace
