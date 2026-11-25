@@ -476,6 +476,15 @@ if(FACEPALM_LINUX_TRAY)
     set_target_properties(facepalm_menu PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
     configure_file(tools/menu/linux/facepalm.png
       "${CMAKE_CURRENT_BINARY_DIR}/share/icons/hicolor/128x128/apps/facepalm.png" COPYONLY)
+    add_executable(calibration_window_linux_integration
+      test/calibration_window_linux_integration.cc tools/menu/calibration_window_linux.cc)
+    target_link_libraries(calibration_window_linux_integration PRIVATE calibration_flow calibration
+      menu_field_format screen_label Qt6::Widgets Qt6::Network GTest::gtest)
+    add_test(NAME calibration_window_linux_integration COMMAND ${DBUS_RUN_SESSION} --
+      ${XVFB_RUN} -a "${PROJECT_SOURCE_DIR}/scripts/wait_for_display.sh"
+      $<TARGET_FILE:calibration_window_linux_integration>)
+    set_tests_properties(calibration_window_linux_integration PROPERTIES
+      ENVIRONMENT "QT_QPA_PLATFORM=xcb" TIMEOUT 20)
     add_executable(service_health_linux_checks test/service_health_linux_checks.cc)
     target_link_libraries(service_health_linux_checks PRIVATE menu_state Qt6::Core GTest::gtest)
     add_test(NAME service_health_linux_checks COMMAND service_health_linux_checks)

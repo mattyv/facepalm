@@ -1,6 +1,7 @@
 #include "src/menu_field_format.h"
 
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cstddef>
 #include <optional>
@@ -22,6 +23,20 @@ std::string_view Trim(std::string_view text) {
 }
 
 }  // namespace
+
+// NOLINTNEXTLINE(modernize-use-string-view): platform APIs consume owned text.
+std::string CalibrationAction() { return "press Enter or click Next."; }
+
+// NOLINTNEXTLINE(bugprone-easily-swappable-parameters): Prompt, then hint.
+std::string CalibrationPrompt(std::string_view prompt, std::string_view hint) {
+  if (hint.empty()) {
+    return std::string(prompt);
+  }
+  std::string reason(hint);
+  reason[0] =
+      static_cast<char>(std::toupper(static_cast<unsigned char>(reason[0])));
+  return reason + ".\n\n" + std::string(prompt);
+}
 
 std::string FormatFloat(float value) {
   std::array<char, kBufferSize> buffer{};

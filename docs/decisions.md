@@ -1,5 +1,27 @@
 # Decisions
 
+## 2026-11-25: Request fullscreen target screens on Wayland (#203)
+
+For point steps, request a fullscreen wizard on the named output under Wayland;
+keep the same dialog and flow across output changes. A topology change cancels
+the attempt and asks the user to restart using a fresh screen order. X11 keeps
+its centered window. Compositors control actual placement and can deny a
+request; fullscreen is a deliberate visual change, not proof of placement.
+A private GNOME Mutter 48 test observed both output transitions; a nested
+Weston setup did not honor the requested output. Real hardware and macOS visual
+layout remain unverified. The lifecycle model records logical mapping intent,
+not physical compositor retirement.
+
+## 2026-11-25: Keep calibration targets visible during retries (#203)
+
+Keep the original screen and point instruction alongside the refusal reason.
+Describe a corner reading that is too close to the centre reading without
+instructing someone to look beyond the corner. Tell users Enter activates Next
+so they can keep looking at the target. This changes presentation only;
+thresholds, timing and calibration state remain unchanged. Display placement
+on Wayland remains a separate investigation; a target instruction does not
+guarantee that the compositor places the window on that screen.
+
 ## 2026-11-25: Label built-in displays without panel models (#201)
 
 For Linux calibration prompts, eDP and LVDS connectors use "built-in

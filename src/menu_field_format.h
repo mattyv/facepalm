@@ -13,6 +13,13 @@ namespace facepalm {
 // Settings field with no particular precision asked of it.
 std::string FormatFloat(float value);
 
+// The action available on each calibration step.
+std::string CalibrationAction();
+
+// Returns the original prompt unchanged when hint is empty. Otherwise,
+// sentence-cases the hint and places it before the original prompt.
+std::string CalibrationPrompt(std::string_view prompt, std::string_view hint);
+
 // `text` read as a whole number in [`min`, `max`], the exact text and
 // nothing else (leading or trailing whitespace trimmed first); nullopt
 // otherwise. tools/menu/main.mm's saveSettings: validates its

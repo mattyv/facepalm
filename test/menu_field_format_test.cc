@@ -10,6 +10,24 @@ namespace {
 
 using ::testing::Eq;
 
+TEST(CalibrationActionTest, NamesKeyboardAndMouseActions) {
+  EXPECT_THAT(CalibrationAction(), Eq("press Enter or click Next."));
+}
+
+TEST(CalibrationPromptTest, KeepsTheTargetAndReasonOnRetry) {
+  EXPECT_THAT(
+      CalibrationPrompt(
+          "Look at the top-left corner of the left screen, then click Next.",
+          "the corner reading was too close to the centre reading"),
+      Eq("The corner reading was too close to the centre reading.\n\n"
+         "Look at the top-left corner of the left screen, then click Next."));
+}
+
+TEST(CalibrationPromptTest, LeavesThePromptAloneWithoutARefusal) {
+  EXPECT_THAT(CalibrationPrompt("Look at the centre.", ""),
+              Eq("Look at the centre."));
+}
+
 TEST(FormatFloatTest, FormatsAWholeNumberWithNoDecimalPoint) {
   EXPECT_THAT(FormatFloat(3.0F), Eq("3"));
 }

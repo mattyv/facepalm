@@ -38,6 +38,7 @@ put `/opt/homebrew/opt/openjdk/bin` on the `PATH`.
 | `CameraRetry.cfg` | two generation changes, delay bounded to four units | holds | 1,237 |
 | `CameraRetryRetirement.cfg` | consent, demand, repeated loss and delayed retirement | holds, with `Recovery` | 25 |
 | `PreviewRecovery.cfg` | Boolean preview, recovery and identity state | holds | 11 |
+| `CalibrationPresentation.cfg` | one flow, two frozen targets, at most three point steps | holds; request is not compositor placement | 33 |
 | `CalibrationRetirement.cfg` | one attempt and terminal connection release | holds | 4 |
 | `FeedWaitRetirement.cfg` | one canceled wait and its successor | holds | 8 |
 | `FeelingBeat.cfg` | two clients, three readings, a timeline keeping two, one beat each, cues of a nod, a shake and none, #142's gaze inert (`MaxLooks = 0`, one kind) | holds | 3,815,485 |
@@ -1729,7 +1730,20 @@ the code exactly -- there is no cancel left for this call to send.
 `NextRefused` also covers #137's weak-step refusal (`specs/Calibration.tla`'s
 `Refuse`), since `ParseCalibrationReply` (`src/calibration_flow.cc`) reads a
 weak-step refusal exactly the way it reads any other refusal, needing no
-action of its own. `NextFinishes` is also where `resultShown'`
+action of its own. In #203, retry presentation retains the full screen and
+point instruction after the sentence-cased refusal reason, exactly once.
+`menu_field_format_test.cc` checks this composition; `calibration_test.cc`
+checks the corner-reading explanation without changing acceptance thresholds.
+The macOS view measures the wrapped text before sizing and centering its
+window. These presentation changes do not add a flow transition.
+
+The model's `windowOnScreen` abstracts intended placement, not a compositor
+acknowledgement. A private two-output Wayland test reproduced that a Linux
+`QWidget::move` request can leave the dialog on the first output. Neither this
+model nor an assigned Qt screen proves visible placement; #203 tracks that
+separate verification gap.
+
+`NextFinishes` is also where `resultShown'`
 is set (`ApplyStatus` reading `Status::screens` into `View::screens`, the
 result both #135 and #137 end on); `OpenSucceeds`, `RetrySucceeds` and
 `NextContinues` are also where `windowOnScreen'` is set, standing for
@@ -1857,3 +1871,23 @@ closing.
 |---|---|
 | `TerminalReleases` | `CalibrationTransportIntegration.FailedStartClosesRealSocket`; `CalibrationFlowTest.NextTransitionsToDoneOnADoneReply`, `CancelSendsCancelAndReturnsToClosedOnOk`, `WindowClosedSendsCancelWhilePrompting` |
 | Capture before release | `CalibrationFlowTest.FailureEvidenceIsCapturedBeforeClose` |
+
+## `CalibrationPresentation`: output request handoff (#203)
+
+Models one existing flow and logical mapping intent across at most three point
+steps on two frozen targets. Same-target steps and retries do not remap. A
+handoff invalidates the old mapping intent before requesting the new target;
+close during a handoff invalidates its pending request. A topology change
+cancels the attempt and calls for a restart instead of reinterpreting indices.
+The compositor can deny placement: the model does not establish physical
+visibility or retirement. Real compositor behavior, physical camera ownership,
+and a new attempt after cancellation are outside the model. Terminal states may
+deadlock; no fairness or liveness property is assumed.
+
+TLC checks eight invariants over 33 distinct states. Disabling GuardRetire,
+GuardPreserveFlow, GuardTarget, GuardSame, GuardIdentity, GuardTopology, and
+GuardGuidance respectively violates OneMappingIntent, LiveFlow,
+ShownRequestsTarget, NoSameTargetRemap, NoLateReopen, LostRequiresRestart,
+and GuidanceScheduled. The queued guidance action models intent to show the
+message, not compositor visibility or the user closing it before it runs.
+This is a proposed model until the implementation and tests cover its transitions.

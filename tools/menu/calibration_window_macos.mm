@@ -1,5 +1,6 @@
 #import "tools/menu/calibration_window_macos.h"
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -7,6 +8,7 @@
 
 #include "src/calibration.h"
 #include "src/calibration_flow.h"
+#include "src/menu_field_format.h"
 #include "tools/posix_calibrate_client_io.h"
 
 namespace {
@@ -21,11 +23,10 @@ NSString* const kIntroText = @"Calibration is optional. It teaches Facepalm wher
                              @"of your screens, which makes the feelings and reactions it reports "
                              @"more accurate; everything else keeps working without it.";
 
-// #137's fixate-and-turn step.
-NSString* const kGainsStepText =
-    @"Look at the dot the way you normally would and slowly turn your head "
-    @"left, then right, keeping your eyes on it the whole time. Then click "
-    @"Next.";
+// The shared keyboard and mouse action for each step.
+NSString* CalibrationAction() {
+  return [NSString stringWithUTF8String:facepalm::CalibrationAction().c_str()];
+}
 
 // Every screen AppKit reports, `primary` first then the rest in
 // [NSScreen screens]' own order -- the same order
@@ -102,11 +103,15 @@ NSString* ScreenDescription(NSScreen* primary, NSScreen* screen) {
 // point's own prompt is for (#135).
 NSString* StepPrompt(NSScreen* primary, const facepalm::CalibrationFlow::View& view) {
   if (view.resting_step) {
-    return @"Sit the way you normally would and look at the centre of "
-           @"the screen in front of you, then click Next.";
+    return [NSString stringWithFormat:@"Sit the way you normally would and look at the centre of "
+                                      @"the screen in front of you, then %@",
+                                      CalibrationAction()];
   }
   if (view.gains_step) {
-    return kGainsStepText;
+    return [NSString stringWithFormat:@"Look at the dot the way you normally would and slowly turn "
+                                      @"your head left, then right, keeping your eyes on it the "
+                                      @"whole time. Then %@",
+                                      CalibrationAction()];
   }
   NSString* where = @"the centre";
   switch (view.point) {
@@ -129,29 +134,14 @@ NSString* StepPrompt(NSScreen* primary, const facepalm::CalibrationFlow::View& v
   NSScreen* screen = ScreenAt(primary, view.screen);
   NSString* screenName = screen != nil ? ScreenDescription(primary, screen)
                                        : [NSString stringWithFormat:@"screen %d", view.screen + 1];
-  return
-      [NSString stringWithFormat:@"Look at %@ of %@, the way you normally would, then click Next.",
-                                 where, screenName];
+  return [NSString stringWithFormat:@"Look at %@ of %@, the way you normally would, then %@", where,
+                                    screenName, CalibrationAction()];
 }
 
 // "Calibrated 1 screen." or "Calibrated 3 screens." (#135, #137): the
 // wizard's own result line, rather than ending silently (#136's finding).
 NSString* ResultText(int screens) {
   return [NSString stringWithFormat:@"Calibrated %d screen%s.", screens, screens == 1 ? "" : "s"];
-}
-
-// The daemon's own hint on a refused step (#177), sentence-cased, with the
-// retry it still invites: "Look further toward that corner, away from the
-// centre. Click Next to try again." Shown in place of StepPrompt while
-// view.hint is set, so the person sees why the step did not advance
-// without the wizard ending over it.
-NSString* RefusalText(const std::string& hint) {
-  NSString* reason = [NSString stringWithUTF8String:hint.c_str()];
-  if (reason.length > 0) {
-    reason = [[[reason substringToIndex:1] uppercaseString]
-        stringByAppendingString:[reason substringFromIndex:1]];
-  }
-  return [NSString stringWithFormat:@"%@. Click Next to try again.", reason];
 }
 
 }  // namespace
@@ -238,6 +228,21 @@ NSString* RefusalText(const std::string& hint) {
   [content addSubview:self.primaryButton];
 }
 
+// Size the wrapping label to its current text at the fixed content width.
+// Keep the window's top edge fixed while its content height changes.
+- (void)sizeForLabel {
+  const CGFloat width = kWindowWidth - 2 * kMargin;
+  const NSSize size = [self.label.cell cellSizeForBounds:NSMakeRect(0, 0, width, CGFLOAT_MAX)];
+  const CGFloat height = std::max<CGFloat>(92, std::ceil(size.height));
+  self.label.frame = NSMakeRect(kMargin, 64, width, height);
+  NSRect frame = self.window.frame;
+  const CGFloat newHeight =
+      frame.size.height + (height + 64 + kMargin - self.window.contentView.frame.size.height);
+  frame.origin.y += frame.size.height - newHeight;
+  frame.size.height = newHeight;
+  [self.window setFrame:frame display:YES];
+}
+
 // Moves the window onto `view`'s own screen (#135): only a screen's point
 // step names one (ScreenAt may also return nil past the last screen
 // AppKit reports, in which case the window simply stays where it is).
@@ -265,18 +270,22 @@ NSString* RefusalText(const std::string& hint) {
     self.primaryButton.title = @"Start Calibration";
     self.primaryButton.hidden = NO;
     self.secondaryButton.title = @"Cancel";
+    [self sizeForLabel];
     return;
   }
   const facepalm::CalibrationFlow::View& view = self->_flow->CurrentView();
   switch (view.state) {
-    case facepalm::CalibrationFlow::State::kPrompting:
+    case facepalm::CalibrationFlow::State::kPrompting: {
+      const std::string prompt = facepalm::CalibrationPrompt(
+          [StepPrompt(self->_primaryScreen, view) UTF8String], view.hint);
+      self.label.stringValue = [NSString stringWithUTF8String:prompt.c_str()];
+      [self sizeForLabel];
       [self moveToScreenForStep:view];
-      self.label.stringValue =
-          view.hint.empty() ? StepPrompt(self->_primaryScreen, view) : RefusalText(view.hint);
       self.primaryButton.title = @"Next";
       self.primaryButton.hidden = NO;
       self.secondaryButton.title = @"Cancel";
       break;
+    }
     case facepalm::CalibrationFlow::State::kDone:
       [self.failureTimer invalidate];
       self.failureTimer = nil;
