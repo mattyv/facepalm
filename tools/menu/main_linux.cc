@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDevice>
 #include <QFileInfo>
@@ -31,6 +32,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <string>
@@ -143,6 +145,7 @@ QString MenuSocketPath() {
 }
 
 constexpr auto kSettingsRequest = "settings";
+constexpr auto kSettingsAck = "ok";
 
 // The real primitives behind src/single_instance.h: QLockFile::tryLock()
 // is the one atomic call TryLockAtomic needs (specs/SingleInstance.tla),
@@ -168,8 +171,23 @@ class QtSingleInstanceIo : public facepalm::SingleInstanceIo {
     if (!socket.waitForConnected(kRequestTimeoutMs)) {
       return false;
     }
-    socket.write(kSettingsRequest);
-    return socket.waitForBytesWritten(kRequestTimeoutMs);
+    QElapsedTimer timer;
+    timer.start();
+    if (socket.write(kSettingsRequest) != 8 ||
+        !socket.waitForBytesWritten(kRequestTimeoutMs)) {
+      return false;
+    }
+    QByteArray ack;
+    while (ack.size() < 2) {
+      ack += socket.read(2 - ack.size());
+      if (ack.size() == 2) break;
+      const auto remaining = kRequestTimeoutMs - timer.elapsed();
+      if (remaining <= 0 ||
+          !socket.waitForReadyRead(static_cast<int>(remaining))) {
+        return false;
+      }
+    }
+    return ack == kSettingsAck;
   }
 
  private:
@@ -969,9 +987,15 @@ int main(int argc, char* argv[]) {
   QDir().mkpath(QFileInfo(lock_path).absolutePath());
   const QString instance_socket = MenuSocketPath();
   QtSingleInstanceIo single_instance(lock_path, instance_socket);
-  if (facepalm::ClaimSingleInstance(parser.isSet(settings), single_instance) ==
-      facepalm::SingleInstanceRole::kForwarded) {
-    return 0;
+  const auto role =
+      facepalm::ClaimSingleInstance(parser.isSet(settings), single_instance);
+  if (role == facepalm::SingleInstanceRole::kForwarded) return 0;
+  if (role == facepalm::SingleInstanceRole::kHandoffFailed) {
+    std::fputs(
+        "facepalm-menu: settings request was not acknowledged by the running "
+        "tray\n",
+        stderr);
+    return 1;
   }
 
   const QIcon icon = FacepalmIcon();
@@ -1111,15 +1135,44 @@ int main(int argc, char* argv[]) {
       &tray_server, &QLocalServer::newConnection, &window,
       [&tray_server, show_window] {
         while (QLocalSocket* client = tray_server.nextPendingConnection()) {
-          QObject::connect(client, &QLocalSocket::readyRead, client,
-                           [client, show_window] {
-                             if (client->readAll().contains(kSettingsRequest)) {
-                               show_window();
-                             }
-                             client->close();
-                           });
+          constexpr int kReadDeadlineMs = 1000;
+          constexpr qint64 kRequestBytes = 8;
+          client->setReadBufferSize(kRequestBytes);
+          // Register cleanup before reading: buffered invalid data may close
+          // the connection synchronously during the first read.
           QObject::connect(client, &QLocalSocket::disconnected, client,
                            &QObject::deleteLater);
+          auto* deadline = new QTimer(client);
+          deadline->setSingleShot(true);
+          const auto terminal = std::make_shared<bool>(false);
+          const auto finish = [deadline, terminal] {
+            if (*terminal) return false;
+            *terminal = true;
+            deadline->stop();
+            return true;
+          };
+          QObject::connect(deadline, &QTimer::timeout, client,
+                           [client, finish] {
+                             if (finish()) client->disconnectFromServer();
+                           });
+          const auto request = std::make_shared<QByteArray>();
+          const auto read_request = [client, show_window, request, finish,
+                                     terminal] {
+            if (*terminal) return;
+            *request += client->read(kRequestBytes - request->size());
+            if (!QByteArray(kSettingsRequest).startsWith(*request)) {
+              if (finish()) client->disconnectFromServer();
+            } else if (request->size() == kRequestBytes && finish()) {
+              show_window();
+              client->write(kSettingsAck);
+              client->disconnectFromServer();
+            }
+          };
+          QObject::connect(client, &QLocalSocket::readyRead, client,
+                           read_request);
+          deadline->start(kReadDeadlineMs);
+          // Data may already be buffered before the handler was connected.
+          read_request();
         }
       });
 
